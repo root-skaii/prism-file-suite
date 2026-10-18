@@ -3,8 +3,10 @@
 // what every panel can reach: the window, the look, the tabs, file operations, settings and the app-level commands
 
 #include "core/file_ops.hpp"
+#include "model/sidebar_layout.hpp"
 #include "model/tab_set.hpp"
 #include "model/undo_stack.hpp"
+#include "model/visit_log.hpp"
 #include "strata/keybinds.hpp"
 #include "platform/image_cache.hpp"
 #include "platform/window.hpp"
@@ -12,6 +14,7 @@
 #include "ui/settings.hpp"
 #include "ui/theme.hpp"
 
+#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -41,6 +44,13 @@ public:
     virtual void transfer(std::vector<std::string> paths, const std::string& dest, bool move) = 0;
     // delete these paths (asks first when the setting says so, or when permanent); the shell shows the dialog
     virtual void request_delete(std::vector<std::string> paths, bool permanent) = 0;
+    // pins the folder to the sidebar, or unpins it when it is there (says so in a toast)
+    virtual void toggle_pin(const std::string& path) = 0;
+    // the sidebar layout as text on the clipboard / a layout from the clipboard text (share it, back it up)
+    virtual void copy_sidebar() = 0;
+    virtual void paste_sidebar() = 0;
+    // runs an edit of the sidebar layout and puts it on the undo stack (false: it changed nothing)
+    virtual bool edit_sidebar(std::string label, const std::function<void(model::SidebarLayout&)>& edit) = 0;
     virtual void toast(std::string text, strata::toast_kind kind) = 0;
     // pointer shape for this frame (strata only knows its own widgets)
     virtual void set_cursor(strata::cursor_kind kind) = 0;
@@ -63,6 +73,8 @@ struct Env {
     platform::ImageCache& images;
     strata::keybinds&     binds;
     model::UndoStack&     history;
+    model::SidebarLayout& layout;
+    model::VisitLog&      visits;
     // the other half of a split view (null when not split) and which half has the keyboard
     model::Tab*           right{};
     bool                  right_active{};

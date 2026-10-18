@@ -144,6 +144,76 @@ bool SettingsDialog::frame(Painter& p)
             if (kit.switch_row("##sw_tabs", "Reopen tabs on start", "Pick up where you left off", s.restore_tabs, false)) { changed = true; }
             kit.card_end("##card_beh");
 
+            // sidebar: which lists it has, drives left out, and moving the layout in and out
+            {
+                using Auto = model::SidebarSection::Auto;
+                const model::SidebarLayout& lay = env_.layout;
+                const std::vector<std::string> hidden = lay.hidden_drives(); // (a copy: a click below edits the layout)
+                const float sw_h  = kit.row_h() + 16.0f;
+                const float row_h = kit.row_h() + 12.0f;
+                kit.card_begin("##card_side", "Sidebar", sw_h * 4.0f + row_h * static_cast<float>(hidden.size()) + sw_h);
+
+                const auto slot_for_auto = [&] {
+                    std::size_t slot = 0;
+                    for (std::size_t i = 0; i < lay.sections().size(); ++i) {
+                        if (!lay.sections()[i].drives) { slot = i + 1; }
+                    }
+                    return slot;
+                };
+                const auto toggle_auto = [&](Auto kind, const char* label) {
+                    const std::size_t slot = slot_for_auto();
+                    if (lay.has_auto(kind)) {
+                        std::size_t at = 0;
+                        for (std::size_t i = 0; i < lay.sections().size(); ++i) {
+                            if (lay.sections()[i].auto_kind == kind) { at = i; }
+                        }
+                        (void)env_.cmd.edit_sidebar(std::string{"Hide "} + label, [=](model::SidebarLayout& l) { (void)l.remove_section(at); });
+                    } else {
+                        (void)env_.cmd.edit_sidebar(std::string{"Show "} + label, [=](model::SidebarLayout& l) { (void)l.add_auto_section(slot, kind); });
+                    }
+                };
+                bool drives_on = lay.has_drives();
+                if (kit.switch_row("##sw_drives", "Drives", "This PC: every drive with its free space", drives_on, true)) {
+                    if (drives_on) {
+                        (void)env_.cmd.edit_sidebar("Show This PC", [](model::SidebarLayout& l) { (void)l.add_drives_section(std::string::npos); });
+                    } else {
+                        std::size_t at = 0;
+                        for (std::size_t i = 0; i < lay.sections().size(); ++i) {
+                            if (lay.sections()[i].drives) { at = i; }
+                        }
+                        (void)env_.cmd.edit_sidebar("Hide This PC", [=](model::SidebarLayout& l) { (void)l.remove_section(at); });
+                    }
+                }
+                bool recent_on = lay.has_auto(Auto::recent);
+                if (kit.switch_row("##sw_recent", "Recent folders", "The folders you opened last", recent_on, true)) { toggle_auto(Auto::recent, "recent folders"); }
+                bool frequent_on = lay.has_auto(Auto::frequent);
+                if (kit.switch_row("##sw_frequent", "Frequent folders", "The ones you keep coming back to", frequent_on, true)) { toggle_auto(Auto::frequent, "frequent folders"); }
+                if (kit.switch_row("##sw_history", "Remember visited folders", "Recent and Frequent need it. Off: nothing is recorded or kept", s.track_history, false)) { changed = true; }
+
+                for (std::size_t i = 0; i < hidden.size(); ++i) {
+                    const std::string root = hidden[i];
+                    const float bw = kit.button_width("Show again", false);
+                    if (setting_row(kit, "##hd" + std::to_string(i), "Hidden drive  " + root, {}, bw, true, [&](float) {
+                            return kit.button({"##hd_btn" + std::to_string(i), "Show again", 0, Kit::ButtonKind::secondary, true, {}, bw});
+                        })) {
+                        (void)env_.cmd.edit_sidebar("Show " + root, [=](model::SidebarLayout& l) { (void)l.show_drive(root); });
+                    }
+                }
+
+                kit.vgap(8.0f);
+                (void)ui.custom_item("##sb_lead", {Kit::pad(), 1.0f});
+                ui.same_line();
+                if (kit.button({"##sb_copy", "Copy layout", 0, Kit::ButtonKind::secondary, true, "Put this sidebar on the clipboard as text", 0.0f})) { env_.cmd.copy_sidebar(); }
+                kit.hgap(8.0f);
+                if (kit.button({"##sb_paste", "Paste layout", 0, Kit::ButtonKind::secondary, true, "Use a sidebar copied from here or from a friend", 0.0f})) { env_.cmd.paste_sidebar(); }
+                kit.hgap(8.0f);
+                if (kit.button({"##sb_reset", "Reset", 0, Kit::ButtonKind::ghost, true, "Back to Quick access and This PC", 0.0f})) {
+                    (void)env_.cmd.edit_sidebar("Reset sidebar", [](model::SidebarLayout& l) { l.reset(); });
+                }
+                kit.vgap(8.0f);
+                kit.card_end("##card_side");
+            }
+
             // shortcuts
             // the table is laid out inline (height 0): a scroller inside the page's scroller would take the wheel whenever
             // the pointer crossed it and stall the page. its height is measured and the card follows one frame behind

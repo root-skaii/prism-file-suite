@@ -27,22 +27,49 @@ std::string home_folder()
     return known_folder(FOLDERID_Profile);
 }
 
+namespace {
+
+struct KnownEntry {
+    std::string_view     token;
+    std::string_view     name;
+    const KNOWNFOLDERID* id;
+};
+
+const KnownEntry k_known[] = {
+    {"home",      "Home",      &FOLDERID_Profile},
+    {"desktop",   "Desktop",   &FOLDERID_Desktop},
+    {"downloads", "Downloads", &FOLDERID_Downloads},
+    {"documents", "Documents", &FOLDERID_Documents},
+    {"pictures",  "Pictures",  &FOLDERID_Pictures},
+    {"music",     "Music",     &FOLDERID_Music},
+    {"videos",    "Videos",    &FOLDERID_Videos},
+};
+
+} // namespace
+
+std::vector<KnownFolder> known_folders()
+{
+    std::vector<KnownFolder> out;
+    for (const KnownEntry& k : k_known) { out.push_back({k.token, k.name}); }
+    return out;
+}
+
+std::string known_path(std::string_view token)
+{
+    for (const KnownEntry& k : k_known) {
+        if (k.token != token) { continue; }
+        std::string p = known_folder(*k.id);
+        return !p.empty() && path::is_directory(p) ? p : std::string{};
+    }
+    return {};
+}
+
 std::vector<Place> quick_access()
 {
-    struct Item { const char* name; const KNOWNFOLDERID* id; };
-    const Item items[] = {
-        {"Home",      &FOLDERID_Profile},
-        {"Desktop",   &FOLDERID_Desktop},
-        {"Downloads", &FOLDERID_Downloads},
-        {"Documents", &FOLDERID_Documents},
-        {"Pictures",  &FOLDERID_Pictures},
-        {"Music",     &FOLDERID_Music},
-        {"Videos",    &FOLDERID_Videos},
-    };
     std::vector<Place> out;
-    for (const Item& it : items) {
-        std::string p = known_folder(*it.id);
-        if (!p.empty() && path::is_directory(p)) { out.push_back({it.name, std::move(p), 0, 0, false}); }
+    for (const KnownEntry& k : k_known) {
+        std::string p = known_path(k.token);
+        if (!p.empty()) { out.push_back({std::string{k.name}, std::move(p), 0, 0, false}); }
     }
     return out;
 }

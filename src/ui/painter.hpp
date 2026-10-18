@@ -59,6 +59,8 @@ inline constexpr char32_t split      = 0xe745;   // two columns
 inline constexpr char32_t preview    = 0xe8a1;   // side panel
 inline constexpr char32_t lock       = 0xe72e;
 inline constexpr char32_t delete_    = 0xe74d;
+inline constexpr char32_t view       = 0xe8a9;   // the view options button
+inline constexpr char32_t rows       = 0xe700;   // compact rows
 } // namespace glyph
 
 class Painter {

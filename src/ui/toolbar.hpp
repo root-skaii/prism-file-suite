@@ -29,6 +29,8 @@ private:
     [[nodiscard]] bool option_chip(Painter& p, std::string_view id, std::string_view label, bool on, std::string_view tip, float w, float h);
     [[nodiscard]] core::QueryOptions query_options() const;
     void help_popup(Painter& p, model::Tab& tab);
+    // the "view" button's menu: layout, compact rows, panes, hidden files
+    void view_menu(Painter& p, bool show_hidden);
     // parses the box and shows / searches accordingly (`run`: start the subfolder search now)
     void apply_filter(model::Tab& tab, bool run);
 

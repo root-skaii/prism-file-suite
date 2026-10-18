@@ -3,8 +3,12 @@
 #include "core/directory_loader.hpp"
 #include "core/file_ops.hpp"
 #include "core/path.hpp"
+#include "core/path_probe.hpp"
 #include "core/text.hpp"
 #include "model/listing.hpp"
+#include "model/sidebar_layout.hpp"
+#include "model/visit_log.hpp"
+#include "strata/config.hpp"
 #include "model/tab.hpp"
 #include "model/undo_stack.hpp"
 
@@ -353,9 +357,161 @@ static void test_loader_and_ops()
     (void)run(core::OpKind::erase, {dir}, {});
 }
 
+static void test_sidebar_layout()
+{
+    using model::SidebarLayout;
+    using model::ItemPos;
+
+    SidebarLayout l = SidebarLayout::defaults();
+    CHECK(l.sections().size() == 2 && !l.sections()[0].drives && l.sections()[1].drives);
+    CHECK(!l.sections()[0].items.empty() && l.sections()[0].items[0].name == "Home" && l.sections()[0].items[0].known == "home");
+
+    // pin: a drive section refuses, duplicates are refused (case and slash insensitive)
+    const std::string a = "C:\\Prism Test\\Alpha", b = "C:\\Prism Test\\Beta", c = "D:\\Gamma";
+    const std::size_t n0 = l.sections()[0].items.size();
+    CHECK(!l.pin(1, 0, a));
+    CHECK(l.pin(0, 0, a) && l.sections()[0].items.size() == n0 + 1 && l.sections()[0].items[0].path == a);
+    CHECK(!l.pin(0, 0, "c:/prism test/alpha/"));
+    CHECK(l.pin(0, 99, b) && l.sections()[0].items.back().path == b);       // past the end = the end
+    CHECK(l.find(a) && l.find(a)->index == 0 && !l.find(c));
+
+    // move_item: slots count the item itself, so moving next to itself changes nothing
+    const std::size_t last = l.sections()[0].items.size() - 1;
+    CHECK(!l.move_item({0, 0}, 0, 0) && !l.move_item({0, 0}, 0, 1));
+    CHECK(l.move_item({0, 0}, 0, 3) && l.sections()[0].items[2].path == a); // slot 3 before removal = index 2 after
+    CHECK(l.move_item({0, last}, 0, 0) && l.sections()[0].items[0].path == b);
+    CHECK(!l.move_item({0, 0}, 1, 0));                                       // not onto the drive list
+
+    // sections: new, move items there, remove hands the pins to the neighbour
+    const std::size_t s = l.add_section(1, "Work");
+    CHECK(s == 1 && l.sections().size() == 3 && l.sections()[1].title == "Work");
+    CHECK(l.move_item({0, 0}, 1, 0) && l.sections()[1].items.size() == 1 && l.sections()[1].items[0].path == b);
+    CHECK(l.move_section(1, 0) && l.sections()[0].title == "Work");         // (above Quick access)
+    CHECK(l.remove_section(0) && l.sections().size() == 2 && l.find(b) && l.find(b)->section == 0);
+    CHECK(l.pin_section() == 0);
+
+    // rename: an empty name or the folder's own name goes back to the default
+    const auto at = *l.find(a);
+    CHECK(l.rename_item(at, "Alpha!") && l.sections()[at.section].items[at.index].label() == "Alpha!");
+    CHECK(l.rename_item(at, "") && l.sections()[at.section].items[at.index].label() == "Alpha");
+    CHECK(!l.rename_item(at, "Alpha"));
+
+    // persistence: same shape back, including collapsed state and a custom icon
+    l.set_collapsed(0, true);
+    l.set_item_style(*l.find(a), 0xe80f, 0xff3366cc);
+    strata::config cfg;
+    l.store(cfg);
+    SidebarLayout back;
+    CHECK(back.load(cfg) && back.sections().size() == l.sections().size());
+    CHECK(back.sections()[0].collapsed && back.sections().back().drives);
+    const auto bat = back.find(a);
+    CHECK(bat && back.sections()[bat->section].items[bat->index].glyph == 0xe80f && back.sections()[bat->section].items[bat->index].color == 0xff3366cc);
+    CHECK(back.sections()[0].items.size() == l.sections()[0].items.size());
+    SidebarLayout none;
+    CHECK(!none.load(strata::config{}));                                     // nothing stored: the caller keeps its defaults
+
+    // undo / redo restore the shape but not what is expanded
+    SidebarLayout before = l;
+    CHECK(l.unpin(a) && !l.find(a));
+    l.set_collapsed(0, false);
+    l.restore(before);
+    CHECK(l.find(a) && !l.sections()[0].collapsed);
+
+    CHECK(!l.remove_item({9, 0}) && !l.pin(9, 0, c));
+}
+
+static void test_sidebar_phase3()
+{
+    using model::SidebarLayout;
+    using model::SidebarSection;
+
+    SidebarLayout l = SidebarLayout::defaults();
+    // hidden drives: case-insensitive, once, and they survive undo snapshots and the file
+    CHECK(l.hide_drive("E:\\") && !l.hide_drive("e:/") && l.drive_hidden("E:\\") && !l.drive_hidden("C:\\"));
+    SidebarLayout with_hidden = l;
+    CHECK(l.show_drive("e:\\") && !l.drive_hidden("E:\\") && !l.show_drive("E:\\"));
+    l.restore(with_hidden);
+    CHECK(l.drive_hidden("E:\\"));
+    CHECK(l.hide_drive("F:\\"));
+    strata::config cfg;
+    l.store(cfg);
+    SidebarLayout back;
+    CHECK(back.load(cfg) && back.hidden_drives().size() == 2 && back.drive_hidden("F:\\"));
+
+    // automatic sections: one of each kind, they take no pins and no moved items, and they round-trip
+    CHECK(l.add_auto_section(1, SidebarSection::Auto::recent) && !l.add_auto_section(0, SidebarSection::Auto::recent));
+    CHECK(l.has_auto(SidebarSection::Auto::recent) && !l.has_auto(SidebarSection::Auto::frequent));
+    CHECK(!l.pin(1, 0, "C:\\Prism Test\\Gamma") && l.sections()[1].dynamic());
+    CHECK(!l.move_item({0, 0}, 1, 0));
+    CHECK(l.pin_section() == 0);
+    strata::config cfg2;
+    l.store(cfg2);
+    SidebarLayout again;
+    CHECK(again.load(cfg2) && again.sections()[1].auto_kind == SidebarSection::Auto::recent && again.sections()[1].title == "Recent");
+    CHECK(l.remove_section(1) && !l.has_auto(SidebarSection::Auto::recent));
+
+    // replace takes a whole layout (a pasted one)
+    SidebarLayout other = SidebarLayout::defaults();
+    l.replace(other);
+    CHECK(l.hidden_drives().empty() && l.sections().size() == 2);
+    l.hide_drive("E:\\");
+    l.reset();
+    CHECK(l.hidden_drives().empty());
+
+    // the visit log: recent is newest first, frequent needs a second visit, roots are not listed, forget works
+    model::VisitLog v;
+    v.note("C:\\a\\one");
+    v.note("C:\\a\\two");
+    v.note("C:\\a\\one");
+    v.note("C:\\a\\three");
+    v.note("C:\\");
+    CHECK(v.size() == 3);
+    const auto rc = v.recent(2);
+    CHECK(rc.size() == 2 && rc[0] == "C:\\a\\three" && rc[1] == "C:\\a\\one");
+    const auto fq = v.frequent(5);
+    CHECK(fq.size() == 1 && fq[0] == "C:\\a\\one");
+    const std::string file = make_temp_dir() + "\\visits_test.ini";
+    CHECK(v.save_file(file));
+    model::VisitLog loaded;
+    CHECK(loaded.load_file(file) && loaded.size() == 3 && loaded.recent(1)[0] == "C:\\a\\three" && loaded.frequent(1)[0] == "C:\\a\\one");
+    loaded.note("C:\\a\\newest");
+    CHECK(loaded.recent(1)[0] == "C:\\a\\newest"); // (the clock continued after loading)
+    v.forget("c:\\A\\ONE");
+    CHECK(v.size() == 2 && v.frequent(5).empty());
+    ::DeleteFileW(core::text::widen(file).c_str());
+}
+
+static void test_path_probe()
+{
+    const std::string dir = make_temp_dir();
+    ::CreateDirectoryW(core::text::widen(dir).c_str(), nullptr);
+    core::PathProbe probe;
+    probe.interval = std::chrono::milliseconds{50};
+    probe.watch({dir});
+    CHECK(!probe.missing(dir));
+    ::RemoveDirectoryW(core::text::widen(dir).c_str());
+    bool seen = false;
+    for (int i = 0; i < 100 && !seen; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{20});
+        seen = probe.missing(dir);
+    }
+    CHECK(seen);
+    ::CreateDirectoryW(core::text::widen(dir).c_str(), nullptr);
+    seen = false;
+    for (int i = 0; i < 100 && !seen; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{20});
+        seen = !probe.missing(dir);
+    }
+    CHECK(seen);
+    ::RemoveDirectoryW(core::text::widen(dir).c_str());
+}
+
 int main()
 {
     ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    test_sidebar_layout();
+    test_sidebar_phase3();
+    test_path_probe();
     test_text();
     test_path();
     test_query();

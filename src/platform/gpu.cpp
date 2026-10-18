@@ -20,6 +20,7 @@ struct Gpu::Impl {
     bool                           tearing{};
     UINT                           chain_flags{};
     bool                           first_present_done{};
+    bool                           immediate{};
     strata::d3d11_renderer         renderer;
 
     void release() noexcept
@@ -116,6 +117,8 @@ void Gpu::resize()
     if (SUCCEEDED(s.chain->ResizeBuffers(0, 0, 0, DXGI_FORMAT_UNKNOWN, s.chain_flags))) { (void)s.make_target(); }
 }
 
+void Gpu::set_immediate(bool on) noexcept { impl_->immediate = on; }
+
 void Gpu::wait_for_frame() const
 {
     // the waitable is signalled by a completed Present: waiting after a frame that presented nothing would stall
@@ -131,7 +134,7 @@ bool Gpu::present(strata::context& ui, strata::color clear)
     s.ctx->OMSetRenderTargets(1, &t, nullptr);
     s.ctx->ClearRenderTargetView(t, c);
     s.renderer.render(ui.render_data());
-    const HRESULT hr = s.chain->Present(1, 0);
+    const HRESULT hr = s.immediate ? s.chain->Present(0, s.tearing ? DXGI_PRESENT_ALLOW_TEARING : 0) : s.chain->Present(1, 0);
     s.first_present_done = true;
     return hr != DXGI_ERROR_DEVICE_REMOVED && hr != DXGI_ERROR_DEVICE_RESET;
 }

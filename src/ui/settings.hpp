@@ -17,6 +17,7 @@ struct Settings {
     bool  show_hidden{false};
     bool  confirm_delete{false}; // ask before moving to the recycle bin (deleting for good always asks)
     bool  restore_tabs{true};
+    bool  track_history{true};   // remember visited folders (Recent / Frequent in the sidebar); off: nothing is recorded or kept
     bool  search_subfolders{false}; // the filter box searches below the folder (Enter) instead of filtering what is shown
     bool  search_case{false};       // match case
     bool  search_regex{false};      // plain words are regular expressions
@@ -36,6 +37,9 @@ struct Settings {
     void load();
     void save() const;
     [[nodiscard]] static std::string file_path();
+    // the sidebar layout lives beside the settings (sidebar.ini, or prismfs-sidebar.ini in portable mode)
+    [[nodiscard]] static std::string sidebar_path();
+    [[nodiscard]] static std::string visits_path(); // the folders you visited (Recent / Frequent)
 };
 
 } // namespace prism::ui

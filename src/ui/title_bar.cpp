@@ -41,9 +41,15 @@ void TitleBar::frame(Painter& p, const rect& area)
     const float    btn  = m.caption_btn;
     const float    lead = 12.0f;
     const float    plus = 34.0f;
-    const float    avail = area.width() - lead - plus - btn * 3.0f - 48.0f;
-    const float    tw    = std::clamp(avail / n, 56.0f, m.tab_max_width);
-    const float    strip_w = lead + n * tw + plus;
+    // the tabs get what is left beside the window buttons (and a stretch of bare title bar to drag the window by). past
+    // that they keep a readable width and scroll sideways instead of running under the buttons (the stretch of bare
+    // title bar left over is what you drag the window by: with many tabs it must not shrink to nothing)
+    const float    drag_gap = std::clamp(area.width() * 0.12f, 80.0f, 180.0f); // bare title bar, kept free to grab the window by
+    const float    avail = std::max(80.0f, area.width() - lead - plus - btn * 3.0f - drag_gap);
+    const float    tw    = std::clamp(avail / n, m.tab_min_width, m.tab_max_width);
+    const float    vw    = std::min(n * tw, avail);          // the visible part of the strip
+    const float    max_scroll = std::max(0.0f, n * tw - vw);
+    const float    strip_w = lead + vw + plus;
 
     // --- tab strip: one canvas, tabs and buttons hit-tested by hand
     const item_result strip = ui.custom_item("##tabstrip", {strip_w, h});
@@ -59,12 +65,31 @@ void TitleBar::frame(Painter& p, const rect& area)
     const vec2  mp     = ui.mouse_pos();
     const bool  in_band = strip.hovered && mp.y >= y0 && mp.y < y1;
 
-    int hover_tab = -1;
-    if (in_band) {
-        const int i = static_cast<int>(std::floor((mp.x - origin.x - lead) / tw));
-        if (i >= 0 && i < static_cast<int>(tabs.size()) && mp.x >= origin.x + lead) { hover_tab = i; }
+    // scrolling: the wheel over the strip, the active tab kept in view when it changes (new tab, Ctrl+Tab, reopened)
+    if (max_scroll > 0.0f && strip.hovered) {
+        if (const float wheel = ui.take_wheel(); wheel != 0.0f) { scroll_x_ -= wheel * 90.0f; }
     }
-    const rect plus_rect = rect::from_size({origin.x + lead + n * tw + 2.0f, y0 + (m.tab_height - 28.0f) * 0.5f}, {28.0f, 28.0f});
+    if (&tabs.active() != last_active_ || tabs.size() != last_count_) {
+        const float ax = static_cast<float>(tabs.active_index()) * tw;
+        if (ax < scroll_x_) { scroll_x_ = ax; }
+        else if (ax + tw > scroll_x_ + vw) { scroll_x_ = ax + tw - vw; }
+        last_active_ = &tabs.active();
+        last_count_  = tabs.size();
+    }
+    const float view_l = origin.x + lead; // the visible part of the strip, left and right edge
+    const float view_r = view_l + vw;
+    if (drag_ >= 0 && ui.mouse_down(mouse_button::left)) { // (dragging a tab to the edge scrolls on)
+        if (ui.mouse_pos().x < view_l + 24.0f) { scroll_x_ -= 10.0f; ui.invalidate(); }
+        else if (ui.mouse_pos().x > view_r - 24.0f) { scroll_x_ += 10.0f; ui.invalidate(); }
+    }
+    scroll_x_ = std::clamp(scroll_x_, 0.0f, max_scroll);
+
+    int hover_tab = -1;
+    if (in_band && mp.x >= view_l && mp.x < view_r) {
+        const int i = static_cast<int>(std::floor((mp.x - view_l + scroll_x_) / tw));
+        if (i >= 0 && i < static_cast<int>(tabs.size())) { hover_tab = i; }
+    }
+    const rect plus_rect = rect::from_size({view_r + 2.0f, y0 + (m.tab_height - 28.0f) * 0.5f}, {28.0f, 28.0f});
     const bool hover_plus = strip.hovered && plus_rect.contains(mp);
 
     const auto close_rect_of = [&](float x) {
@@ -76,7 +101,7 @@ void TitleBar::frame(Painter& p, const rect& area)
         if (hover_plus) {
             env_.cmd.open_tab(tabs.active().path(), true);
         } else if (hover_tab >= 0) {
-            const float x = origin.x + lead + static_cast<float>(hover_tab) * tw;
+            const float x = view_l - scroll_x_ + static_cast<float>(hover_tab) * tw;
             const bool  show_close = hover_tab == static_cast<int>(tabs.active_index()) || tw > 90.0f;
             if (show_close && close_rect_of(x).contains(mp)) {
                 env_.cmd.close_tab(static_cast<std::size_t>(hover_tab));
@@ -93,7 +118,7 @@ void TitleBar::frame(Painter& p, const rect& area)
         if (!ui.mouse_down(mouse_button::left)) {
             drag_ = -1;
         } else {
-            const int target = std::clamp(static_cast<int>(std::floor((mp.x - origin.x - lead) / tw)), 0, static_cast<int>(tabs.size()) - 1);
+            const int target = std::clamp(static_cast<int>(std::floor((mp.x - view_l + scroll_x_) / tw)), 0, static_cast<int>(tabs.size()) - 1);
             if (target != drag_ && drag_ < static_cast<int>(tabs.size())) {
                 tabs.move(static_cast<std::size_t>(drag_), static_cast<std::size_t>(target));
                 drag_ = target;
@@ -102,13 +127,13 @@ void TitleBar::frame(Painter& p, const rect& area)
     }
 
     // --- tabs
-    p.dl().push_clip(rect{{origin.x, area.min.y}, {origin.x + strip_w + 4.0f, area.max.y}});
+    p.dl().push_clip(rect{{view_l - 2.0f, area.min.y}, {view_r + 2.0f, area.max.y}});
     for (std::size_t i = 0; i < tabs.size(); ++i) {
         model::Tab& tab    = tabs.at(i);
         const bool  active = i == tabs.active_index();
         const bool  hover  = static_cast<int>(i) == hover_tab;
         const std::string key = std::format("##tab{}", reinterpret_cast<std::uintptr_t>(&tab));
-        const float x      = ui.animate(key + "x", origin.x + lead + static_cast<float>(i) * tw, 26.0f);
+        const float x      = ui.animate(key + "x", view_l - scroll_x_ + static_cast<float>(i) * tw, 26.0f);
         const float hover_k = ui.animate(key + "h", hover ? 1.0f : 0.0f, 18.0f);
         auto& seen = born_[&tab];
         ++seen;
@@ -116,8 +141,10 @@ void TitleBar::frame(Painter& p, const rect& area)
         p.dl().push_alpha(appear);
         const rect  body{{x, y0}, {x + tw - 2.0f, y1}};
         if (i == 0) { tab_rects_.clear(); }
-        tab_rects_.push_back(body);
-        if (drop_ && body.contains(*drop_)) { p.dl().rect_outline(body, pal.accent, m.pane_radius - 2.0f, 2.0f); }
+        // (only the part inside the strip takes drops: a tab scrolled out of sight is not a target)
+        const rect shown{{std::max(body.min.x, view_l), body.min.y}, {std::max(std::min(body.max.x, view_r), std::max(body.min.x, view_l)), body.max.y}};
+        tab_rects_.push_back(shown);
+        if (drop_ && shown.contains(*drop_)) { p.dl().rect_outline(body, pal.accent, m.pane_radius - 2.0f, 2.0f); }
 
         if (active) {
             shape_style s;

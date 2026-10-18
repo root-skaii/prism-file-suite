@@ -40,8 +40,10 @@ public:
     // drag and drop onto the window
     [[nodiscard]] std::string resolve_drop(strata::vec2 logical) const;
     void set_drop_point(std::optional<strata::vec2> p);
+    // the paths of the drag in progress: drawn as a ghost at the pointer (with what a drop would do) while it is over the window
+    void set_dragging(std::vector<std::string> paths) { ghost_paths_ = std::move(paths); }
     void refresh_all();
-    void drop_files(std::vector<std::string> paths, const std::string& dest, bool move) { transfer(std::move(paths), dest, move); }
+    void drop_files(std::vector<std::string> paths, const std::string& dest, bool move);
 
     // writes tabs and window size for the next start
     void save_session(int logical_w, int logical_h);
@@ -66,6 +68,10 @@ private:
     void begin_drag(std::vector<std::string> paths) override { drag_paths_ = std::move(paths); }
     void transfer(std::vector<std::string> paths, const std::string& dest, bool move) override;
     void request_delete(std::vector<std::string> paths, bool permanent) override;
+    void toggle_pin(const std::string& path) override;
+    void copy_sidebar() override;
+    void paste_sidebar() override;
+    bool edit_sidebar(std::string label, const std::function<void(model::SidebarLayout&)>& edit) override;
     void toast(std::string text, strata::toast_kind kind) override;
     void set_cursor(strata::cursor_kind kind) override { cursor_ = kind; }
 
@@ -74,13 +80,21 @@ private:
     void record_undo(const core::OpResult& r);
     void do_undo();
     void do_redo();
+    void open_goto();
     void sync_settings();
     void service_ops();
     void service_delete(strata::context& ui);
     [[nodiscard]] bool dialog_has_keyboard(strata::context& ui) const;
     void splitter(Painter& p, const strata::rect& area);
     void apply_deferred();
+    void draw_drag_ghost(Painter& p);
 
+    model::SidebarLayout layout_; // (before env_, which refers to it)
+    std::size_t          saved_layout_{};
+    model::VisitLog      visits_;
+    std::size_t          saved_visits_{};
+    const model::Tab*    visit_tab_{};      // the tab and folder last seen: a change inside the same tab is a visit
+    std::string          visit_path_;
     Env            env_;
     core::FileOps& ops_;
     Settings&      settings_;
@@ -95,6 +109,9 @@ private:
     PropertiesDialog properties_dialog_;
 
     strata::command_palette palette_;
+    strata::command_palette goto_palette_;    // "Jump to a folder": the pinned folders and drives, by name
+    strata::keybinds        goto_binds_;      // (its entries; rebuilt each time it opens)
+    std::vector<std::pair<std::string, std::string>> goto_targets_; // entry name -> folder
     std::vector<std::string> closed_tabs_;    // newest last: ctrl+shift+T reopens
     std::unique_ptr<model::Tab> right_tab_;   // the second pane while split
     float             sidebar_w_{0.0f};
@@ -107,6 +124,8 @@ private:
     bool              settings_dirty_{false};
     strata::cursor_kind cursor_{strata::cursor_kind::arrow};
     std::vector<std::string> drag_paths_;
+    std::vector<std::string> ghost_paths_;
+    std::optional<strata::vec2> ghost_at_;
     // a delete waiting for its confirmation. strata modals must open outside every window, so the panels only
     // record the request and service_delete() shows the dialog at the end of the frame
     std::vector<std::string> delete_paths_;

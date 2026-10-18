@@ -52,6 +52,9 @@ private:
     void draw_empty_state(Painter& p, model::Tab& tab, const strata::rect& viewport);
     void context_menu(Painter& p, model::Tab& tab, const strata::rect& area);
     void move_focus(model::Tab& tab, std::size_t row, bool extend);
+    // drag-to-select: press on empty space and sweep a rectangle over items
+    void update_band(strata::context& ui, model::Tab& tab, const Geo& g, strata::vec2 origin, const strata::rect& vp, float dt);
+    void draw_band(Painter& p, strata::vec2 origin) const;
 
     // file operations
     [[nodiscard]] std::vector<std::string> selected_paths(const model::Tab& tab) const;
@@ -100,6 +103,12 @@ private:
     bool                        drag_armed_{};
     strata::vec2                drag_origin_{};
     int                         collapse_row_{-1}; // a press on part of a multi-selection collapses it on release
+    // selection rectangle (content space, so it stays put while the list scrolls)
+    bool                     band_armed_{};
+    bool                     band_active_{};
+    bool                     band_ctrl_{};
+    strata::vec2             band_anchor_{};
+    std::vector<std::size_t> band_base_;   // what was selected when it began (kept with Ctrl)
     std::optional<strata::vec2> drop_point_;
 };
 

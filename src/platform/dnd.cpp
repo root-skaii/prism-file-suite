@@ -18,6 +18,8 @@ using Microsoft::WRL::ComPtr;
 
 namespace {
 
+std::vector<std::string> g_own_drag; // the paths of the drag this process is running (empty otherwise)
+
 // --- the target ----------------------------------------------------------------------------------------------
 
 class DropTarget final : public IDropTarget {
@@ -95,6 +97,9 @@ private:
             }
             ::ReleaseStgMedium(&med);
         }
+        // the data object we make for our own drags (SHCreateDataObject) has item ids but no CF_HDROP, so a drop back
+        // onto this window would read nothing: we know what we are dragging
+        if (out.empty()) { out = g_own_drag; }
         return out;
     }
 
@@ -117,6 +122,7 @@ private:
         const std::string dest = cb_.resolve ? cb_.resolve(logical) : std::string{};
         if (cb_.redraw) { cb_.redraw(); }
         if (dest.empty()) { return DROPEFFECT_NONE; }
+        if (cb_.link && cb_.link(dest)) { return (allowed & DROPEFFECT_LINK) != 0 ? DROPEFFECT_LINK : ((allowed & DROPEFFECT_COPY) != 0 ? DROPEFFECT_COPY : DROPEFFECT_NONE); }
 
         // dropping a folder into itself or a file into the folder it already is in does nothing
         bool all_here = true;
@@ -206,7 +212,9 @@ bool run_drag(const std::vector<std::string>& paths)
         if (SUCCEEDED(::SHCreateDataObject(nullptr, static_cast<UINT>(items.size()), items.data(), nullptr, IID_PPV_ARGS(&data)))) {
             auto* source = new DropSource;
             DWORD effect = DROPEFFECT_NONE;
+            g_own_drag = paths;
             const HRESULT hr = ::DoDragDrop(data.Get(), source, DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, &effect);
+            g_own_drag.clear();
             source->Release();
             dropped = hr == DRAGDROP_S_DROP && effect != DROPEFFECT_NONE;
         }

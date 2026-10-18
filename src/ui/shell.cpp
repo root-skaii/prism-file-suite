@@ -2,8 +2,10 @@
 
 #include "core/path.hpp"
 #include "core/places.hpp"
+#include "core/shell_ops.hpp"
 #include "core/text.hpp"
 #include "ui/panel.hpp"
+#include "strata/config.hpp"
 
 #include <windows.h>
 #include <shellapi.h>
@@ -17,13 +19,20 @@ using namespace strata;
 
 Shell::Shell(platform::Window& window, Theme& theme, FontSet fonts, model::TabSet& tabs, core::FileOps& ops, Settings& settings,
              platform::ImageCache& images, strata::keybinds& binds, model::UndoStack& history)
-    : env_{window, theme, fonts, tabs, *this, ops, settings, images, binds, history},
+    : layout_{model::SidebarLayout::defaults()},
+      env_{window, theme, fonts, tabs, *this, ops, settings, images, binds, history, layout_, visits_},
       ops_{ops}, settings_{settings},
       title_bar_{env_}, toolbar_{env_}, sidebar_{env_}, file_list_{env_, false}, file_list_r_{env_, true}, preview_{env_},
       status_bar_{env_}, settings_dialog_{env_}, properties_dialog_{env_}
 {
     sidebar_w_     = settings.sidebar_width > 0.0f ? settings.sidebar_width : theme.metrics().sidebar_width;
     applied_scale_ = settings.ui_scale;
+    goto_palette_.shortcut = {}; // (opened by its action, not its own chord)
+    (void)layout_.load_file(Settings::sidebar_path()); // (nothing stored yet keeps the defaults)
+    saved_layout_ = layout_.revision();
+    if (settings.track_history) { (void)visits_.load_file(Settings::visits_path()); }
+    else { ::DeleteFileW(core::text::widen(Settings::visits_path()).c_str()); }
+    saved_visits_ = visits_.revision();
 }
 
 // --- commands ---------------------------------------------------------------------------------------------------
@@ -47,7 +56,7 @@ void Shell::toast(std::string text, toast_kind kind) { pending_toasts_.push_back
 // it runs the shortcuts itself)
 bool Shell::dialog_has_keyboard(context& ui) const
 {
-    return !delete_paths_.empty() || (ui.modal_open() && !palette_.is_open());
+    return !delete_paths_.empty() || (ui.modal_open() && !palette_.is_open() && !goto_palette_.is_open());
 }
 
 void Shell::request_delete(std::vector<std::string> paths, bool permanent)
@@ -87,6 +96,62 @@ void Shell::transfer(std::vector<std::string> paths, const std::string& dest, bo
 {
     if (paths.empty() || dest.empty()) { return; }
     ops_.start(move ? core::OpKind::move : core::OpKind::copy, std::move(paths), dest);
+}
+
+void Shell::drop_files(std::vector<std::string> paths, const std::string& dest, bool move)
+{
+    if (Sidebar::is_pin_target(dest)) {
+        sidebar_.pin_dropped(paths, dest);
+        return;
+    }
+    transfer(std::move(paths), dest, move);
+}
+
+bool Shell::edit_sidebar(std::string label, const std::function<void(model::SidebarLayout&)>& edit)
+{
+    const model::SidebarLayout before = layout_;
+    edit(layout_);
+    if (layout_.revision() == before.revision()) { return false; }
+    env_.history.push({std::move(label),
+                       [this, before] { layout_.restore(before); return true; },
+                       [this, after = layout_] { layout_.restore(after); return true; }});
+    return true;
+}
+
+void Shell::toggle_pin(const std::string& path)
+{
+    if (path.empty() || !core::path::is_directory(path)) {
+        toast("Only folders can be pinned to the sidebar", toast_kind::info);
+        return;
+    }
+    const std::string name = core::path::leaf(path);
+    if (layout_.find(path)) {
+        (void)edit_sidebar("Unpin " + name, [&](model::SidebarLayout& l) { (void)l.unpin(path); });
+        toast("Unpinned " + name, toast_kind::info);
+    } else {
+        (void)edit_sidebar("Pin " + name, [&](model::SidebarLayout& l) { (void)l.pin(l.pin_section(), std::string::npos, path); });
+        toast("Pinned " + name + " to the sidebar", toast_kind::info);
+    }
+}
+
+void Shell::copy_sidebar()
+{
+    strata::config c;
+    layout_.store(c);
+    toast(core::shell::set_clipboard_text(c.to_string()) ? "Sidebar layout copied" : "Could not copy to the clipboard", toast_kind::info);
+}
+
+void Shell::paste_sidebar()
+{
+    strata::config c;
+    (void)c.from_string(core::shell::get_clipboard_text());
+    model::SidebarLayout incoming;
+    if (!incoming.load(c)) {
+        toast("The clipboard has no sidebar layout", toast_kind::warning);
+        return;
+    }
+    (void)edit_sidebar("Paste sidebar layout", [&](model::SidebarLayout& l) { l.replace(incoming); });
+    toast("Sidebar layout pasted", toast_kind::info);
 }
 
 void Shell::refresh_all()
@@ -233,6 +298,23 @@ void Shell::record_undo(const core::OpResult& r)
     }
 }
 
+// the pinned folders and the drives as a searchable list (Ctrl+G): the keyboard way to reach the sidebar
+void Shell::open_goto()
+{
+    goto_binds_ = strata::keybinds{};
+    goto_targets_.clear();
+    const auto add = [&](std::string label, const std::string& path) {
+        if (std::ranges::any_of(goto_targets_, [&](const auto& t) { return t.first == label; })) { label += " (" + path + ")"; }
+        goto_binds_.add(label, {}, path);
+        goto_targets_.emplace_back(std::move(label), path);
+    };
+    for (const model::SidebarSection& s : layout_.sections()) {
+        for (const model::SidebarItem& it : s.items) { add(it.label(), it.path); }
+    }
+    for (const core::Place& d : core::drives()) { add(d.name, d.path); }
+    goto_palette_.open();
+}
+
 void Shell::do_undo()
 {
     if (!env_.history.can_undo()) { toast("Nothing to undo", toast_kind::info); return; }
@@ -282,8 +364,45 @@ void Shell::set_drop_point(std::optional<vec2> p)
 {
     file_list_.set_drop_point(p && file_list_.contains(*p) ? p : std::nullopt);
     file_list_r_.set_drop_point(p && right_tab_ && file_list_r_.contains(*p) ? p : std::nullopt);
+    ghost_at_ = p;
     sidebar_.set_drop_point(p);
     title_bar_.set_drop_point(p);
+}
+
+// a card that follows the pointer while files are dragged over the window, saying what a drop here would do
+void Shell::draw_drag_ghost(Painter& p)
+{
+    if (ghost_paths_.empty() || !ghost_at_) { return; }
+    context&       ui  = p.ui();
+    const Palette& pal = env_.theme.pal();
+    const FontSet& f   = env_.fonts;
+
+    const std::string dest = resolve_drop(*ghost_at_);
+    const std::string what = ghost_paths_.size() == 1 ? core::path::leaf(ghost_paths_.front()) : std::format("{} items", ghost_paths_.size());
+    std::string       action;
+    if (Sidebar::is_pin_target(dest)) { action = "Pin to sidebar"; }
+    else if (!dest.empty()) { action = "Drop in " + core::path::leaf(dest); }
+
+    const float w1 = p.measure(f.body, what).x;
+    const float w2 = action.empty() ? 0.0f : p.measure(f.small, action).x;
+    const float w  = std::min(300.0f, 46.0f + std::max(w1, w2) + 16.0f);
+    const float h  = action.empty() ? 36.0f : 50.0f;
+    const vec2  s  = ui.display_size();
+    const rect  at = rect::from_size({std::clamp(ghost_at_->x + 16.0f, 4.0f, s.x - w - 4.0f), std::clamp(ghost_at_->y + 18.0f, 4.0f, s.y - h - 4.0f)}, {w, h});
+
+    auto fg = ui.layer(layer::foreground);
+    p.dl().rect_filled(at.expanded(2.0f), color{0, 0, 0, 70}, 12.0f);
+    p.dl().rect_filled(at, pal.raised, 10.0f);
+    p.dl().rect_outline(at, action.empty() ? pal.border : pal.accent, 10.0f, action.empty() ? 1.0f : 1.5f);
+    const rect icon = rect::from_size({at.min.x + 10.0f, at.center().y - 13.0f}, {26.0f, 26.0f});
+    if (core::path::is_directory(ghost_paths_.front())) { p.folder_icon(icon); } else { p.glyph_center(icon, glyph::document, pal.text_dim); }
+    const float tx = icon.max.x + 10.0f;
+    if (action.empty()) {
+        p.text_left(rect{{tx, at.min.y}, {at.max.x - 8.0f, at.max.y}}, what, pal.text, f.body);
+    } else {
+        p.text_left(rect{{tx, at.min.y + 5.0f}, {at.max.x - 8.0f, at.min.y + 26.0f}}, what, pal.text, f.body);
+        p.text_left(rect{{tx, at.min.y + 26.0f}, {at.max.x - 8.0f, at.max.y - 4.0f}}, action, pal.accent, f.small);
+    }
 }
 
 // --- shortcuts --------------------------------------------------------------------------------------------------
@@ -309,6 +428,11 @@ void Shell::shortcuts(context& ui)
         if (a.chord.count == 0 || !env_.binds.pressed(ui, a.name)) { continue; }
         if (typing && !a.chord.steps[0].ctrl && !a.chord.steps[0].alt) { continue; }
         run_action(a.name, ui);
+    }
+    if (const std::string pick = goto_palette_.show(ui, goto_binds_); !pick.empty()) {
+        for (const auto& [label, path] : goto_targets_) {
+            if (label == pick) { env_.tab().navigate(path); break; }
+        }
     }
     const std::string chosen = palette_.show(ui, env_.binds); // (the palette runs any action by name)
     if (!chosen.empty()) { run_action(chosen, ui); }
@@ -362,6 +486,8 @@ void Shell::run_action(const std::string& name, context& ui)
     else if (name == "preview") { toggle_preview(); }
     else if (name == "settings") { open_settings(); }
     else if (name == "palette") { palette_.open(); }
+    else if (name == "pin_folder") { toggle_pin(tab.path()); }
+    else if (name == "goto_folder") { open_goto(); }
     else if (name == "undo") { do_undo(); }
     else if (name == "redo") { do_redo(); }
     else if (name == "properties") {
@@ -420,6 +546,16 @@ void Shell::frame(context& ui, const FrameInput& in)
     if (right_tab_) { (void)right_tab_->poll(); }
     service_ops();
     sync_settings();
+    {   // moving to another folder inside the same tab is a visit (switching tabs is not)
+        const model::Tab& cur = env_.tabs.active();
+        if (!settings_.track_history) {
+            visits_.clear(); // (switched off: nothing stays in memory)
+        } else if (&cur == visit_tab_ && cur.path() != visit_path_ && !cur.path().empty() && !cur.searching()) {
+            visits_.note(cur.path());
+        }
+        visit_tab_  = &cur;
+        visit_path_ = cur.path();
+    }
     for (std::size_t i = 0; i < env_.tabs.size(); ++i) { env_.tabs.at(i).listing().set_show_hidden(show_hidden_); }
     if (right_tab_) { right_tab_->listing().set_show_hidden(show_hidden_); }
     shortcuts(ui);
@@ -477,10 +613,21 @@ void Shell::frame(context& ui, const FrameInput& in)
     if (settings_dialog_.frame(p)) {
         settings_dirty_ = true;
     }
+    draw_drag_ghost(p);
     for (const Toast& t : pending_toasts_) { ui.toast(t.text, t.kind); }
     pending_toasts_.clear();
 
     apply_deferred();
+
+    if (layout_.revision() != saved_layout_) {
+        saved_layout_ = layout_.revision();
+        (void)layout_.save_file(Settings::sidebar_path());
+    }
+    if (visits_.revision() != saved_visits_) {
+        saved_visits_ = visits_.revision();
+        if (settings_.track_history) { (void)visits_.save_file(Settings::visits_path()); }
+        else { ::DeleteFileW(core::text::widen(Settings::visits_path()).c_str()); } // (off: no history file either)
+    }
 }
 
 } // namespace prism::ui

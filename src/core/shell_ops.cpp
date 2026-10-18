@@ -55,4 +55,18 @@ bool set_clipboard_text(std::string_view utf8)
     return ok;
 }
 
+std::string get_clipboard_text()
+{
+    std::string out;
+    if (!::IsClipboardFormatAvailable(CF_UNICODETEXT) || !::OpenClipboard(nullptr)) { return out; }
+    if (HANDLE h = ::GetClipboardData(CF_UNICODETEXT)) {
+        if (const auto* w = static_cast<const wchar_t*>(::GlobalLock(h))) {
+            out = text::narrow(w);
+            ::GlobalUnlock(h);
+        }
+    }
+    ::CloseClipboard();
+    return out;
+}
+
 } // namespace prism::core::shell

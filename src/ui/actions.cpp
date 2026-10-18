@@ -34,6 +34,8 @@ void register_actions(strata::keybinds& b)
     b.add("new_folder",    "Ctrl+Shift+N",     "Create a folder");
     b.add("copy_path",     "Ctrl+Shift+C",     "Copy the full path of the selection");
     b.add("properties",    "Alt+Enter",        "Show properties");
+    b.add("pin_folder",    "Ctrl+D",           "Pin this folder to the sidebar, or unpin it");
+    b.add("goto_folder",   "Ctrl+G",           "Jump to a pinned folder or a drive");
     b.add("undo",          "Ctrl+Z",           "Undo the last file operation");
     b.add("redo",          "Ctrl+Y",           "Redo what was undone");
 

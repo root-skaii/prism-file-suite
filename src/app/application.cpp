@@ -67,14 +67,26 @@ bool Application::init(const Options& opts)
     platform::DropCallbacks drop;
     drop.resolve = [this](strata::vec2 p) { return shell_->resolve_drop(p); };
     drop.hover   = [this](std::optional<strata::vec2> p) { shell_->set_drop_point(p); };
+    drop.link    = [](const std::string& dest) { return ui::Sidebar::is_pin_target(dest); };
     drop.dropped = [this](std::vector<std::string> paths, std::string dest, bool move) { shell_->drop_files(std::move(paths), dest, move); };
     drop.redraw  = [this] { (void)step(true); };
     drop.scale   = [this] { return window_.logical_scale(); };
     (void)platform::attach_drop_target(window_.handle(), std::move(drop));
     window_.on_live_resize = [this] {
+        // the window is being dragged: if a newer pointer position is already waiting, this size is about to be stale and
+        // drawing it would only hold the next one back (on a slow gpu that is the "keeps resizing after I let go" lag).
+        // never skip more than a few in a row, and the last size always draws
+        static int skipped = 0;
+        if (skipped < 3 && HIWORD(::GetQueueStatus(QS_MOUSEMOVE)) != 0) {
+            ++skipped;
+            return;
+        }
+        skipped = 0;
         (void)window_.take_resized();
         gpu_.resize();
+        gpu_.set_immediate(true);
         (void)step(true);
+        gpu_.set_immediate(false);
     };
     if (opts.settings) { shell_->show_settings(); }
     if (!opts.properties.empty()) { shell_->show_properties({opts.properties}, opts.properties_tab); }
@@ -143,7 +155,9 @@ bool Application::step(bool force_draw)
 
     // an OS drag of files starts after the frame: it runs its own message loop until the button is released
     if (std::vector<std::string> drag = shell_->take_drag(); !drag.empty()) {
+        shell_->set_dragging(drag);
         (void)platform::run_drag(drag);
+        shell_->set_dragging({});
         shell_->set_drop_point(std::nullopt);
         shell_->refresh_all();
         ui_->invalidate();

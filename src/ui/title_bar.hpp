@@ -30,6 +30,9 @@ private:
     strata::rect strip_{};     // tabs + the new-tab button
     strata::rect min_{}, max_{}, close_{};
     int          drag_{-1};    // tab being dragged
+    float        scroll_x_{};  // how far the tabs are scrolled (when there are more than fit)
+    const void*  last_active_{};
+    std::size_t  last_count_{};
     std::vector<strata::rect> tab_rects_; // last frame's tab bodies (drop targets)
     std::optional<strata::vec2> drop_;
     std::unordered_map<const void*, int> born_; // frames each tab has been seen: new tabs fade in

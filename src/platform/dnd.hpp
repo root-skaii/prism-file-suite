@@ -18,6 +18,8 @@ struct DropCallbacks {
     // the pointer while a drag is over the window (nullopt when it leaves or ends)
     std::function<void(std::optional<strata::vec2>)>                               hover;
     std::function<void(std::vector<std::string>, std::string dest, bool move)>     dropped;
+    // true when this destination only records the paths (a pin): the pointer shows "link" and nothing is moved
+    std::function<bool(const std::string&)>                                        link;
     // draw a frame now: the drag has its own message loop, so the app loop is not running
     std::function<void()>                                                          redraw;
     // physical pixels per logical pixel of the ui

@@ -348,6 +348,72 @@ void FileList::draw_rename(Painter& p, model::Tab& tab, const Geo& g, vec2 origi
     }
 }
 
+// --- drag to select -------------------------------------------------------------------------------------------
+
+void FileList::update_band(context& ui, model::Tab& tab, const Geo& g, vec2 origin, const rect& vp, float dt)
+{
+    if (!band_armed_) { return; }
+    model::Listing& L  = tab.listing();
+    const vec2      mp = ui.mouse_pos();
+    if (!ui.mouse_down(mouse_button::left) || ui.key_pressed(key::escape)) {
+        band_armed_ = band_active_ = false;
+        return;
+    }
+    const vec2 here{std::clamp(mp.x - origin.x, 0.0f, g.body_w), mp.y - origin.y};
+    if (!band_active_) {
+        const vec2 d = here - band_anchor_;
+        if (d.x * d.x + d.y * d.y <= 16.0f) { return; } // (a click, not a sweep)
+        band_active_ = true;
+    }
+    // near the top / bottom edge the list scrolls under the pointer: the faster, the further out
+    const float edge = 28.0f;
+    float       dy   = 0.0f;
+    if (mp.y < vp.min.y + edge) { dy = -(vp.min.y + edge - mp.y); }
+    else if (mp.y > vp.max.y - edge) { dy = mp.y - (vp.max.y - edge); }
+    if (dy != 0.0f) {
+        ui.set_scroll_y(std::max(0.0f, ui.scroll_y() + std::clamp(dy, -60.0f, 60.0f) * dt * 12.0f));
+        ui.invalidate(); // (the pointer may stay still: keep frames coming while it scrolls)
+    }
+
+    const rect box{{std::min(band_anchor_.x, here.x), std::min(band_anchor_.y, here.y)}, {std::max(band_anchor_.x, here.x), std::max(band_anchor_.y, here.y)}};
+    const std::size_t rows = L.rows();
+    L.clear_selection();
+    for (const std::size_t r : band_base_) {
+        if (r < rows) { L.set_selected(r, true); }
+    }
+    std::size_t last = model::Listing::npos;
+    if (rows > 0 && box.max.y >= 0.0f) {
+        const auto per = static_cast<std::size_t>(g.per_row);
+        const auto r0  = static_cast<std::size_t>(std::max(0.0f, std::floor(box.min.y / g.cell_h)));
+        const auto r1  = static_cast<std::size_t>(std::max(0.0f, std::floor(box.max.y / g.cell_h)));
+        for (std::size_t line = r0; line <= r1 && line * per < rows; ++line) {
+            for (std::size_t col = 0; col < per; ++col) {
+                const std::size_t i = line * per + col;
+                if (i >= rows) { break; }
+                const rect c = cell_rect(g, i, {0.0f, 0.0f});
+                if (c.max.x < box.min.x || c.min.x > box.max.x || c.max.y < box.min.y || c.min.y > box.max.y) { continue; }
+                L.set_selected(i, true);
+                last = i;
+            }
+        }
+    }
+    if (last != model::Listing::npos) { L.set_focus(last, true); }
+    env_.right_active = right_;
+}
+
+void FileList::draw_band(Painter& p, vec2 origin) const
+{
+    if (!band_active_) { return; }
+    context&       ui  = p.ui();
+    const Palette& pal = p.pal();
+    const vec2     mp  = ui.mouse_pos();
+    const vec2     here{std::clamp(mp.x - origin.x, 0.0f, geo_.body_w), mp.y - origin.y};
+    const rect     box{{origin.x + std::min(band_anchor_.x, here.x), origin.y + std::min(band_anchor_.y, here.y)},
+                       {origin.x + std::max(band_anchor_.x, here.x), origin.y + std::max(band_anchor_.y, here.y)}};
+    p.dl().rect_filled(box, pal.accent.scaled_alpha(0.14f), 3.0f);
+    p.dl().rect_outline(box, pal.accent.scaled_alpha(0.75f), 3.0f, 1.0f);
+}
+
 // --- keyboard -------------------------------------------------------------------------------------------------
 
 void FileList::handle_keys(context& ui, model::Tab& tab, const FrameInput& in, const Geo& g, float viewport_h)
@@ -696,6 +762,7 @@ void FileList::context_menu(Painter& p, model::Tab& tab, const rect& area)
         if (ui.menu_item("Refresh", "F5")) { tab.refresh(); }
         if (ui.menu_item("Copy folder path")) { (void)core::shell::set_clipboard_text(tab.path()); }
         if (ui.menu_item("Open in new tab")) { env_.cmd.open_tab(tab.path(), true); }
+        if (!tab.path().empty() && ui.menu_item(env_.layout.find(tab.path()) ? "Unpin from sidebar" : "Pin to sidebar", "Ctrl+D")) { env_.cmd.toggle_pin(tab.path()); }
         if (ui.menu_item("Properties", "Alt+Enter")) { env_.cmd.open_properties({tab.path()}); }
         return;
     }
@@ -705,6 +772,7 @@ void FileList::context_menu(Painter& p, model::Tab& tab, const rect& area)
 
     if (ui.menu_item("Open", "Enter")) { open_row(tab, row); }
     if (e.is_dir() && ui.menu_item("Open in new tab")) { env_.cmd.open_tab(full, false); }
+    if (e.is_dir() && picked.size() == 1 && ui.menu_item(env_.layout.find(full) ? "Unpin from sidebar" : "Pin to sidebar")) { env_.cmd.toggle_pin(full); }
     ui.menu_separator();
     if (ui.menu_item("Cut", "Ctrl+X")) { copy_selection(tab, true); }
     if (ui.menu_item("Copy", "Ctrl+C")) { copy_selection(tab, false); }
@@ -846,8 +914,13 @@ void FileList::frame(Painter& p, const rect& area, model::Tab& tab, const FrameI
                 }
                 drag_armed_  = !ui.ctrl_down() && !ui.shift_down();
                 drag_origin_ = mp;
-            } else if (!ui.ctrl_down()) {
-                L.clear_selection();
+            } else {
+                if (!ui.ctrl_down()) { L.clear_selection(); }
+                band_armed_  = true;
+                band_active_ = false;
+                band_anchor_ = mp - origin;
+                band_ctrl_   = ui.ctrl_down();
+                band_base_   = band_ctrl_ ? L.selected_rows() : std::vector<std::size_t>{};
             }
         }
         if (dbl && hover >= 0 && !ui.ctrl_down() && !ui.shift_down()) {
@@ -884,6 +957,7 @@ void FileList::frame(Painter& p, const rect& area, model::Tab& tab, const FrameI
             }
         }
     }
+    update_band(ui, tab, g, origin, vp, in.dt);
     if (active) { handle_keys(ui, tab, in, g, vp.height()); }
 
     if (g.grid) {
@@ -892,6 +966,7 @@ void FileList::frame(Painter& p, const rect& area, model::Tab& tab, const FrameI
         draw_details(p, tab, g, origin, vp.min.y, vp.max.y, hover, enter_eased);
     }
     if (L.rows() == 0) { draw_empty_state(p, tab, vp); }
+    draw_band(p, origin);
     if (drop_point_ && hover < 0 && area.contains(*drop_point_)) { p.dl().rect_outline(area.expanded(-1.0f), pal.accent, m.pane_radius, 2.0f); }
     context_menu(p, tab, vp);
     draw_rename(p, tab, g, origin);

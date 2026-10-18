@@ -297,7 +297,7 @@ void Toolbar::frame(Painter& p, const rect& area, bool show_hidden)
     const float half     = rh * 0.85f + 6.0f; // two icon buttons: This folder / Subfolders (tooltips say which)
     const float scope_w  = half * 2.0f + 6.0f;
     const float filter_w = std::clamp(area.width() * 0.13f, 110.0f, 190.0f) + chip_w * 3.0f; // (the chips sit inside the box)
-    const float right_w  = rh * 6.0f + gap * 4.0f + 6.0f + scope_w + filter_w;
+    const float right_w  = rh * 2.0f + gap * 3.0f + 6.0f + scope_w + filter_w;
     const float left_w   = 12.0f + rh * 4.0f + 6.0f + gap * 2.0f;
     const float addr_w   = std::max(120.0f, area.width() - left_w - right_w - 10.0f);
 
@@ -375,17 +375,45 @@ void Toolbar::frame(Painter& p, const rect& area, bool show_hidden)
     ui.same_line();
     (void)ui.custom_item("##tb_gap3", {gap, rh});
     ui.same_line();
-    if (icon_button(p, "##tb_hidden", glyph::eye, true, show_hidden, "Show hidden files", rh)) { env_.cmd.toggle_hidden(); }
-    ui.same_line();
-    if (icon_button(p, "##tb_density", glyph::list, true, env_.theme.density() == Density::compact, "Compact layout", rh)) { env_.cmd.toggle_density(); }
-    ui.same_line();
-    if (icon_button(p, "##tb_view", glyph::grid, true, env_.settings.grid_view, "Thumbnails", rh)) { env_.cmd.toggle_view(); }
-    ui.same_line();
-    if (icon_button(p, "##tb_split", glyph::split, true, env_.settings.split, "Two panes  (F3)", rh)) { env_.cmd.toggle_split(); }
-    ui.same_line();
-    if (icon_button(p, "##tb_preview", glyph::preview, true, env_.settings.preview, "Preview pane  (Alt+P)", rh)) { env_.cmd.toggle_preview(); }
+    // everything about how the folder is shown lives in one menu; it lights up when something in it is switched on
+    const Settings& cur = env_.settings;
+    const bool view_on  = cur.grid_view || cur.split || cur.preview || cur.compact || show_hidden;
+    if (icon_button(p, "##tb_view", glyph::view, true, view_on, "View options", rh)) {
+        const rect b = ui.item_rect();
+        ui.open_popup_menu("##view_menu", {b.min.x, b.max.y + 4.0f});
+    }
+    view_menu(p, show_hidden);
     ui.same_line();
     if (icon_button(p, "##tb_settings", glyph::settings, true, false, "Settings  (Ctrl+,)", rh)) { env_.cmd.open_settings(); }
+}
+
+void Toolbar::view_menu(Painter& p, bool show_hidden)
+{
+    context& ui = p.ui();
+    auto menu = ui.popup_menu("##view_menu");
+    if (!menu) { return; }
+
+    char icons[8][5];
+    int  n = 0;
+    // (the menu stays open on a click: switching a few things in a row is the common case)
+    const auto item = [&](char32_t g, std::string_view label, std::string_view shortcut, bool on) {
+        menu_item_options o;
+        o.shortcut  = shortcut;
+        o.icon      = glyph_utf8(g, icons[n++]);
+        o.icon_font = env_.fonts.icons;
+        o.selected  = on;
+        o.keep_open = true;
+        return ui.menu_item(label, o);
+    };
+    const Settings& st = env_.settings;
+    if (item(glyph::list, "Details", "", !st.grid_view) && st.grid_view) { env_.cmd.toggle_view(); }
+    if (item(glyph::grid, "Thumbnails", "Ctrl+Shift+G", st.grid_view) && !st.grid_view) { env_.cmd.toggle_view(); }
+    ui.menu_separator();
+    if (item(glyph::rows, "Compact rows", "Ctrl+Shift+M", st.compact)) { env_.cmd.toggle_density(); }
+    if (item(glyph::split, "Two panes", "F3", st.split)) { env_.cmd.toggle_split(); }
+    if (item(glyph::preview, "Preview pane", "Alt+P", st.preview)) { env_.cmd.toggle_preview(); }
+    ui.menu_separator();
+    if (item(glyph::eye, "Show hidden files", "Ctrl+H", show_hidden)) { env_.cmd.toggle_hidden(); }
 }
 
 } // namespace prism::ui
