@@ -8,6 +8,18 @@ namespace prism::model {
 
 using core::FileEntry;
 
+namespace {
+
+// search results are relative paths: they sort by the file's own name first, the folder breaks ties
+[[nodiscard]] int compare_names(std::string_view a, std::string_view b) noexcept
+{
+    const auto leaf = [](std::string_view s) { const std::size_t i = s.rfind('\\'); return i == std::string_view::npos ? s : s.substr(i + 1); };
+    const int c = core::text::compare_natural(leaf(a), leaf(b));
+    return c != 0 ? c : core::text::compare_natural(a, b);
+}
+
+} // namespace
+
 void Listing::clear()
 {
     entries_.clear();
@@ -24,21 +36,8 @@ void Listing::clear()
 
 bool Listing::visible(const FileEntry& e) const noexcept
 {
-    if (!show_hidden_ && e.is_hidden()) { return false; }
-    if (filter_.empty()) { return true; }
-    // substring, ascii case-insensitive
-    const std::string_view n = e.name;
-    if (n.size() < filter_.size()) { return false; }
-    for (std::size_t i = 0; i + filter_.size() <= n.size(); ++i) {
-        std::size_t k = 0;
-        for (; k < filter_.size(); ++k) {
-            char c = n[i + k];
-            if (c >= 'A' && c <= 'Z') { c = static_cast<char>(c + 32); }
-            if (c != filter_[k]) { break; }
-        }
-        if (k == filter_.size()) { return true; }
-    }
-    return false;
+    if (!show_hidden_ && e.is_hidden() && !query_.includes_hidden()) { return false; }
+    return query_.matches(e);
 }
 
 void Listing::append(std::vector<FileEntry>&& more)
@@ -52,6 +51,7 @@ void Listing::append(std::vector<FileEntry>&& more)
     sel_.resize(entries_.size(), 0);
     row_of_.resize(entries_.size(), npos);
     for (std::size_t i = first; i < entries_.size(); ++i) {
+        core::text::note_codepoints(entries_[i].name);
         if (!visible(entries_[i])) { continue; }
         row_of_[i] = static_cast<std::uint32_t>(order_.size());
         order_.push_back(static_cast<std::uint32_t>(i));
@@ -79,11 +79,10 @@ void Listing::set_show_hidden(bool on)
     rebuild();
 }
 
-void Listing::set_filter(std::string_view text)
+void Listing::set_query(core::Query q)
 {
-    std::string f = core::text::lower_ascii(text);
-    if (f == filter_) { return; }
-    filter_ = std::move(f);
+    if (q.empty() && query_.empty() && q.error() == query_.error()) { return; }
+    query_ = std::move(q);
     rebuild();
 }
 
@@ -95,7 +94,7 @@ bool Listing::less(std::uint32_t ia, std::uint32_t ib) const noexcept
 
     int c = 0;
     switch (sort_.key) {
-    case SortKey::name:     c = core::text::compare_natural(a.name, b.name); break;
+    case SortKey::name:     c = compare_names(a.name, b.name); break;
     case SortKey::modified: c = a.modified < b.modified ? -1 : (a.modified > b.modified ? 1 : 0); break;
     case SortKey::size:     c = a.size < b.size ? -1 : (a.size > b.size ? 1 : 0); break;
     case SortKey::type:
@@ -106,7 +105,7 @@ bool Listing::less(std::uint32_t ia, std::uint32_t ib) const noexcept
         }
         break;
     }
-    if (c == 0 && sort_.key != SortKey::name) { c = core::text::compare_natural(a.name, b.name); return c < 0; } // ties by name, always ascending
+    if (c == 0 && sort_.key != SortKey::name) { c = compare_names(a.name, b.name); return c < 0; } // ties by name, always ascending
     return sort_.ascending ? c < 0 : c > 0;
 }
 

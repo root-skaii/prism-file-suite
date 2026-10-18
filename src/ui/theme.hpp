@@ -12,6 +12,8 @@
 namespace prism::ui {
 
 enum class ThemeMode : std::uint8_t { dark, light };
+// the surface colours of the dark theme: neutral grey (default), cooler graphite, darker blue-tinted slate
+enum class DarkStyle : std::uint8_t { neutral, graphite, slate };
 
 struct Palette {
     // surfaces, back to front
@@ -97,6 +99,10 @@ public:
     }
 
     void set_mode(ThemeMode mode);
+    void set_accent(strata::color c);
+    void set_dark_style(DarkStyle s) { dark_style_ = s; set_mode(mode_); }
+    [[nodiscard]] DarkStyle dark_style() const noexcept { return dark_style_; }
+    [[nodiscard]] strata::color accent_color() const noexcept { return accent_; }
     void toggle() { set_mode(mode_ == ThemeMode::dark ? ThemeMode::light : ThemeMode::dark); }
     void set_density(Density d) noexcept { density_ = d; metrics_ = metrics_for(d); }
     [[nodiscard]] Density density() const noexcept { return density_; }
@@ -110,7 +116,9 @@ public:
 
 private:
     ThemeMode     mode_{ThemeMode::dark};
+    DarkStyle     dark_style_{DarkStyle::neutral};
     Density       density_{Density::comfortable};
+    strata::color accent_{109, 140, 255, 255};
     Palette       pal_{};
     Metrics       metrics_{};
     strata::style style_{};

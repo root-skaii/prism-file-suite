@@ -4,6 +4,7 @@
 // slow network share) shows its first rows at once and the ui never blocks. starting a new listing abandons the old one.
 
 #include "core/file_entry.hpp"
+#include "core/query.hpp"
 
 #include <atomic>
 #include <functional>
@@ -14,6 +15,9 @@
 
 namespace prism::core {
 
+// one find result as an entry; `rel_dir` (utf-8, "" or "sub\dir\\") is prepended to the name for recursive search results
+[[nodiscard]] FileEntry entry_from_find_data(const void* win32_find_data_w, const std::string& rel_dir = {});
+
 class DirectoryLoader {
 public:
     // `wake` runs on the worker thread whenever there is something to poll: post a message to the window
@@ -23,6 +27,8 @@ public:
     DirectoryLoader& operator=(const DirectoryLoader&) = delete;
 
     void start(const std::string& utf8_path);
+    // every file and folder below `utf8_root` that matches `query`; names are relative paths. capped at 200k results
+    void start_search(const std::string& utf8_root, Query query);
     void cancel() noexcept;
 
     struct Progress {
@@ -45,6 +51,7 @@ private:
     };
 
     static void work(std::shared_ptr<Job> job, std::wstring path, std::function<void()> wake);
+    static void work_search(std::shared_ptr<Job> job, std::wstring root, Query query, std::function<void()> wake);
 
     std::function<void()> wake_;
     std::shared_ptr<Job>  job_;

@@ -13,26 +13,40 @@ using strata::color;
     return color{static_cast<std::uint8_t>(hex >> 16), static_cast<std::uint8_t>(hex >> 8), static_cast<std::uint8_t>(hex), a};
 }
 
-[[nodiscard]] Palette dark_palette()
+// the dark surfaces, back to front: each layer is ~5-8 % lighter than the one behind it so panels read as separate
+// planes, and the border is a step above `raised` so edges are visible without being loud
+struct DarkLayers {
+    std::uint32_t window, sidebar, content, raised, border, text, text_dim, text_faint;
+    std::uint8_t  hover, pressed; // white overlay alpha
+};
+
+// Windows 11 dark: pure neutral grey, the clearest separation (the default)
+constexpr DarkLayers dark_neutral{0x1c1c1c, 0x242424, 0x2d2d2d, 0x383838, 0x4c4c4c, 0xf2f2f2, 0xb0b0b0, 0x80807f, 15, 26};
+// neutral with a slightly cool tint, a little darker
+constexpr DarkLayers dark_graphite{0x17181b, 0x1e1f23, 0x27282d, 0x32343a, 0x474a52, 0xeceef2, 0xa6aab5, 0x7a7e8a, 15, 26};
+// Linear / VS Code feel: darkest, a hint of blue
+constexpr DarkLayers dark_slate{0x0f1013, 0x16181d, 0x1f2229, 0x2b2f38, 0x3e4350, 0xe9ecf3, 0x9fa6b6, 0x727a8c, 14, 24};
+
+[[nodiscard]] Palette dark_palette(const DarkLayers& l)
 {
     Palette p{};
-    p.window             = rgb(0x0b0d11);
-    p.title_bar          = rgb(0x0b0d11);
-    p.sidebar            = rgb(0x11141a);
-    p.content            = rgb(0x151921);
-    p.raised             = rgb(0x1d222c);
-    p.border             = rgb(0x262c38);
-    p.divider            = rgb(0xffffff, 14);
-    p.text               = rgb(0xe8ebf2);
-    p.text_dim           = rgb(0x9099ab);
-    p.text_faint         = rgb(0x5d6677);
+    p.window             = rgb(l.window);
+    p.title_bar          = rgb(l.window);
+    p.sidebar            = rgb(l.sidebar);
+    p.content            = rgb(l.content);
+    p.raised             = rgb(l.raised);
+    p.border             = rgb(l.border);
+    p.divider            = rgb(0xffffff, 18);
+    p.text               = rgb(l.text);
+    p.text_dim           = rgb(l.text_dim);
+    p.text_faint         = rgb(l.text_faint);
     p.accent             = rgb(0x6d8cff);
     p.accent_hover       = rgb(0x8aa3ff);
     p.on_accent          = rgb(0x0b0d11);
-    p.hover              = rgb(0xffffff, 12);
-    p.pressed            = rgb(0xffffff, 20);
+    p.hover              = rgb(0xffffff, l.hover);
+    p.pressed            = rgb(0xffffff, l.pressed);
     p.selection          = rgb(0x6d8cff, 52);
-    p.selection_inactive = rgb(0xffffff, 22);
+    p.selection_inactive = rgb(0xffffff, 26);
     p.selection_edge     = rgb(0x6d8cff, 120);
     p.close_hover        = rgb(0xe5484d);
     p.success            = rgb(0x4ade80);
@@ -66,16 +80,16 @@ using strata::color;
 [[nodiscard]] Palette light_palette()
 {
     Palette p{};
-    p.window             = rgb(0xe9ecf2);
-    p.title_bar          = rgb(0xe9ecf2);
-    p.sidebar            = rgb(0xf0f2f7);
+    p.window             = rgb(0xdfe2e8);
+    p.title_bar          = rgb(0xdfe2e8);
+    p.sidebar            = rgb(0xe9ebf0);
     p.content            = rgb(0xffffff);
-    p.raised             = rgb(0xf5f6fa);
-    p.border             = rgb(0xd5d9e3);
-    p.divider            = rgb(0x000000, 16);
+    p.raised             = rgb(0xf4f5f8);
+    p.border             = rgb(0xc4c9d4);
+    p.divider            = rgb(0x000000, 18);
     p.text               = rgb(0x1a1e27);
-    p.text_dim           = rgb(0x5f687a);
-    p.text_faint         = rgb(0x9aa2b3);
+    p.text_dim           = rgb(0x566073);
+    p.text_faint         = rgb(0x7d8596);
     p.accent             = rgb(0x3b63f0);
     p.accent_hover       = rgb(0x2a4fd6);
     p.on_accent          = rgb(0xffffff);
@@ -115,10 +129,28 @@ using strata::color;
 
 } // namespace
 
+void Theme::set_accent(color c)
+{
+    accent_ = color{c.r, c.g, c.b, 255};
+    set_mode(mode_);
+}
+
 void Theme::set_mode(ThemeMode mode)
 {
     mode_ = mode;
-    pal_  = mode == ThemeMode::dark ? dark_palette() : light_palette();
+    const DarkLayers& layers = dark_style_ == DarkStyle::graphite ? dark_graphite : (dark_style_ == DarkStyle::slate ? dark_slate : dark_neutral);
+    pal_  = mode == ThemeMode::dark ? dark_palette(layers) : light_palette();
+    {   // the accent colours: one preset drives the highlight, selection and links
+        const bool d = mode == ThemeMode::dark;
+        pal_.accent       = accent_;
+        pal_.accent_hover = d ? lerp(accent_, color{255, 255, 255, 255}, 0.22f) : lerp(accent_, color{0, 0, 0, 255}, 0.18f);
+        // text on an accent fill: black or white, whichever the colour can carry
+        const int lum = (accent_.r * 299 + accent_.g * 587 + accent_.b * 114) / 1000;
+        pal_.on_accent = lum > 150 ? color{11, 13, 17, 255} : color{255, 255, 255, 255};
+        pal_.selection      = pal_.accent.scaled_alpha(d ? 0.22f : 0.15f);
+        pal_.selection_edge = pal_.accent.scaled_alpha(d ? 0.50f : 0.45f);
+        pal_.tint[static_cast<std::size_t>(core::FileKind::shortcut)] = pal_.accent;
+    }
 
     // strata's own widgets (popups, menus, text fields, scrollbars, tooltips) wear the same colours
     strata::style s{};

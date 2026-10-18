@@ -3,3 +3,6 @@ build/
 .cache/
 *.user
 compile_commands.json
+
+CLAUDE.md
+tools/screenshot.ps1

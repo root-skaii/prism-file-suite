@@ -21,6 +21,12 @@ public:
     bool forward();
     bool up();
     void refresh();
+    // recursive search below the current folder; results stream into the listing until clear_search(). an invalid or
+    // empty query does nothing
+    void search(core::Query query);
+    void clear_search();
+    [[nodiscard]] bool searching() const noexcept { return searching_; }
+    [[nodiscard]] const std::string& search_query() const noexcept { return search_.text(); }
     [[nodiscard]] bool can_back() const noexcept { return index_ > 0; }
     [[nodiscard]] bool can_forward() const noexcept { return index_ + 1 < history_.size(); }
     [[nodiscard]] bool can_up() const;
@@ -60,6 +66,8 @@ private:
     Listing                  listing_;
     core::DirectoryLoader    loader_;
     std::uint32_t            error_{};
+    core::Query              search_;
+    bool                     searching_{};
     float                    restore_scroll_{};
     bool                     restore_pending_{};
 };

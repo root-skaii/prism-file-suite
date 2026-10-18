@@ -4,6 +4,7 @@
 // rows are positions in the visible order; entries are positions in the raw list (stable)
 
 #include "core/file_entry.hpp"
+#include "core/query.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -34,10 +35,11 @@ public:
 
     void set_sort(SortSpec s);
     void set_show_hidden(bool on);
-    void set_filter(std::string_view text);
+    // the live filter: only entries the query matches are shown (an empty or invalid query shows everything)
+    void set_query(core::Query q);
     [[nodiscard]] const SortSpec& sort() const noexcept { return sort_; }
     [[nodiscard]] bool show_hidden() const noexcept { return show_hidden_; }
-    [[nodiscard]] const std::string& filter() const noexcept { return filter_; }
+    [[nodiscard]] const core::Query& query() const noexcept { return query_; }
 
     // view ----------------------------------------------------------------
     [[nodiscard]] std::size_t rows() const noexcept { return order_.size(); }
@@ -78,10 +80,9 @@ private:
     std::vector<std::uint32_t>   order_;    // visible entries, in display order
     std::vector<std::uint32_t>   row_of_;   // per entry: its row, npos when hidden
     SortSpec                     sort_{};
-    std::string                  filter_;   // lower-case
+    core::Query                  query_;
     bool                         show_hidden_{false};
-    bool                         finished_{true};
-    std::size_t                  folder_count_{};
+    bool                         finished_{true};    std::size_t                  folder_count_{};
     std::size_t                  sel_count_{};
     std::uint64_t                sel_bytes_{};
     std::uint32_t                focus_{npos};  // entry

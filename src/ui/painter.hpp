@@ -3,6 +3,7 @@
 // drawing helpers over strata's draw list: aligned text, icon glyphs, the coloured file / folder icons. one per frame.
 
 #include "core/file_kind.hpp"
+#include "platform/image_cache.hpp"
 #include "ui/fonts.hpp"
 #include "ui/theme.hpp"
 
@@ -49,6 +50,15 @@ inline constexpr char32_t eye        = 0xe7b3;
 inline constexpr char32_t pin        = 0xe718;
 inline constexpr char32_t disc       = 0xe958;
 inline constexpr char32_t check      = 0xe73e;
+inline constexpr char32_t folder_open = 0xe838;
+inline constexpr char32_t folder     = 0xe8b7;
+inline constexpr char32_t copy       = 0xe8c8;
+inline constexpr char32_t info       = 0xe946;
+inline constexpr char32_t open_new   = 0xe8a7;
+inline constexpr char32_t split      = 0xe745;   // two columns
+inline constexpr char32_t preview    = 0xe8a1;   // side panel
+inline constexpr char32_t lock       = 0xe72e;
+inline constexpr char32_t delete_    = 0xe74d;
 } // namespace glyph
 
 class Painter {
@@ -76,6 +86,9 @@ public:
     void folder_icon(const strata::rect& box) const;
     void file_icon(const strata::rect& box, core::FileKind kind) const;
     void kind_icon(const strata::rect& box, core::FileKind kind) const; // folder or file tile
+
+    // a decoded image scaled to fit `box`, centred, aspect kept
+    void image_fit(const strata::rect& box, const platform::Image& img, float rounding = 6.0f) const;
 
     // a small triangle pointing up / down (sort direction)
     void sort_arrow(strata::vec2 center, bool ascending, strata::color c) const;

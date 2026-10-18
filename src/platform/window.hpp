@@ -47,6 +47,9 @@ public:
     [[nodiscard]] strata::win32_platform& input() noexcept { return platform_; }
     [[nodiscard]] float                  dpi_scale() const noexcept { return platform_.dpi_scale(); }
     [[nodiscard]] bool                   minimized() const noexcept { return minimized_; }
+    // physical pixels per ui pixel (dpi scale x the interface-size setting): the ui's hit rectangles are in ui pixels
+    void  set_logical_scale(float s) noexcept { logical_scale_ = s; }
+    [[nodiscard]] float logical_scale() const noexcept { return logical_scale_ > 0.0f ? logical_scale_ : platform_.dpi_scale(); }
     [[nodiscard]] bool                   maximized() const noexcept;
 
     // true once after the client area changed size; the new dpi scale (0: none) after WM_DPICHANGED
@@ -82,6 +85,7 @@ private:
     bool                  max_hover_{};
     bool                  max_down_{};
     float                 pending_dpi_{};
+    float                 logical_scale_{};
 };
 
 } // namespace prism::platform

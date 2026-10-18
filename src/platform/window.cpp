@@ -45,6 +45,9 @@ bool Window::create(const Config& cfg)
     wc.lpfnWndProc   = reinterpret_cast<WNDPROC>(&Window::proc);
     wc.hInstance     = inst;
     wc.hCursor       = ::LoadCursorW(nullptr, IDC_ARROW);
+    // the icon embedded by prismfs.rc (id 1): taskbar, alt-tab and the system menu
+    wc.hIcon         = ::LoadIconW(inst, MAKEINTRESOURCEW(1));
+    wc.hIconSm       = wc.hIcon;
     wc.lpszClassName = window_class;
     ::RegisterClassExW(&wc);
 
@@ -181,7 +184,8 @@ std::intptr_t Window::nc_hit_test(std::intptr_t lparam) const
         if (d) { return HTBOTTOM; }
     }
     if (hit_test) {
-        switch (hit_test({static_cast<float>(x) / scale, static_cast<float>(y) / scale})) {
+        const float ls = logical_scale();
+        switch (hit_test({static_cast<float>(x) / ls, static_cast<float>(y) / ls})) {
         case HitZone::caption:         return HTCAPTION;
         case HitZone::maximize_button: return HTMAXBUTTON;
         case HitZone::client:          break;

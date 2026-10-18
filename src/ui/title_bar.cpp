@@ -10,6 +10,14 @@ namespace prism::ui {
 
 using namespace strata;
 
+std::string TitleBar::drop_target_at(vec2 p) const
+{
+    for (std::size_t i = 0; i < tab_rects_.size() && i < env_.tabs.size(); ++i) {
+        if (tab_rects_[i].contains(p)) { return env_.tabs.at(i).path(); }
+    }
+    return {};
+}
+
 platform::HitZone TitleBar::hit_test(vec2 pt) const
 {
     if (max_.contains(pt)) { return platform::HitZone::maximize_button; }
@@ -102,7 +110,14 @@ void TitleBar::frame(Painter& p, const rect& area)
         const std::string key = std::format("##tab{}", reinterpret_cast<std::uintptr_t>(&tab));
         const float x      = ui.animate(key + "x", origin.x + lead + static_cast<float>(i) * tw, 26.0f);
         const float hover_k = ui.animate(key + "h", hover ? 1.0f : 0.0f, 18.0f);
+        auto& seen = born_[&tab];
+        ++seen;
+        const float appear = ui.animate(key + "b", seen > 1 ? 1.0f : 0.0f, 12.0f);
+        p.dl().push_alpha(appear);
         const rect  body{{x, y0}, {x + tw - 2.0f, y1}};
+        if (i == 0) { tab_rects_.clear(); }
+        tab_rects_.push_back(body);
+        if (drop_ && body.contains(*drop_)) { p.dl().rect_outline(body, pal.accent, m.pane_radius - 2.0f, 2.0f); }
 
         if (active) {
             shape_style s;
@@ -127,6 +142,7 @@ void TitleBar::frame(Painter& p, const rect& area)
             if (strip.hovered && cr.contains(mp)) { p.dl().rect_filled(cr, pal.pressed, 5.0f); }
             p.glyph_center(cr, glyph::close, active || hover ? pal.text_dim : pal.text_faint, env_.fonts.tile);
         }
+        p.dl().pop_alpha();
     }
     p.dl().pop_clip();
 

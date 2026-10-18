@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 4.3)
 project(prism
     VERSION 0.1.0
     DESCRIPTION "fast, modern file explorer on the strata ui framework"
-    LANGUAGES CXX
+    LANGUAGES CXX RC
 )
 
 if(NOT WIN32)

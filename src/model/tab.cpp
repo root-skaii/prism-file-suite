@@ -75,18 +75,43 @@ bool Tab::up()
 void Tab::refresh()
 {
     if (path().empty()) { return; }
+    if (searching()) { search(search_); return; }
     remember_view();
+    load(true);
+}
+
+void Tab::search(core::Query query)
+{
+    if (path().empty() || query.empty() || !query.valid()) { return; }
+    if (!searching()) { remember_view(); }
+    search_    = query;
+    searching_ = true;
+    error_     = 0;
+    ++generation;
+    listing_.set_query({});
+    listing_.clear();
+    reveal_name.clear();
+    restore_pending_ = true;
+    scroll_y         = 0.0f;
+    loader_.start_search(path(), std::move(query));
+}
+
+void Tab::clear_search()
+{
+    if (!searching()) { return; }
     load(true);
 }
 
 void Tab::load(bool keep_scroll)
 {
+    searching_ = false;
+    search_    = {};
     restore_scroll_  = keep_scroll ? history_[index_].scroll : 0.0f;
     restore_pending_ = true;
     scroll_y         = restore_scroll_;
     error_           = 0;
     ++generation;
-    listing_.set_filter({}); // (a filter belongs to the folder it was typed in)
+    listing_.set_query({}); // (a filter belongs to the folder it was typed in)
     listing_.clear();
     if (reveal_name.empty() && keep_scroll) { reveal_name = history_[index_].focus_name; }
     loader_.start(path());

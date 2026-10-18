@@ -4,6 +4,8 @@
 
 #include "strata/font.hpp"
 
+#include <algorithm>
+
 namespace prism::core::text {
 
 std::wstring widen(std::string_view s)
@@ -76,6 +78,37 @@ int compare_natural(std::string_view a, std::string_view b) noexcept
     if (a.empty() && b.empty()) { return 0; }
     return a.empty() ? -1 : 1;
 }
+
+namespace {
+
+std::vector<char32_t> g_demand;
+unsigned              g_revision = 0;
+
+// what the ui fonts bake without being asked (see ui/fonts.cpp)
+[[nodiscard]] bool baked_by_default(char32_t c) noexcept
+{
+    return c < 0x250 || (c >= 0x370 && c <= 0x3ff) || (c >= 0x400 && c <= 0x52f) || (c >= 0x2000 && c <= 0x206f) ||
+           (c >= 0x20a0 && c <= 0x20cf) || (c >= 0x2190 && c <= 0x22ff) || (c >= 0x2500 && c <= 0x25ff) || (c >= 0xe000 && c <= 0xf8ff);
+}
+
+} // namespace
+
+void note_codepoints(std::string_view s)
+{
+    while (!s.empty()) {
+        if (static_cast<unsigned char>(s.front()) < 0x80) { s.remove_prefix(1); continue; }
+        const char32_t c = strata::decode_utf8(s);
+        if (baked_by_default(c) || c == 0xfffd) { continue; }
+        const auto it = std::lower_bound(g_demand.begin(), g_demand.end(), c);
+        if (it == g_demand.end() || *it != c) {
+            g_demand.insert(it, c);
+            ++g_revision;
+        }
+    }
+}
+
+const std::vector<char32_t>& demanded_codepoints() noexcept { return g_demand; }
+unsigned demand_revision() noexcept { return g_revision; }
 
 std::string lower_ascii(std::string_view s)
 {

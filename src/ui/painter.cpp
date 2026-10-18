@@ -109,7 +109,7 @@ void Painter::file_icon(const rect& box, FileKind kind) const
     default: break;
     }
     dl().rect_filled(tile, tint.scaled_alpha(theme_.dark() ? 0.20f : 0.16f), s * 0.24f);
-    glyph_center(tile, g, tint, fonts_.tile);
+    glyph_center(tile, g, tint, s > 40.0f ? fonts_.big : fonts_.tile);
 }
 
 void Painter::kind_icon(const rect& box, FileKind kind) const
@@ -119,6 +119,15 @@ void Painter::kind_icon(const rect& box, FileKind kind) const
     } else {
         file_icon(box, kind);
     }
+}
+
+void Painter::image_fit(const rect& box, const platform::Image& img, float rounding) const
+{
+    if (img.id == 0 || img.w <= 0 || img.h <= 0) { return; }
+    const float k = std::min(box.width() / static_cast<float>(img.w), box.height() / static_cast<float>(img.h));
+    const vec2  sz{std::floor(static_cast<float>(img.w) * k), std::floor(static_cast<float>(img.h) * k)};
+    const rect  r = rect::from_size(box.center() - sz * 0.5f, sz);
+    dl().image(r, img.id, {0.0f, 0.0f}, {1.0f, 1.0f}, color{255, 255, 255, 255}, radii(rounding));
 }
 
 void Painter::sort_arrow(vec2 c, bool ascending, color col) const
