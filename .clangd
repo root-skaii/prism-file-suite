@@ -1,0 +1,4 @@
+CompileFlags:
+  CompilationDatabase: build/release
+  # clangd drops -std:c++latest when it borrows a .cpp's command for a header
+  Add: [/std:c++latest]

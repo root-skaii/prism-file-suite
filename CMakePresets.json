@@ -1,0 +1,29 @@
+{
+    "version": 9,
+    "cmakeMinimumRequired": { "major": 4, "minor": 3, "patch": 0 },
+    "configurePresets": [
+        {
+            "name": "base",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "architecture": { "value": "x64", "strategy": "external" },
+            "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" },
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin/clang-cl.exe",
+                "CMAKE_CXX_COMPILER": "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin/clang-cl.exe",
+                "CMAKE_LINKER": "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/Llvm/x64/bin/lld-link.exe"
+            }
+        },
+        { "name": "debug",   "displayName": "Debug (clang-cl + lld-link)",   "inherits": "base", "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" } },
+        { "name": "release", "displayName": "Release (clang-cl + lld-link, ThinLTO)", "inherits": "base", "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" } },
+        { "name": "dev",     "displayName": "Release, no LTO (fast iteration)", "inherits": "base", "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "PRISM_LTO": "OFF" } },
+        { "name": "relwithdebinfo", "displayName": "RelWithDebInfo (clang-cl + lld-link)", "inherits": "base", "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" } }
+    ],
+    "buildPresets": [
+        { "name": "debug",   "configurePreset": "debug" },
+        { "name": "release", "configurePreset": "release" },
+        { "name": "dev",     "configurePreset": "dev" },
+        { "name": "relwithdebinfo", "configurePreset": "relwithdebinfo" }
+    ]
+}
