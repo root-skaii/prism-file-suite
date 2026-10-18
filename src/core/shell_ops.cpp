@@ -55,6 +55,20 @@ bool set_clipboard_text(std::string_view utf8)
     return ok;
 }
 
+bool clipboard_text_contains(std::wstring_view needle)
+{
+    if (!::IsClipboardFormatAvailable(CF_UNICODETEXT) || !::OpenClipboard(nullptr)) { return false; }
+    bool found = false;
+    if (HANDLE h = ::GetClipboardData(CF_UNICODETEXT)) {
+        if (const auto* w = static_cast<const wchar_t*>(::GlobalLock(h))) {
+            found = std::wstring_view{w, ::wcsnlen(w, 65536)}.find(needle) != std::wstring_view::npos;
+            ::GlobalUnlock(h);
+        }
+    }
+    ::CloseClipboard();
+    return found;
+}
+
 std::string get_clipboard_text()
 {
     std::string out;

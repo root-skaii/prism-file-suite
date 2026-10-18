@@ -13,6 +13,6 @@ target_link_libraries(prismfs PRIVATE
 add_executable(prismfs_selftest
     "${CMAKE_CURRENT_SOURCE_DIR}/../tests/selftest.cpp"
     core/text.cpp core/path.cpp core/file_kind.cpp core/query.cpp core/directory_loader.cpp core/file_ops.cpp core/file_info.cpp
-    model/listing.cpp model/tab.cpp model/sidebar_layout.cpp model/visit_log.cpp core/places.cpp core/path_probe.cpp)
+    model/listing.cpp model/tab.cpp model/sidebar_layout.cpp model/visit_log.cpp core/places.cpp core/path_probe.cpp core/drive_watcher.cpp core/shell_menu.cpp core/bitmap.cpp core/default_manager.cpp)
 target_include_directories(prismfs_selftest PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(prismfs_selftest PRIVATE strata::strata prism_options shell32.lib ole32.lib user32.lib uuid.lib version.lib bcrypt.lib advapi32.lib shlwapi.lib)

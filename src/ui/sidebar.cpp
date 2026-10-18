@@ -54,14 +54,15 @@ void insertion_line(Painter& p, const rect& line)
 
 } // namespace
 
-Sidebar::Sidebar(Env& env) : env_{env}
+Sidebar::Sidebar(Env& env) : env_{env}, drive_watch_{env.window.waker()}
 {
-    refresh_drives();
+    drives_     = drive_watch_.list();
+    drives_rev_ = drive_watch_.revision();
 }
 
 void Sidebar::refresh_drives()
 {
-    drives_ = core::drives();
+    drive_watch_.poke();
 }
 
 bool Sidebar::is_pin_target(std::string_view dest) noexcept
@@ -407,12 +408,12 @@ void Sidebar::frame(Painter& p, const rect& area, const FrameInput& in)
     PanelScope panel{ui, "##sidebar", area};
     p.dl().rect_filled(area, pal.window);
 
-    // (the drive list is cheap but not free: it asks every volume for its label)
-    drives_age_ += in.dt;
-    if (drives_age_ > 5.0) {
-        drives_age_ = 0.0;
-        refresh_drives();
+    // (the drive list comes from DriveWatcher: asking a volume for its label can take seconds)
+    if (const unsigned rev = drive_watch_.revision(); rev != drives_rev_) {
+        drives_     = drive_watch_.list();
+        drives_rev_ = rev;
     }
+    (void)in;
     const std::size_t n = env_.layout.sections().size();
     {   // what the automatic sections would list (a few spare: vanished folders are left out below)
         std::vector<std::string> watch;
@@ -430,7 +431,10 @@ void Sidebar::frame(Painter& p, const rect& area, const FrameInput& in)
             if (list.size() > k_auto_rows) { list.resize(k_auto_rows); }
         }
     }
-    if (ui.mouse_clicked(mouse_button::right) && area.contains(ui.mouse_pos())) { menu_ = Target{}; } // (rows below claim it)
+    if (ui.mouse_clicked(mouse_button::right) && area.contains(ui.mouse_pos())) {
+        menu_     = Target{}; // (rows below claim it)
+        paste_ok_ = core::shell::clipboard_text_contains(L"[sidebar]");
+    }
 
     {
         auto scroll = ui.child("##side_scroll", {area.width(), area.height()}, child_flags::no_padding);
@@ -807,6 +811,7 @@ void Sidebar::icon_popup(Painter& p)
 void Sidebar::context_menu(Painter& p)
 {
     context& ui = p.ui();
+    const MenuDensity density{ui, env_.settings.compact};
     auto menu = ui.context_menu("##side_ctx", area_);
     if (!menu) { return; }
 
@@ -923,7 +928,7 @@ void Sidebar::context_menu(Painter& p)
     }
     ui.menu_separator();
     if (ui.menu_item("Copy layout")) { env_.cmd.copy_sidebar(); }
-    if (ui.menu_item("Paste layout", "", false, !core::shell::get_clipboard_text().empty())) { env_.cmd.paste_sidebar(); }
+    if (ui.menu_item("Paste layout", "", false, paste_ok_)) { env_.cmd.paste_sidebar(); }
     ui.menu_separator();
     if (ui.menu_item("Reset sidebar to defaults")) { edit("Reset sidebar", [](model::SidebarLayout& l) { l.reset(); }); }
 }

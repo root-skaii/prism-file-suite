@@ -1,5 +1,6 @@
 #include "platform/image_cache.hpp"
 
+#include "core/bitmap.hpp"
 #include "core/text.hpp"
 
 #include <windows.h>
@@ -18,41 +19,6 @@ namespace {
 
 constexpr std::size_t k_max_entries = 700;
 constexpr int         k_uploads_per_poll = 12;
-
-// HBITMAP -> straight-alpha BGRA, top-down
-bool read_bitmap(HBITMAP bmp, int& w, int& h, std::vector<unsigned char>& out)
-{
-    BITMAP bm{};
-    if (::GetObjectW(bmp, sizeof bm, &bm) == 0 || bm.bmWidth <= 0 || bm.bmHeight <= 0) { return false; }
-    w = bm.bmWidth;
-    h = bm.bmHeight;
-    BITMAPINFO bi{};
-    bi.bmiHeader.biSize        = sizeof bi.bmiHeader;
-    bi.bmiHeader.biWidth       = w;
-    bi.bmiHeader.biHeight      = -h;
-    bi.bmiHeader.biPlanes      = 1;
-    bi.bmiHeader.biBitCount    = 32;
-    bi.bmiHeader.biCompression = BI_RGB;
-    out.resize(static_cast<std::size_t>(w) * static_cast<std::size_t>(h) * 4);
-    HDC dc = ::GetDC(nullptr);
-    const int rows = ::GetDIBits(dc, bmp, 0, static_cast<UINT>(h), out.data(), &bi, DIB_RGB_COLORS);
-    ::ReleaseDC(nullptr, dc);
-    if (rows == 0) { return false; }
-
-    // the shell hands out premultiplied alpha (or none at all: alpha 0 everywhere)
-    bool any_alpha = false;
-    for (std::size_t i = 3; i < out.size(); i += 4) {
-        if (out[i] != 0) { any_alpha = true; break; }
-    }
-    for (std::size_t i = 0; i < out.size(); i += 4) {
-        if (!any_alpha) {
-            out[i + 3] = 255;
-        } else if (const unsigned a = out[i + 3]; a != 0 && a != 255) {
-            for (int c = 0; c < 3; ++c) { out[i + static_cast<std::size_t>(c)] = static_cast<unsigned char>(std::min(255u, out[i + static_cast<std::size_t>(c)] * 255u / a)); }
-        }
-    }
-    return true;
-}
 
 } // namespace
 
@@ -87,6 +53,22 @@ Image ImageCache::get(const std::string& path, int px, ImageKind kind)
         if (queue_.size() > 400) { queue_.pop_back(); }
     }
     cv_.notify_one();
+    return {};
+}
+
+Image ImageCache::raw(const std::string& key, int w, int h, const std::vector<unsigned char>& bgra)
+{
+    const auto it = entries_.find(key);
+    if (it != entries_.end()) {
+        it->second.used = tick_;
+        return it->second.image;
+    }
+    entries_[key] = Entry{{}, true, tick_};
+    {
+        std::lock_guard g{lock_};
+        results_.push_back({key, w, h, bgra});
+    }
+    if (wake_) { wake_(); }
     return {};
 }
 
@@ -165,7 +147,7 @@ void ImageCache::worker()
                 if (req.kind == ImageKind::thumbnail) { hr = factory->GetImage(size, SIIGBF_THUMBNAILONLY | SIIGBF_BIGGERSIZEOK, &bmp); }
                 if (FAILED(hr) || bmp == nullptr) { hr = factory->GetImage(size, SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK, &bmp); }
                 if (SUCCEEDED(hr) && bmp != nullptr) {
-                    (void)read_bitmap(bmp, res.w, res.h, res.bgra);
+                    (void)core::bitmap_to_bgra(bmp, res.w, res.h, res.bgra);
                     ::DeleteObject(bmp);
                 }
             }

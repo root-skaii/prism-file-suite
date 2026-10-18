@@ -51,6 +51,8 @@ public:
     virtual void paste_sidebar() = 0;
     // runs an edit of the sidebar layout and puts it on the undo stack (false: it changed nothing)
     virtual bool edit_sidebar(std::string label, const std::function<void(model::SidebarLayout&)>& edit) = 0;
+    // runs a named action (ui/actions.cpp) at the end of the frame, on the pane that has the keyboard
+    virtual void request_action(std::string name) = 0;
     virtual void toast(std::string text, strata::toast_kind kind) = 0;
     // pointer shape for this frame (strata only knows its own widgets)
     virtual void set_cursor(strata::cursor_kind kind) = 0;

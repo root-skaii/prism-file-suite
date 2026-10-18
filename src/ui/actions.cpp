@@ -32,6 +32,8 @@ void register_actions(strata::keybinds& b)
     b.add("delete_forever","Shift+Delete",     "Delete the selection for good");
     b.add("rename",        "F2",               "Rename the selected item");
     b.add("new_folder",    "Ctrl+Shift+N",     "Create a folder");
+    b.add("new_file",      "",                 "Create an empty file");
+    b.add("new_text",      "",                 "Create an empty text document");
     b.add("copy_path",     "Ctrl+Shift+C",     "Copy the full path of the selection");
     b.add("properties",    "Alt+Enter",        "Show properties");
     b.add("pin_folder",    "Ctrl+D",           "Pin this folder to the sidebar, or unpin it");

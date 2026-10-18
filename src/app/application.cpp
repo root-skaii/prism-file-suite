@@ -1,5 +1,6 @@
 #include "app/application.hpp"
 
+#include "core/default_manager.hpp"
 #include "core/path.hpp"
 #include "core/places.hpp"
 #include "ui/actions.hpp"
@@ -34,6 +35,7 @@ bool Application::init(const Options& opts)
     scale_pct_ = settings_.ui_scale;
     ::SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     (void)::OleInitialize(nullptr); // (a single-threaded apartment, plus what drag and drop needs)
+    core::refresh_default_manager(); // (the folder was moved: opening folders for other apps must still find this exe)
 
     if (!window_.create({.title = "PrismFS", .width = settings_.window_w > 0 ? settings_.window_w : 1360, .height = settings_.window_h > 0 ? settings_.window_h : 840})) { return false; }
 
@@ -185,6 +187,8 @@ int Application::run()
         const double wait = ui_->next_wake_seconds();
         if (wait > 0.0) {
             window_.wait(wait >= 3600.0 ? 0xffffffffu : static_cast<std::uint32_t>(std::ceil(wait * 1000.0)));
+        } else {
+            gpu_.pace_to_display(); // animating: one frame per refresh, not a busy loop
         }
     }
     platform::detach_drop_target(window_.handle());

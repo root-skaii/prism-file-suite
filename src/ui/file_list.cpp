@@ -227,6 +227,8 @@ bool FileList::perform(context& ui, model::Tab& tab, std::string_view action)
     if (action == "delete")         { env_.cmd.request_delete(selected_paths(tab), false); return true; }
     if (action == "delete_forever") { env_.cmd.request_delete(selected_paths(tab), true); return true; }
     if (action == "new_folder")     { new_folder(tab); return true; }
+    if (action == "new_file")       { new_file(tab, "New file", ""); return true; }
+    if (action == "new_text")       { new_file(tab, "New text document", ".txt"); return true; }
     if (action == "copy_to_pane")   { to_other_pane(tab, false); return true; }
     if (action == "move_to_pane")   { to_other_pane(tab, true); return true; }
     if (action == "select_all")     { L.select_all(); return true; }
@@ -267,6 +269,28 @@ void FileList::new_folder(model::Tab& tab)
                            [made] { return core::FileOps::remove_empty_folder(made); },
                            [made] { return ::CreateDirectoryW(core::text::widen(made).c_str(), nullptr) != FALSE; }});
     }
+    pending_rename_ = name;
+    tab.reveal_name = name;
+    tab.refresh();
+}
+
+void FileList::new_file(model::Tab& tab, const std::string& stem, const std::string& ext)
+{
+    if (tab.path().empty() || tab.searching()) { return; }
+    const std::string name = core::FileOps::create_file(tab.path(), stem, ext);
+    if (name.empty()) {
+        env_.cmd.toast("Could not create a file here", toast_kind::error);
+        return;
+    }
+    const std::string made = core::path::join(tab.path(), name);
+    env_.history.push({"New file " + name,
+                       [made] { return core::FileOps::remove_empty_file(made); },
+                       [made] {
+                           HANDLE h = ::CreateFileW(core::text::widen(made).c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+                           if (h == INVALID_HANDLE_VALUE) { return false; }
+                           ::CloseHandle(h);
+                           return true;
+                       }});
     pending_rename_ = name;
     tab.reveal_name = name;
     tab.refresh();
@@ -731,6 +755,7 @@ void FileList::context_menu(Painter& p, model::Tab& tab, const rect& area)
 {
     context&        ui = p.ui();
     model::Listing& L  = tab.listing();
+    const MenuDensity density{ui, env_.settings.compact};
     auto menu = ui.context_menu("##file_ctx" + std::string{right_ ? "r" : "l"}, area);
     if (!menu) { return; }
 
@@ -752,8 +777,36 @@ void FileList::context_menu(Painter& p, model::Tab& tab, const rect& area)
         }
     };
 
+    // Explorer's own entries (Open with Code, 7-Zip ...), when the setting is on and the worker has them
+    std::vector<core::ShellMenuItem> shell_items;
+    if (env_.settings.shell_menu && !tab.path().empty() && !tab.searching()) {
+        if (picked.empty()) {
+            shell_menu_.query({tab.path()}, true);
+        } else {
+            shell_menu_.query(selected_paths(tab), false);
+        }
+        shell_items = shell_menu_.items();
+    }
+
     if (picked.empty()) {
-        if (ui.menu_item("New folder", "Ctrl+Shift+N")) { new_folder(tab); }
+        // Windows' "New" submenu (Word document, shortcut ...) joins ours instead of showing a second "New"
+        const auto windows_new = std::ranges::find_if(shell_items, [](const core::ShellMenuItem& i) { return i.label == "New" && !i.children.empty(); });
+        if (auto sub = ui.menu("New", !tab.path().empty() && !tab.searching())) {
+            if (ui.menu_item("Folder", "Ctrl+Shift+N")) { new_folder(tab); }
+            if (ui.menu_item("Empty file")) { new_file(tab, "New file", ""); }
+            if (ui.menu_item("Text document")) { new_file(tab, "New text document", ".txt"); }
+            if (windows_new != shell_items.end()) {
+                std::vector<core::ShellMenuItem> rest;
+                for (const core::ShellMenuItem& c : windows_new->children) {
+                    if (c.label != "Folder" && c.label != "Text Document") { rest.push_back(c); }
+                }
+                if (!rest.empty()) {
+                    ui.menu_separator();
+                    draw_shell_items(ui, rest, false);
+                }
+            }
+        }
+        if (windows_new != shell_items.end()) { shell_items.erase(windows_new); }
         if (ui.menu_item("Paste", "Ctrl+V", false, can_paste)) { paste(tab); }
         ui.menu_separator();
         sort_menu();
@@ -764,6 +817,10 @@ void FileList::context_menu(Painter& p, model::Tab& tab, const rect& area)
         if (ui.menu_item("Open in new tab")) { env_.cmd.open_tab(tab.path(), true); }
         if (!tab.path().empty() && ui.menu_item(env_.layout.find(tab.path()) ? "Unpin from sidebar" : "Pin to sidebar", "Ctrl+D")) { env_.cmd.toggle_pin(tab.path()); }
         if (ui.menu_item("Properties", "Alt+Enter")) { env_.cmd.open_properties({tab.path()}); }
+        // (one submenu: installed tools add a dozen rows, more than the window is tall)
+        if (!shell_items.empty()) {
+            if (auto more = ui.menu("More options")) { draw_shell_page(ui, shell_items); }
+        }
         return;
     }
     const std::size_t row = picked.front();
@@ -799,6 +856,79 @@ void FileList::context_menu(Painter& p, model::Tab& tab, const rect& area)
     if (ui.menu_item("Show in File Explorer")) { (void)core::shell::reveal_in_explorer(full); }
     if (ui.menu_item("Properties", "Alt+Enter")) { env_.cmd.open_properties(selected_paths(tab)); }
     if (ui.menu_item("Windows properties")) { (void)core::shell::show_properties(full); }
+    if (!shell_items.empty()) {
+        if (auto more = ui.menu("More options")) { draw_shell_page(ui, shell_items); }
+    }
+}
+
+// the "More options" submenu. strata menus cannot leave the window, scroll, or nest well (a third level flips back over its
+// parent and the pointer loses it), so: a list taller than the window sits in a scrolling child, and an entry with
+// children (7-Zip, Send to ...) opens its list in place, with a row on top that goes back
+void FileList::draw_shell_page(context& ui, const std::vector<core::ShellMenuItem>& root)
+{
+    shell_page_drawn_ = true;
+
+    // follow the path of opened entries (it can be stale when the entries were read again)
+    const std::vector<core::ShellMenuItem>* items = &root;
+    std::string title;
+    std::size_t depth = 0;
+    for (; depth < shell_path_.size(); ++depth) {
+        const std::size_t i = shell_path_[depth];
+        if (i >= items->size() || (*items)[i].children.empty()) { break; }
+        title = (*items)[i].label;
+        items = &(*items)[i].children;
+    }
+    shell_path_.resize(depth);
+
+    if (depth > 0) {
+        menu_item_options back;
+        back.keep_open = true;
+        std::string label = "< " + title;
+        for (std::size_t i = 0; (i = label.find('&', i)) != std::string::npos; i += 2) { label.insert(i, 1, '&'); }
+        if (ui.menu_item(label + "##back", back)) { shell_path_.pop_back(); }
+        ui.menu_separator();
+    }
+
+    const float row_h  = env_.settings.compact ? 26.0f : 30.0f;
+    const float room   = std::max(row_h * 6.0f, ui.display_size().y - 110.0f);
+    const float wanted = row_h * static_cast<float>(items->size());
+    if (wanted <= room) {
+        draw_shell_items(ui, *items, true);
+    } else if (auto body = ui.child("##shell_more" + std::to_string(depth), {0.0f, room}, child_flags::no_padding)) {
+        draw_shell_items(ui, *items, true);
+    }
+}
+
+// `drill`: entries with children open in place (see draw_shell_page); otherwise they are strata submenus
+void FileList::draw_shell_items(context& ui, const std::vector<core::ShellMenuItem>& items, bool drill)
+{
+    for (std::size_t n = 0; n < items.size(); ++n) {
+        const core::ShellMenuItem& it = items[n];
+        if (it.separator) {
+            ui.menu_separator();
+            continue;
+        }
+        std::string label; // ('&' marks a mnemonic in strata menus)
+        for (const char c : it.label) {
+            label.push_back(c);
+            if (c == '&') { label.push_back('&'); }
+        }
+        if (!it.children.empty() && drill) {
+            menu_item_options o;
+            o.enabled   = it.enabled;
+            o.keep_open = true;
+            o.shortcut  = ">";
+            if (ui.menu_item(label + "##d" + std::to_string(n), o)) { shell_path_.push_back(n); }
+        } else if (!it.children.empty()) {
+            if (auto sub = ui.menu(label + "##s" + std::to_string(n), it.enabled)) { draw_shell_items(ui, it.children, false); }
+        } else {
+            menu_item_options o;
+            o.enabled = it.enabled;
+            if (it.icon != nullptr) { o.image = env_.images.raw(it.icon->key, it.icon->w, it.icon->h, it.icon->bgra).id; }
+            // (entries can share a label: the id keeps their hover animation and clicks apart)
+            if (ui.menu_item(label + "##c" + std::to_string(it.id), o)) { shell_menu_.invoke(it.id, env_.window.handle()); }
+        }
+    }
 }
 
 void FileList::frame(Painter& p, const rect& area, model::Tab& tab, const FrameInput& in, bool active)
@@ -809,6 +939,8 @@ void FileList::frame(Painter& p, const rect& area, model::Tab& tab, const FrameI
     model::Listing& L   = tab.listing();
     area_  = area;
     shown_ = &tab;
+    if (!shell_page_drawn_) { shell_path_.clear(); } // ("More options" was closed: next time it opens at the top)
+    shell_page_drawn_ = false;
 
     PanelScope panel{ui, right_ ? "##files_r" : "##files", area};
 

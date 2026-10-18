@@ -34,4 +34,24 @@ private:
     bool             open_{};
 };
 
+// tighter rows in strata menus when the app is compact. declare it before the menu is begun (menus take their metrics
+// when they open) so it ends after it
+class MenuDensity {
+public:
+    MenuDensity(strata::context& ui, bool compact) : ui_{ui}, on_{compact}
+    {
+        if (on_) { ui_.push_var(strata::style_var::frame_padding_y, 2.0f); }
+    }
+    ~MenuDensity()
+    {
+        if (on_) { ui_.pop_var(); }
+    }
+    MenuDensity(const MenuDensity&)            = delete;
+    MenuDensity& operator=(const MenuDensity&) = delete;
+
+private:
+    strata::context& ui_;
+    bool             on_{};
+};
+
 } // namespace prism::ui

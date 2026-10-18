@@ -31,6 +31,7 @@ private:
     void help_popup(Painter& p, model::Tab& tab);
     // the "view" button's menu: layout, compact rows, panes, hidden files
     void view_menu(Painter& p, bool show_hidden);
+    void new_menu(Painter& p, const model::Tab& tab);
     // parses the box and shows / searches accordingly (`run`: start the subfolder search now)
     void apply_filter(model::Tab& tab, bool run);
 

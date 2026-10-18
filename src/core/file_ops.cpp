@@ -134,6 +134,27 @@ std::string FileOps::create_folder(const std::string& dir)
     return {};
 }
 
+std::string FileOps::create_file(const std::string& dir, const std::string& stem, const std::string& ext)
+{
+    for (int i = 1; i < 1000; ++i) {
+        const std::string name = (i == 1 ? stem : stem + " (" + std::to_string(i) + ")") + ext;
+        HANDLE h = ::CreateFileW(text::widen(path::join(dir, name)).c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (h != INVALID_HANDLE_VALUE) {
+            ::CloseHandle(h);
+            return name;
+        }
+        if (::GetLastError() != ERROR_FILE_EXISTS && ::GetLastError() != ERROR_ALREADY_EXISTS) { return {}; }
+    }
+    return {};
+}
+
+bool FileOps::remove_empty_file(const std::string& p)
+{
+    WIN32_FILE_ATTRIBUTE_DATA d{};
+    if (!::GetFileAttributesExW(text::widen(p).c_str(), GetFileExInfoStandard, &d) || d.nFileSizeLow != 0 || d.nFileSizeHigh != 0) { return false; }
+    return ::DeleteFileW(text::widen(p).c_str()) != FALSE;
+}
+
 bool FileOps::remove_empty_folder(const std::string& p)
 {
     return ::RemoveDirectoryW(text::widen(p).c_str()) != FALSE;

@@ -60,6 +60,7 @@ void Settings::load()
     show_hidden    = c.get_bool("behavior", "show_hidden", show_hidden);
     confirm_delete = c.get_bool("behavior", "confirm_delete", confirm_delete);
     restore_tabs   = c.get_bool("behavior", "restore_tabs", restore_tabs);
+    shell_menu     = c.get_bool("behavior", "shell_menu", shell_menu);
     track_history  = c.get_bool("behavior", "track_history", track_history);
     search_subfolders = c.get_bool("search", "subfolders", search_subfolders);
     search_case    = c.get_bool("search", "match_case", search_case);
@@ -90,6 +91,7 @@ void Settings::save() const
     c.set_bool("behavior", "show_hidden", show_hidden);
     c.set_bool("behavior", "confirm_delete", confirm_delete);
     c.set_bool("behavior", "restore_tabs", restore_tabs);
+    c.set_bool("behavior", "shell_menu", shell_menu);
     c.set_bool("behavior", "track_history", track_history);
     c.set_bool("search", "subfolders", search_subfolders);
     c.set_bool("search", "match_case", search_case);

@@ -26,6 +26,9 @@ public:
     // while the window is being dragged to a new size: present without waiting for the next refresh, so each step costs
     // the drawing and nothing else (the vsync wait per step is what makes a live resize feel like it trails the mouse)
     void set_immediate(bool on) noexcept;
+    // blocks until the next screen refresh. the loop calls it while something animates, so frames come once per refresh
+    // instead of as fast as the cpu can make them (that floods the display queue and then stalls for several refreshes)
+    void pace_to_display() const noexcept;
     void wait_for_frame() const;   // returns when the swap chain can take a frame (least input lag)
     // draws `ui`'s last frame over `clear` and presents. false: the device was lost (call recreate)
     [[nodiscard]] bool present(strata::context& ui, strata::color clear);

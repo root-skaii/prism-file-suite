@@ -4,6 +4,7 @@
 // folder in the active tab, middle click opens a tab, press-and-move reorders, right click edits. dropping files on a
 // folder moves / copies them there; dropping folders between rows pins them
 
+#include "core/drive_watcher.hpp"
 #include "core/path_probe.hpp"
 #include "core/places.hpp"
 #include "ui/env.hpp"
@@ -24,6 +25,7 @@ public:
 
     void frame(Painter& p, const strata::rect& area, const FrameInput& in);
     void refresh_drives();
+    [[nodiscard]] const std::vector<core::Place>& drives() const noexcept { return drives_; } // (as last read by the watcher)
 
     // where a drop at this point lands: a folder to move / copy into, a pin slot between rows (see is_pin_target), or ""
     [[nodiscard]] std::string drop_target_at(strata::vec2 p) const;
@@ -100,7 +102,8 @@ private:
 
     Env&                       env_;
     std::vector<core::Place>   drives_;
-    double                     drives_age_{};
+    core::DriveWatcher         drive_watch_;   // (the drive list is read on a worker: a slow disk must not stall a frame)
+    unsigned                   drives_rev_{};
     core::PathProbe            probe_;
     strata::rect               area_{};
     std::vector<Row>           rows_;    // this frame's rows, screen space (the drop target reads last frame's)
@@ -110,6 +113,7 @@ private:
     Spot                       hint_;    // what a drop at drop_ would do (from last frame's rows)
     Press                      press_;
     Target                     menu_;
+    bool                       paste_ok_{};    // the clipboard holds a sidebar layout (looked at once, when the menu opens)
     Rename                     rename_;
     Target                     icon_target_;   // the item whose icon the picker is editing
     bool                       icon_want_{};   // open the picker (asked from the menu, opened after it closed)

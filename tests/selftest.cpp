@@ -4,6 +4,9 @@
 #include "core/file_ops.hpp"
 #include "core/path.hpp"
 #include "core/path_probe.hpp"
+#include "core/default_manager.hpp"
+#include "core/drive_watcher.hpp"
+#include "core/shell_menu.hpp"
 #include "core/text.hpp"
 #include "model/listing.hpp"
 #include "model/sidebar_layout.hpp"
@@ -303,6 +306,10 @@ static void test_loader_and_ops()
     CHECK(!core::FileOps::rename(core::path::join(dir, "uno.txt"), "bad:name"));
     CHECK(core::FileOps::create_folder(dir) == "New folder");
     CHECK(core::FileOps::create_folder(dir) == "New folder (2)");
+    CHECK(core::FileOps::create_file(dir, "New file", "") == "New file");
+    CHECK(core::FileOps::create_file(dir, "New file", "") == "New file (2)");
+    CHECK(core::FileOps::create_file(dir, "t", ".txt") == "t.txt");
+    CHECK(core::FileOps::remove_empty_file(core::path::join(dir, "t.txt")));
 
     // copy / move / delete through the shell, waiting for the worker
     core::FileOps ops{[] {}, nullptr};
@@ -481,6 +488,39 @@ static void test_sidebar_phase3()
     ::DeleteFileW(core::text::widen(file).c_str());
 }
 
+// the worker must answer for a real folder and a real file (what the entries are depends on what is installed)
+static void test_shell_menu()
+{
+    core::ShellMenu m;
+    for (const bool background : {true, false}) {
+        m.query({background ? "C:\\Windows" : "C:\\Windows\\notepad.exe"}, background);
+        for (int i = 0; i < 200 && !m.ready(); ++i) { std::this_thread::sleep_for(std::chrono::milliseconds(50)); }
+        CHECK(m.ready());
+        std::printf("shell menu %s: %zu entries\n", background ? "folder" : "file", m.items().size());
+    }
+}
+
+// switches the per-user folder verb on and off again (skipped when the user has it on: never touch their setup)
+static void test_default_manager()
+{
+    if (core::default_manager_active()) { return; }
+    CHECK(core::set_default_manager(true));
+    CHECK(core::default_manager_active());
+    CHECK(core::set_default_manager(false));
+    CHECK(!core::default_manager_active());
+}
+
+static void test_drive_watcher()
+{
+    core::DriveWatcher w;
+    w.interval = std::chrono::milliseconds{50};
+    const auto first = w.list();
+    CHECK(!first.empty() && first.front().path.size() >= 2 && w.revision() >= 1); // (a machine with no drive would not run this)
+    w.poke();
+    std::this_thread::sleep_for(std::chrono::milliseconds{200});
+    CHECK(w.list().size() == first.size());
+}
+
 static void test_path_probe()
 {
     const std::string dir = make_temp_dir();
@@ -512,6 +552,9 @@ int main()
     test_sidebar_layout();
     test_sidebar_phase3();
     test_path_probe();
+    test_drive_watcher();
+    test_shell_menu();
+    test_default_manager();
     test_text();
     test_path();
     test_query();

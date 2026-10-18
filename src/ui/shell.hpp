@@ -72,6 +72,7 @@ private:
     void copy_sidebar() override;
     void paste_sidebar() override;
     bool edit_sidebar(std::string label, const std::function<void(model::SidebarLayout&)>& edit) override;
+    void request_action(std::string name) override { pending_actions_.push_back(std::move(name)); }
     void toast(std::string text, strata::toast_kind kind) override;
     void set_cursor(strata::cursor_kind kind) override { cursor_ = kind; }
 
@@ -136,6 +137,7 @@ private:
     struct Open { std::string path; bool activate; };
     std::vector<Open>        pending_open_;
     std::vector<std::size_t> pending_close_;
+    std::vector<std::string> pending_actions_;
     struct Toast { std::string text; strata::toast_kind kind; };
     std::vector<Toast>       pending_toasts_;
 };

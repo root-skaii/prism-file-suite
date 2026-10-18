@@ -21,7 +21,13 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
             else if (a == L"--grid") { opts.grid = true; }
             else if (a == L"--preview") { opts.preview = true; }
             else if (a == L"--split") { opts.split = true; }
-            else { opts.path = prism::core::text::narrow(a); }
+            else {
+                // (registered as `"prismfs.exe" "%1"`: for a drive the %1 is `C:\`, and the backslash escapes the closing quote)
+                std::wstring p{a};
+                while (!p.empty() && p.back() == L'"') { p.pop_back(); }
+                if (p.size() == 2 && p[1] == L':') { p.push_back(L'\\'); }
+                opts.path = prism::core::text::narrow(p);
+            }
         }
         ::LocalFree(argv);
     }

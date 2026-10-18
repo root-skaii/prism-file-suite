@@ -1,6 +1,7 @@
 #include "platform/gpu.hpp"
 
 #include <windows.h>
+#include <dwmapi.h>
 
 #include <d3d11.h>
 #include <dxgi1_5.h>
@@ -118,6 +119,11 @@ void Gpu::resize()
 }
 
 void Gpu::set_immediate(bool on) noexcept { impl_->immediate = on; }
+
+void Gpu::pace_to_display() const noexcept
+{
+    if (FAILED(::DwmFlush())) { ::Sleep(4); } // (composition is always on from windows 8; this is only a seatbelt against spinning)
+}
 
 void Gpu::wait_for_frame() const
 {

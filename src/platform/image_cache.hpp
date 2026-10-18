@@ -34,6 +34,9 @@ public:
     // ui thread. queues a load the first time; `px` is the requested edge in physical pixels
     [[nodiscard]] Image get(const std::string& path, int px, ImageKind kind);
 
+    // ui thread. a texture from pixels we already have (straight-alpha BGRA), cached under `key`; id 0 until uploaded
+    [[nodiscard]] Image raw(const std::string& key, int w, int h, const std::vector<unsigned char>& bgra);
+
     // uploads what the worker finished (a few per frame); true if any texture is new
     bool poll(strata::d3d11_renderer& renderer);
     // the device was lost: every texture is gone with it

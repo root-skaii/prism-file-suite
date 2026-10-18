@@ -39,6 +39,10 @@ public:
     [[nodiscard]] static bool rename(const std::string& path, const std::string& new_name);
     // creates "New folder", "New folder (2)" ... returns its name, empty on failure
     [[nodiscard]] static std::string create_folder(const std::string& dir);
+    // creates an empty file "<stem><ext>", "<stem> (2)<ext>" ... returns its name, empty on failure
+    [[nodiscard]] static std::string create_file(const std::string& dir, const std::string& stem, const std::string& ext);
+    // removes a file only if it is still empty (undoing "new file" must never throw away what was typed into it)
+    [[nodiscard]] static bool remove_empty_file(const std::string& path);
     // removes a folder only if it is empty (undoing "new folder")
     [[nodiscard]] static bool remove_empty_folder(const std::string& path);
     // puts items that were recycled back where they came from (the recycle bin's own "restore"). needs the original

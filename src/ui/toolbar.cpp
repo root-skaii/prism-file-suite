@@ -297,7 +297,7 @@ void Toolbar::frame(Painter& p, const rect& area, bool show_hidden)
     const float half     = rh * 0.85f + 6.0f; // two icon buttons: This folder / Subfolders (tooltips say which)
     const float scope_w  = half * 2.0f + 6.0f;
     const float filter_w = std::clamp(area.width() * 0.13f, 110.0f, 190.0f) + chip_w * 3.0f; // (the chips sit inside the box)
-    const float right_w  = rh * 2.0f + gap * 3.0f + 6.0f + scope_w + filter_w;
+    const float right_w  = rh * 3.0f + gap * 3.0f + 8.0f + scope_w + filter_w; // (+ the New button)
     const float left_w   = 12.0f + rh * 4.0f + 6.0f + gap * 2.0f;
     const float addr_w   = std::max(120.0f, area.width() - left_w - right_w - 10.0f);
 
@@ -375,6 +375,17 @@ void Toolbar::frame(Painter& p, const rect& area, bool show_hidden)
     ui.same_line();
     (void)ui.custom_item("##tb_gap3", {gap, rh});
     ui.same_line();
+    // New: a folder or an empty file here, for when the folder is too full to find empty space to right-click
+    const bool can_create = !tab.path().empty() && !tab.searching();
+    if (icon_button(p, "##tb_new", glyph::add, can_create, ui.popup_open("##new_menu"), "New folder or file", rh)) {
+        const rect b = ui.item_rect();
+        ui.open_popup_menu("##new_menu", {b.min.x, b.max.y + 4.0f});
+    }
+    new_menu(p, tab);
+    ui.same_line();
+    (void)ui.custom_item("##tb_gap4", {2.0f, rh});
+    ui.same_line();
+
     // everything about how the folder is shown lives in one menu; it lights up when something in it is switched on
     const Settings& cur = env_.settings;
     const bool view_on  = cur.grid_view || cur.split || cur.preview || cur.compact || show_hidden;
@@ -387,9 +398,31 @@ void Toolbar::frame(Painter& p, const rect& area, bool show_hidden)
     if (icon_button(p, "##tb_settings", glyph::settings, true, false, "Settings  (Ctrl+,)", rh)) { env_.cmd.open_settings(); }
 }
 
+void Toolbar::new_menu(Painter& p, const model::Tab&)
+{
+    context& ui = p.ui();
+    const MenuDensity density{ui, env_.settings.compact};
+    auto menu = ui.popup_menu("##new_menu");
+    if (!menu) { return; }
+
+    char icons[3][5];
+    int  n = 0;
+    const auto item = [&](char32_t g, std::string_view label, std::string_view shortcut) {
+        menu_item_options o;
+        o.shortcut  = shortcut;
+        o.icon      = glyph_utf8(g, icons[n++]);
+        o.icon_font = env_.fonts.icons;
+        return ui.menu_item(label, o);
+    };
+    if (item(glyph::folder, "Folder", "Ctrl+Shift+N")) { env_.cmd.request_action("new_folder"); }
+    if (item(glyph::document, "Empty file", "")) { env_.cmd.request_action("new_file"); }
+    if (item(glyph::document, "Text document", "")) { env_.cmd.request_action("new_text"); }
+}
+
 void Toolbar::view_menu(Painter& p, bool show_hidden)
 {
     context& ui = p.ui();
+    const MenuDensity density{ui, env_.settings.compact};
     auto menu = ui.popup_menu("##view_menu");
     if (!menu) { return; }
 

@@ -1,5 +1,7 @@
 #include "ui/settings_dialog.hpp"
 
+#include "core/default_manager.hpp"
+
 #include <algorithm>
 #include <array>
 
@@ -45,6 +47,7 @@ bool SettingsDialog::frame(Painter& p)
     if (want_open_) {
         want_open_ = false;
         shown_     = true;
+        default_manager_ = core::default_manager_active();
         Kit::reset_focus();
         ui.open_modal("Settings");
     }
@@ -138,11 +141,22 @@ bool SettingsDialog::frame(Painter& p)
             kit.card_end("##card_look");
 
             // behaviour
-            kit.card_begin("##card_beh", "Behavior", (kit.row_h() + 16.0f) * 3.0f);
+            kit.card_begin("##card_beh", "Behavior", (kit.row_h() + 16.0f) * 4.0f);
             if (kit.switch_row("##sw_hidden", "Show hidden files", "Hidden and system items appear in every folder", s.show_hidden, true)) { changed = true; }
             if (kit.switch_row("##sw_confirm", "Ask before moving to the Recycle Bin", "Deleting for good always asks", s.confirm_delete, true)) { changed = true; }
-            if (kit.switch_row("##sw_tabs", "Reopen tabs on start", "Pick up where you left off", s.restore_tabs, false)) { changed = true; }
+            if (kit.switch_row("##sw_tabs", "Reopen tabs on start", "Pick up where you left off", s.restore_tabs, true)) { changed = true; }
+            if (kit.switch_row("##sw_shellmenu", "Windows context menu entries", "Open with Code, 7-Zip, New and the other entries Explorer shows", s.shell_menu, false)) { changed = true; }
             kit.card_end("##card_beh");
+
+            // Windows: who opens folders for other programs. per user, nothing needs admin rights, and off puts Explorer back
+            kit.card_begin("##card_sys", "Windows", kit.row_h() + 16.0f);
+            if (kit.switch_row("##sw_default", "Open folders from other apps with PrismFS", "Off: Windows Explorer does. Win+E and the taskbar always start Explorer", default_manager_, false)) {
+                if (!core::set_default_manager(default_manager_)) {
+                    default_manager_ = !default_manager_;
+                    env_.cmd.toast("Windows would not change the setting", toast_kind::error);
+                }
+            }
+            kit.card_end("##card_sys");
 
             // sidebar: which lists it has, drives left out, and moving the layout in and out
             {

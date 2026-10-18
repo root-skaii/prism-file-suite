@@ -17,6 +17,7 @@ struct Settings {
     bool  show_hidden{false};
     bool  confirm_delete{false}; // ask before moving to the recycle bin (deleting for good always asks)
     bool  restore_tabs{true};
+    bool  shell_menu{true};      // the right-click menu also lists Explorer's own entries (Open with Code, 7-Zip, New ...)
     bool  track_history{true};   // remember visited folders (Recent / Frequent in the sidebar); off: nothing is recorded or kept
     bool  search_subfolders{false}; // the filter box searches below the folder (Enter) instead of filtering what is shown
     bool  search_case{false};       // match case

@@ -3,6 +3,7 @@
 // one folder view: details list or thumbnail grid. only visible items are drawn, so a 200k-entry folder costs what a
 // 40-entry one does. selection, keyboard navigation, type-to-find, sorting, clipboard, delete, rename, drag and drop.
 
+#include "core/shell_menu.hpp"
 #include "ui/env.hpp"
 #include "ui/painter.hpp"
 
@@ -16,12 +17,14 @@ namespace prism::ui {
 class FileList {
 public:
     // `right`: this is the second pane of a split view
-    FileList(Env& env, bool right) : env_{env}, right_{right} {}
+    FileList(Env& env, bool right) : env_{env}, right_{right}, shell_menu_{env.window.waker()} {}
 
     // `active`: this pane has the keyboard (the other one ignores shortcuts)
     void frame(Painter& p, const strata::rect& area, model::Tab& tab, const FrameInput& in, bool active);
 
     void new_folder(model::Tab& tab);
+    // an empty file "<stem><ext>" in the folder, scrolled into view and open for renaming like a new folder
+    void new_file(model::Tab& tab, const std::string& stem, const std::string& ext);
     // runs a file action by its registry name (see ui/actions.cpp); false if it is not one of the list's
     bool perform(strata::context& ui, model::Tab& tab, std::string_view action);
 
@@ -65,8 +68,14 @@ private:
     void draw_rename(Painter& p, model::Tab& tab, const Geo& g, strata::vec2 origin);
     [[nodiscard]] bool is_cut(const model::Tab& tab, std::string_view name) const;
 
+    void draw_shell_items(strata::context& ui, const std::vector<core::ShellMenuItem>& items, bool drill);
+    std::vector<std::size_t> shell_path_;   // the entries opened in place inside "More options"
+    bool                     shell_page_drawn_{}; // (the page was drawn this frame: when it was not, the menu closed)
+    void draw_shell_page(strata::context& ui, const std::vector<core::ShellMenuItem>& items);
+
     Env&  env_;
     bool  right_{};
+    core::ShellMenu shell_menu_; // (Explorer's own entries for the right-click menu, read on a worker)
     std::array<float, col_count> widths_{170.0f, 150.0f, 100.0f};
     int         resize_col_{-1};
     float       resize_start_x_{};

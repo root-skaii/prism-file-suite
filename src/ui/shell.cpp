@@ -311,7 +311,7 @@ void Shell::open_goto()
     for (const model::SidebarSection& s : layout_.sections()) {
         for (const model::SidebarItem& it : s.items) { add(it.label(), it.path); }
     }
-    for (const core::Place& d : core::drives()) { add(d.name, d.path); }
+    for (const core::Place& d : sidebar_.drives()) { add(d.name, d.path); }
     goto_palette_.open();
 }
 
@@ -616,6 +616,11 @@ void Shell::frame(context& ui, const FrameInput& in)
     draw_drag_ghost(p);
     for (const Toast& t : pending_toasts_) { ui.toast(t.text, t.kind); }
     pending_toasts_.clear();
+    {
+        std::vector<std::string> actions;
+        actions.swap(pending_actions_);
+        for (const std::string& a : actions) { run_action(a, ui); }
+    }
 
     apply_deferred();
 
