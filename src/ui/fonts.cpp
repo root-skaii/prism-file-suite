@@ -2,7 +2,15 @@
 
 #include <windows.h>
 
+#include "core/log.hpp"
+#include "core/text.hpp"
+#include "ui/settings.hpp"
+
+#include <algorithm>
 #include <array>
+#include <format>
+#include <functional>
+#include <optional>
 #include <span>
 #include <string>
 #include <utility>
@@ -57,6 +65,85 @@ namespace {
     return *v;
 }
 
+// --- baked atlas cache: rasterising the fonts is most of the start-up time, and the result only changes when the inputs do ---
+
+constexpr std::size_t k_cache_keep = 6; // atlases kept in the cache folder (one per scale / glyph set seen lately)
+
+[[nodiscard]] std::string file_stamp(const std::wstring& path)
+{
+    WIN32_FILE_ATTRIBUTE_DATA d{};
+    if (!::GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &d)) { return "-;"; }
+    return std::format("{}:{}:{};", d.nFileSizeLow, d.ftLastWriteTime.dwHighDateTime, d.ftLastWriteTime.dwLowDateTime);
+}
+
+// everything the raster depends on: the glyph set and scale, the font files, the gdi smoothing settings and this exe
+// (the sizes and ranges are code, so a new build starts a new cache)
+[[nodiscard]] std::string atlas_key(float scale, const std::vector<char32_t>& extra, std::string_view text_face, std::string_view icon_face)
+{
+    static constexpr std::array<const wchar_t*, 12> files{L"SegUIVar.ttf", L"segoeui.ttf", L"segoeuib.ttf", L"SegoeIcons.ttf", L"segmdl2.ttf", L"consola.ttf",
+                                                          L"msyh.ttc", L"YuGothR.ttc", L"malgun.ttf", L"seguisym.ttf", L"seguiemj.ttf", L"LeelawUI.ttf"};
+    std::string key = std::format("v1;{};{};{};", scale, text_face, icon_face);
+    for (const char32_t c : extra) { key += std::format("{:x},", static_cast<std::uint32_t>(c)); }
+    wchar_t dir[MAX_PATH]{};
+    if (::GetWindowsDirectoryW(dir, MAX_PATH) != 0) {
+        for (const wchar_t* f : files) { key += file_stamp(std::wstring{dir} + L"\\Fonts\\" + f); }
+    }
+    UINT smoothing = 0, smoothing_type = 0, contrast = 0;
+    ::SystemParametersInfoW(SPI_GETFONTSMOOTHING, 0, &smoothing, 0);
+    ::SystemParametersInfoW(SPI_GETFONTSMOOTHINGTYPE, 0, &smoothing_type, 0);
+    ::SystemParametersInfoW(SPI_GETFONTSMOOTHINGCONTRAST, 0, &contrast, 0);
+    key += std::format("{},{},{};", smoothing, smoothing_type, contrast);
+    wchar_t exe[MAX_PATH]{};
+    if (::GetModuleFileNameW(nullptr, exe, MAX_PATH) != 0) { key += file_stamp(exe); }
+    return key;
+}
+
+[[nodiscard]] std::wstring cache_file(const std::string& key)
+{
+    std::uint64_t h = 1469598103934665603ull; // fnv-1a
+    for (const char c : key) { h = (h ^ static_cast<unsigned char>(c)) * 1099511628211ull; }
+    return core::text::widen(Settings::cache_path()) + std::format(L"\\fonts-{:016x}.bin", h);
+}
+
+[[nodiscard]] std::optional<std::vector<strata::u8>> read_file(const std::wstring& path)
+{
+    HANDLE f = ::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+    if (f == INVALID_HANDLE_VALUE) { return std::nullopt; }
+    LARGE_INTEGER size{};
+    std::optional<std::vector<strata::u8>> out;
+    if (::GetFileSizeEx(f, &size) && size.QuadPart > 0 && size.QuadPart < (256ll << 20)) {
+        std::vector<strata::u8> bytes(static_cast<std::size_t>(size.QuadPart));
+        DWORD got = 0;
+        if (::ReadFile(f, bytes.data(), static_cast<DWORD>(bytes.size()), &got, nullptr) && got == bytes.size()) { out = std::move(bytes); }
+    }
+    ::CloseHandle(f);
+    return out;
+}
+
+void write_cache(const std::wstring& path, std::span<const strata::u8> bytes)
+{
+    const std::wstring dir = path.substr(0, path.find_last_of(L'\\'));
+    ::CreateDirectoryW(dir.c_str(), nullptr);
+    const std::wstring tmp = path + L".tmp"; // (renamed into place: a half-written file is never read)
+    HANDLE f = ::CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) { return; }
+    DWORD put = 0;
+    const bool ok = ::WriteFile(f, bytes.data(), static_cast<DWORD>(bytes.size()), &put, nullptr) && put == bytes.size();
+    ::CloseHandle(f);
+    if (!ok || !::MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING)) { ::DeleteFileW(tmp.c_str()); return; }
+
+    std::vector<std::pair<std::uint64_t, std::wstring>> all; // (write time, path): drop the oldest beyond the keep count
+    WIN32_FIND_DATAW fd{};
+    if (HANDLE h = ::FindFirstFileW((dir + L"\\fonts-*.bin").c_str(), &fd); h != INVALID_HANDLE_VALUE) {
+        do {
+            all.emplace_back((static_cast<std::uint64_t>(fd.ftLastWriteTime.dwHighDateTime) << 32) | fd.ftLastWriteTime.dwLowDateTime, dir + L"\\" + fd.cFileName);
+        } while (::FindNextFileW(h, &fd));
+        ::FindClose(h);
+    }
+    std::ranges::sort(all, std::greater<>{});
+    for (std::size_t i = k_cache_keep; i < all.size(); ++i) { ::DeleteFileW(all[i].second.c_str()); }
+}
+
 } // namespace
 
 std::expected<strata::context, strata::font_error> create_context(const strata::style& style, float scale, const std::vector<char32_t>& extra)
@@ -84,16 +171,20 @@ std::expected<strata::context, strata::font_error> create_context(const strata::
         for (std::size_t i = 0; i < r.size(); ++i) { r[i] = {icon_codepoints[i], icon_codepoints[i]}; }
         return r;
     }();
-    static constexpr std::array text_ranges{glyph_ranges::latin, glyph_ranges::greek, glyph_ranges::cyrillic,
-                                            glyph_ranges::punctuation, glyph_ranges::currency, glyph_ranges::arrows,
-                                            glyph_ranges::math_operators, glyph_ranges::box_and_shapes};
+    // the common scripts and symbols are always baked (the atlas cache makes that cheap after the first run: a rebuild
+    // for new characters stalls the window, so names in the usual scripts must never need one); the rest is on demand
+    const std::span<const codepoint_range> text_ranges{ranges_for(extra)};
+    // greek / cyrillic / symbols come from the main face; the fallback faces are only for scripts it lacks
+    const auto in_main_face = [](char32_t c) {
+        return (c >= 0x250 && c <= 0x52f) || (c >= 0x20a0 && c <= 0x20cf) || (c >= 0x2190 && c <= 0x22ff) || (c >= 0x2500 && c <= 0x25ff);
+    };
 
     font_config body{};
     body.face         = text_face;
     body.pixel_height = 14.0f;
-    body.ranges       = extra.empty() ? std::span<const codepoint_range>{text_ranges} : std::span<const codepoint_range>{ranges_for(extra)};
+    body.ranges       = text_ranges;
     body.kerning      = false; // integer-pixel kerning pairs give uneven gaps ("tom gay") at ui sizes
-    if (!extra.empty()) { body.fallback_faces = fallbacks; }
+    if (!std::ranges::all_of(extra, in_main_face)) { body.fallback_faces = fallbacks; }
 
     std::array<font_config, 7> extra_fonts{};
     extra_fonts[5].face         = text_face; // id 6
@@ -135,8 +226,16 @@ std::expected<strata::context, strata::font_error> create_context(const strata::
     cfg.capacity.children = 24;
     cfg.capacity.cards    = 8;
 
+    cfg.scale = std::clamp(scale, 0.5f, 4.0f);
+
+    const std::wstring            cached_path = cache_file(atlas_key(cfg.scale, extra, text_face, icon_face));
+    std::optional<font_atlas>     cached;
+    if (const auto bytes = read_file(cached_path)) { cached = font_atlas::load(*bytes); }
+    cfg.prebuilt = cached ? &*cached : nullptr;
+
     auto ui = context::create(cfg);
-    if (ui && scale != 1.0f) { (void)ui->set_scale(scale); }
+    if (ui && !cached) { write_cache(cached_path, ui->font().save()); } // (the first run pays; the next ones skip the bake)
+    core::log::info("font atlas: {}", cached ? "loaded from the cache" : "baked");
     return ui;
 }
 

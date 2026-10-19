@@ -898,6 +898,7 @@ void Sidebar::context_menu(Painter& p)
 
         if (ui.menu_item(tr("Open"), "", false, !gone)) { env_.tab().navigate(it.path); }
         if (ui.menu_item(tr("Open in new tab"), "", false, !gone)) { env_.cmd.open_tab(it.path, true); }
+        if (ui.menu_item(tr("Open in new window"), "", false, !gone)) { env_.cmd.open_window(it.path); }
         ui.menu_separator();
         if (ui.menu_item(tr("Rename"))) { begin_rename(t); }
         if (ui.menu_item(tr("Change icon and colour"))) {
@@ -929,6 +930,7 @@ void Sidebar::context_menu(Painter& p)
         const std::string bin = t.path;
         if (ui.menu_item(tr("Open"))) { env_.tab().navigate(bin); }
         if (ui.menu_item(tr("Open in new tab"))) { env_.cmd.open_tab(bin, true); }
+        if (ui.menu_item(tr("Open in new window"))) { env_.cmd.open_window(bin); }
         ui.menu_separator();
         if (ui.menu_item(tr("Empty Recycle Bin"))) { env_.cmd.empty_recycle_bin(core::recycle::drive_of(bin)); }
         return;
@@ -940,6 +942,7 @@ void Sidebar::context_menu(Painter& p)
         const std::string bin   = found != drives_.end() ? found->bin : std::string{};
         if (ui.menu_item(tr("Open"))) { env_.tab().navigate(root); }
         if (ui.menu_item(tr("Open in new tab"))) { env_.cmd.open_tab(root, true); }
+        if (ui.menu_item(tr("Open in new window"))) { env_.cmd.open_window(root); }
         ui.menu_separator();
         if (ui.menu_item(tr("Open Recycle Bin"), "", false, !bin.empty())) { env_.tab().navigate(bin); }
         if (ui.menu_item(tr("Empty Recycle Bin"), "", false, !bin.empty())) { env_.cmd.empty_recycle_bin(root); }
@@ -953,6 +956,7 @@ void Sidebar::context_menu(Painter& p)
         const std::string path = t.path;
         if (ui.menu_item(tr("Open"))) { env_.tab().navigate(path); }
         if (ui.menu_item(tr("Open in new tab"))) { env_.cmd.open_tab(path, true); }
+        if (ui.menu_item(tr("Open in new window"))) { env_.cmd.open_window(path); }
         ui.menu_separator();
         if (ui.menu_item(tr("Pin to sidebar"))) { env_.cmd.toggle_pin(path); }
         if (ui.menu_item(tr("Remove from this list"))) { env_.visits.forget(path); }

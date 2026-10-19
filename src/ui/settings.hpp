@@ -18,12 +18,14 @@ struct Settings {
     bool  show_hidden{false};
     bool  confirm_delete{false}; // ask before moving to the recycle bin (deleting for good always asks)
     bool  restore_tabs{true};
-    bool  shell_menu{true};      // the right-click menu also lists Explorer's own entries (Open with Code, 7-Zip, New ...)
+    bool  tray{true};            // a notification-area icon (open / settings / exit) that stays while PrismFS runs in the background; lives in the spare process
+    bool  standby{true};        // a small spare process waits in the background so the next window opens almost at once (platform/standby.hpp)
+    bool  shell_menu{true};     // the right-click menu also lists Explorer's own entries (Open with Code, 7-Zip, New ...)
     bool  browse_archives{true}; // Enter on a zip / 7z / tar opens it as a folder (a temporary unpacked copy) instead of the default app
     bool  index_drives{true};    // a background index of the fixed drives' file names, for "Search everywhere" (Ctrl+Shift+F)
     bool  builtin_copy{true};   // copy and move run in the app's own queue (progress panel, conflict prompt); off: Windows' copy window
     bool  log_enabled{false};   // write a troubleshooting log (startup steps, slow frames, slow folders) beside the settings file
-    bool  track_history{true};  // remember visited folders (Recent / Frequent in the sidebar); off: nothing is recorded or kept
+    bool  track_history{false};  // remember visited folders (Recent / Frequent in the sidebar); off: nothing is recorded or kept
     bool  search_subfolders{false}; // the filter box searches below the folder (Enter) instead of filtering what is shown
     bool  search_case{false};       // match case
     bool  search_regex{false};      // plain words are regular expressions
@@ -68,6 +70,7 @@ struct Settings {
     [[nodiscard]] static std::string tags_path();
     // the troubleshooting log (when log_enabled)
     [[nodiscard]] static std::string log_path();
+    [[nodiscard]] static std::string cache_path(); // folder for rebuildable data (the baked font atlas); safe to delete
 };
 
 } // namespace prism::ui

@@ -18,5 +18,7 @@ call "%VSROOT%\VC\Auxiliary\Build\vcvars64.bat" >nul || exit /b 1
 
 :build
 cd /d "%~dp0"
+rem a waiting spare process (prismfs.exe --standby) keeps the exe locked: stop this tree's spares before linking
+powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='prismfs.exe'\" | Where-Object { $_.CommandLine -like '*--standby*' -and $_.ExecutablePath -like '%~dp0build\*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }" >nul 2>&1
 cmake --preset %1 || exit /b 1
 if "%2"=="" (cmake --build --preset %1) else (cmake --build --preset %1 --target %2)

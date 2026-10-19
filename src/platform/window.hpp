@@ -44,6 +44,8 @@ public:
 
     [[nodiscard]] bool create(const Config& cfg);
     void show();
+    // shows the window now, filled with one colour, while the rest of start-up still runs (0xRRGGBB)
+    void show_blank(std::uint32_t rgb);
 
     // false once the window is closed
     [[nodiscard]] bool pump();

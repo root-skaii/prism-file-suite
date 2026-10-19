@@ -1,7 +1,9 @@
 #include "platform/image_cache.hpp"
 
 #include "core/bitmap.hpp"
+#include "core/crash.hpp"
 #include "core/text.hpp"
+#include "core/thread_priority.hpp"
 
 #include <windows.h>
 #include <objbase.h>
@@ -125,6 +127,7 @@ void ImageCache::forget()
 
 void ImageCache::worker()
 {
+    core::lower_thread_priority();
     const bool com = SUCCEEDED(::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED));
     for (;;) {
         Request req;
@@ -137,6 +140,8 @@ void ImageCache::worker()
         }
 
         Result res{req.key, 0, 0, {}};
+        // third-party thumbnail handlers run in here: a fault in one costs this picture, not the window
+        (void)core::crash::guard("thumbnail / icon handler", [&] {
         ComPtr<IShellItem> item;
         if (SUCCEEDED(::SHCreateItemFromParsingName(core::text::widen(req.path).c_str(), nullptr, IID_PPV_ARGS(&item)))) {
             ComPtr<IShellItemImageFactory> factory;
@@ -152,6 +157,7 @@ void ImageCache::worker()
                 }
             }
         }
+        });
         {
             std::lock_guard g{lock_};
             results_.push_back(std::move(res));

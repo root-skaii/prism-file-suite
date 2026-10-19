@@ -1,4 +1,5 @@
 #include "core/directory_loader.hpp"
+#include "core/thread_priority.hpp"
 
 #include "core/log.hpp"
 #include "core/path.hpp"
@@ -189,6 +190,7 @@ void DirectoryLoader::start_search(const std::string& utf8_root, Query query)
 
 void DirectoryLoader::work_search(std::shared_ptr<Job> job, std::wstring root, Query query, std::function<void()> wake)
 {
+    lower_thread_priority();
     using clock = std::chrono::steady_clock;
     constexpr std::size_t max_results = 200000;
 

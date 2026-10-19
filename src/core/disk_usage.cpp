@@ -1,4 +1,5 @@
 #include "core/disk_usage.hpp"
+#include "core/thread_priority.hpp"
 
 #include "core/text.hpp"
 
@@ -104,6 +105,7 @@ void DiskUsage::start(const std::string& root, std::function<void()> wake)
     cancel();
     s_ = std::make_shared<State>();
     std::thread{[s = s_, root, wake = std::move(wake)] {
+        lower_thread_priority();
         auto tree = std::make_shared<UsageNode>();
         tree->name   = root;
         tree->is_dir = true;

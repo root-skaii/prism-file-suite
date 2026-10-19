@@ -499,6 +499,7 @@ void UsageDialog::frame(Painter& p)
                 ui.close_modal();
             }
             if (ui.menu_item(tr("Open in a new tab"))) { env_.cmd.open_tab(ctx_.node->is_dir ? path : core::path::parent(path), true); ui.close_modal(); }
+            if (ui.menu_item(tr("Open in a new window"))) { env_.cmd.open_window(ctx_.node->is_dir ? path : core::path::parent(path)); ui.close_modal(); }
             if (ui.menu_item(tr("Copy path"))) { (void)core::shell::set_clipboard_text(path); }
         }
     }

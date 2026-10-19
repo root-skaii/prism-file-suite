@@ -30,6 +30,7 @@ class Commands {
 public:
     virtual ~Commands() = default;
     virtual void open_tab(const std::string& path, bool activate) = 0;
+    virtual void open_window(const std::string& folder) = 0; // a new PrismFS window on this folder
     virtual void close_tab(std::size_t index) = 0;
     virtual void move_tab_out(std::size_t index, int screen_x, int screen_y) = 0; // a tab released outside the window
     virtual void restart_elevated() = 0; // reopen the current folder(s) in an administrator window, then close this one

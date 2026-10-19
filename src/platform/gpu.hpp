@@ -21,6 +21,11 @@ public:
 
     // `ui` must have its font pixels (a fresh context, or after rebuild_font_atlas)
     [[nodiscard]] bool create(void* hwnd, strata::context& ui);
+    // the same in three steps, in this order: the device needs neither window nor context (the driver load is ~180 ms, so
+    // it can run on its own thread from the very start), the swap chain needs the window, the renderer the fonts
+    [[nodiscard]] bool create_device();
+    [[nodiscard]] bool create_swap_chain(void* hwnd);
+    [[nodiscard]] bool create_renderer(strata::context& ui);
 
     void resize();                 // swap-chain buffers follow the window
     // while the window is being dragged to a new size: present without waiting for the next refresh, so each step costs

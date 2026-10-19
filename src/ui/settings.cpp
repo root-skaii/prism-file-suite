@@ -75,6 +75,13 @@ std::string Settings::log_path()
     return p.substr(0, cut) + "prismfs.log";
 }
 
+std::string Settings::cache_path()
+{
+    const std::string p   = file_path();
+    const std::size_t cut = p.find_last_of('\\') == std::string::npos ? 0 : p.find_last_of('\\') + 1;
+    return p.substr(0, cut) + (p.substr(cut) == "prismfs.ini" ? "prismfs-cache" : "cache");
+}
+
 std::string Settings::templates_path()
 {
     const std::string p   = file_path();
@@ -110,6 +117,8 @@ void Settings::load()
     show_hidden    = c.get_bool("behavior", "show_hidden", show_hidden);
     confirm_delete = c.get_bool("behavior", "confirm_delete", confirm_delete);
     restore_tabs   = c.get_bool("behavior", "restore_tabs", restore_tabs);
+    standby        = c.get_bool("behavior", "standby", standby);
+    tray           = c.get_bool("behavior", "tray", tray);
     shell_menu     = c.get_bool("behavior", "shell_menu", shell_menu);
     track_history  = c.get_bool("behavior", "track_history", track_history);
     browse_archives = c.get_bool("behavior", "browse_archives", browse_archives);
@@ -155,6 +164,8 @@ void Settings::save() const
     c.set_bool("behavior", "show_hidden", show_hidden);
     c.set_bool("behavior", "confirm_delete", confirm_delete);
     c.set_bool("behavior", "restore_tabs", restore_tabs);
+    c.set_bool("behavior", "standby", standby);
+    c.set_bool("behavior", "tray", tray);
     c.set_bool("behavior", "shell_menu", shell_menu);
     c.set_bool("behavior", "track_history", track_history);
     c.set_bool("behavior", "browse_archives", browse_archives);

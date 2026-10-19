@@ -1019,6 +1019,7 @@ void FileList::context_menu(Painter& p, model::Tab& tab, const rect& area)
         if (ui.menu_item(tr("Refresh"), env_.binds.text("refresh"))) { tab.refresh(); }
         if (ui.menu_item(tr("Copy folder path"))) { (void)core::shell::set_clipboard_text(tab.path()); }
         if (ui.menu_item(tr("Open in new tab"))) { env_.cmd.open_tab(tab.path(), true); }
+        if (!tab.path().empty() && ui.menu_item(tr("Open in new window"))) { env_.cmd.open_window(tab.path()); }
         if (!tab.path().empty() && ui.menu_item(env_.layout.find(tab.path()) ? tr("Unpin from sidebar") : tr("Pin to sidebar"), env_.binds.text("pin_folder"))) { env_.cmd.toggle_pin(tab.path()); }
         if (ui.menu_item(tr("Properties"), env_.binds.text("properties"))) { env_.cmd.open_properties({tab.path()}); }
         // (one submenu: installed tools add a dozen rows, more than the window is tall)
@@ -1037,6 +1038,7 @@ void FileList::context_menu(Painter& p, model::Tab& tab, const rect& area)
 
     if (ui.menu_item(tr("Open"), "Enter")) { open_row(tab, row); }
     if (e.is_dir() && ui.menu_item(tr("Open in new tab"))) { env_.cmd.open_tab(full, false); }
+    if (e.is_dir() && ui.menu_item(tr("Open in new window"))) { env_.cmd.open_window(full); }
     if (picked.size() == 1 && !env_.settings.browse_archives && browsable_archive(e) && ui.menu_item(tr("Browse inside"))) { env_.cmd.open_archive(full); }
     if (e.is_dir() && picked.size() == 1 && ui.menu_item(env_.layout.find(full) ? tr("Unpin from sidebar") : tr("Pin to sidebar"))) { env_.cmd.toggle_pin(full); }
     ui.menu_separator();
@@ -1051,11 +1053,11 @@ void FileList::context_menu(Painter& p, model::Tab& tab, const rect& area)
         if (ui.menu_item(tr("Copy to other pane"), env_.binds.text("copy_to_pane"))) { to_other_pane(tab, false); }
         if (ui.menu_item(tr("Move to other pane"), env_.binds.text("move_to_pane"))) { to_other_pane(tab, true); }
     }
-    if (picked.size() == 1 && !e.is_dir() && core::is_archive_name(e.name)) {
+    if (env_.settings.browse_archives && picked.size() == 1 && !e.is_dir() && core::is_archive_name(e.name)) {
         if (ui.menu_item(tr("Extract to folder"))) { env_.cmd.request_action("extract_folder"); }
         if (ui.menu_item(tr("Extract here"))) { env_.cmd.request_action("extract_here"); }
     }
-    if (!tab.searching() && ui.menu_item(tr("Compress to zip"))) { env_.cmd.request_action("compress_zip"); }
+    if (env_.settings.browse_archives && !tab.searching() && ui.menu_item(tr("Compress to zip"))) { env_.cmd.request_action("compress_zip"); }
     if (picked.size() == 1 && ui.menu_item(tr("Rename"), env_.binds.text("rename"))) { begin_rename(ui, tab, row); }
     if (ui.menu_item(tr("Delete"), "Del")) { env_.cmd.request_delete(selected_paths(tab), false); }
     const bool all_images = std::ranges::all_of(picked, [&](std::size_t r) { return !L.at(r).is_dir() && core::is_image_name(L.at(r).name); });
@@ -1219,6 +1221,7 @@ void FileList::frame(Painter& p, const rect& area, model::Tab& tab, const FrameI
         enter_ = same_tab ? 0.0f : 1.0f; // (switching tabs is instant; navigating within one eases in)
     }
     enter_ = std::min(1.0f, enter_ + in.dt * 7.0f);
+    if (enter_ < 1.0f) { p.ui().invalidate(); } // (the fade needs its frames: without them the list sleeps half faded)
     const float enter_eased = 1.0f - (1.0f - enter_) * (1.0f - enter_);
 
     const bool  grid_mode = env_.settings.grid_view;

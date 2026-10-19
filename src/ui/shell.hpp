@@ -73,6 +73,7 @@ public:
 private:
     // Commands
     void open_tab(const std::string& path, bool activate) override;
+    void open_window(const std::string& folder) override { spawn_window(folder); }
     void close_tab(std::size_t index) override;
     void move_tab_out(std::size_t index, int screen_x, int screen_y) override;
     void restart_elevated() override;

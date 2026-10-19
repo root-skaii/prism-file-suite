@@ -1,4 +1,5 @@
 #include "core/compare.hpp"
+#include "core/thread_priority.hpp"
 
 #include "core/text.hpp"
 
@@ -117,6 +118,7 @@ void FolderCompare::start(const std::string& left, const std::string& right, boo
     cancel();
     s_ = std::make_shared<State>();
     std::thread{[s = s_, left, right, recursive, wake = std::move(wake)] {
+        lower_thread_priority();
         auto items = std::make_shared<std::vector<DiffItem>>();
         const auto trim = [](std::wstring w) { while (!w.empty() && w.back() == L'\\') { w.pop_back(); } return w; };
         Walk{s->seen, s->cancel, recursive, *items}.run(trim(text::widen(left)), trim(text::widen(right)), {});

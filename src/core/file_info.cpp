@@ -1,4 +1,5 @@
 #include "core/file_info.hpp"
+#include "core/thread_priority.hpp"
 
 #include "core/file_kind.hpp"
 #include "core/path.hpp"
@@ -152,6 +153,7 @@ void FolderScan::start(const std::string& root)
     cancel();
     s_ = std::make_shared<State>();
     std::thread{[s = s_, root] {
+        lower_thread_priority();
         std::vector<std::wstring> stack{text::widen(root)};
         std::uint64_t cl = cluster_size(stack.back());
         while (!stack.empty() && !s->cancel.load(std::memory_order_relaxed)) {
@@ -227,6 +229,7 @@ void HashJob::start(const std::string& p)
     cancel();
     s_ = std::make_shared<State>();
     std::thread{[s = s_, w = text::widen(p)] {
+        lower_thread_priority();
         HANDLE f = ::CreateFileW(w.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
         Alg a5, a1, a256;
         if (f == INVALID_HANDLE_VALUE || !a5.open(BCRYPT_MD5_ALGORITHM) || !a1.open(BCRYPT_SHA1_ALGORITHM) || !a256.open(BCRYPT_SHA256_ALGORITHM)) {

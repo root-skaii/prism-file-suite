@@ -1,4 +1,5 @@
 #include "core/empty_folders.hpp"
+#include "core/thread_priority.hpp"
 
 #include "core/path.hpp"
 #include "core/text.hpp"
@@ -51,6 +52,7 @@ void EmptyFolderScan::start(const std::string& root, std::function<void()> wake)
     cancel();
     s_ = std::make_shared<State>();
     std::thread{[s = s_, root, wake = std::move(wake)] {
+        lower_thread_priority();
         std::wstring dir = text::widen(root);
         while (!dir.empty() && dir.back() == L'\\') { dir.pop_back(); }
         std::vector<std::wstring> out;

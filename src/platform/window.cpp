@@ -1,6 +1,7 @@
 #include "platform/window.hpp"
 
 #include "core/text.hpp"
+#include "platform/standby.hpp"
 
 #include <windows.h>
 #include <windowsx.h>
@@ -14,7 +15,7 @@ namespace prism::platform {
 
 namespace {
 
-constexpr wchar_t window_class[] = L"prismfs_main_window";
+constexpr const wchar_t* window_class = standby::k_main_window_class;
 constexpr UINT    wake_message   = WM_APP + 1;
 constexpr ULONG_PTR hint_message = 0x50524954; // WM_COPYDATA id: "outline yourself, a tab is about to drop here" ('1') or not ('0')
 constexpr wchar_t   ghost_class[] = L"prismfs_drag_ghost";
@@ -252,6 +253,22 @@ void Window::show()
 {
     ::ShowWindow(as_hwnd(hwnd_), SW_SHOW);
     ::UpdateWindow(as_hwnd(hwnd_));
+    ::SetForegroundWindow(as_hwnd(hwnd_)); // (a window the user just asked for opens on top; refused when this process has no right to it)
+}
+
+void Window::show_blank(std::uint32_t rgb)
+{
+    HWND h = as_hwnd(hwnd_);
+    ::ShowWindow(h, SW_SHOW);
+    ::SetForegroundWindow(h);
+    RECT r{};
+    ::GetClientRect(h, &r);
+    if (HDC dc = ::GetDC(h)) {
+        HBRUSH brush = ::CreateSolidBrush(RGB((rgb >> 16) & 0xff, (rgb >> 8) & 0xff, rgb & 0xff));
+        ::FillRect(dc, &r, brush);
+        ::DeleteObject(brush);
+        ::ReleaseDC(h, dc);
+    }
 }
 
 bool Window::pump()

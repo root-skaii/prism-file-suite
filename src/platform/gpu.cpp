@@ -1,5 +1,7 @@
 #include "platform/gpu.hpp"
 
+#include "core/log.hpp"
+
 #include <windows.h>
 #include <dwmapi.h>
 
@@ -42,13 +44,14 @@ struct Gpu::Impl {
         return SUCCEEDED(chain->GetBuffer(0, IID_PPV_ARGS(&back))) && SUCCEEDED(device->CreateRenderTargetView(back.Get(), nullptr, &rtv));
     }
 
-    [[nodiscard]] bool build(strata::context& ui)
+    [[nodiscard]] bool build_device()
     {
         constexpr D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0};
         UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
 #ifdef PRISM_DEBUG
         flags |= D3D11_CREATE_DEVICE_DEBUG;
 #endif
+        core::log::Timer device_time{"gpu: D3D11CreateDevice"};
         HRESULT hr = ::D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, flags, levels, 3, D3D11_SDK_VERSION, &device, nullptr, &ctx);
         if (FAILED(hr) && (flags & D3D11_CREATE_DEVICE_DEBUG) != 0) { // (no sdk layers installed)
             flags &= ~static_cast<UINT>(D3D11_CREATE_DEVICE_DEBUG);
@@ -57,6 +60,12 @@ struct Gpu::Impl {
         if (FAILED(hr) && FAILED(::D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, flags, levels, 3, D3D11_SDK_VERSION, &device, nullptr, &ctx))) {
             return false;
         }
+        return true;
+    }
+
+    [[nodiscard]] bool build_chain()
+    {
+        core::log::Timer chain_time{"gpu: swap chain"};
         ComPtr<IDXGIDevice>   dxgi_device;
         ComPtr<IDXGIAdapter>  adapter;
         ComPtr<IDXGIFactory2> factory;
@@ -84,8 +93,11 @@ struct Gpu::Impl {
         factory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
         chain->SetMaximumFrameLatency(1);
         latency_wait = chain->GetFrameLatencyWaitableObject();
-        if (!make_target()) { return false; }
+        return make_target();
+    }
 
+    [[nodiscard]] bool build_renderer(strata::context& ui)
+    {
         if (ui.font().pixels().empty() && !ui.rebuild_font_atlas()) { return false; }
         if (!renderer.create(device.Get(), ctx.Get(), ui.font())) { return false; }
         renderer.set_state_restore(false); // (the device is ours: nothing to put back)
@@ -94,6 +106,8 @@ struct Gpu::Impl {
         first_present_done = false;
         return true;
     }
+
+    [[nodiscard]] bool build(strata::context& ui) { return build_device() && build_chain() && build_renderer(ui); }
 };
 
 Gpu::Gpu() : impl_{std::make_unique<Impl>()} {}
@@ -108,6 +122,16 @@ bool Gpu::create(void* hwnd, strata::context& ui)
     impl_->hwnd = static_cast<HWND>(hwnd);
     return impl_->build(ui);
 }
+
+bool Gpu::create_device() { return impl_->build_device(); }
+
+bool Gpu::create_swap_chain(void* hwnd)
+{
+    impl_->hwnd = static_cast<HWND>(hwnd);
+    return impl_->build_chain();
+}
+
+bool Gpu::create_renderer(strata::context& ui) { return impl_->build_renderer(ui); }
 
 void Gpu::resize()
 {

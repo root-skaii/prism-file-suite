@@ -360,6 +360,7 @@ void Toolbar::crumb_context_menu(Painter& p)
 
     if (ui.menu_item(tr("Open"))) { tab.navigate(dir); }
     if (ui.menu_item(tr("Open in new tab"))) { env_.cmd.open_tab(dir, true); }
+    if (ui.menu_item(tr("Open in new window"))) { env_.cmd.open_window(dir); }
     ui.menu_separator();
     if (core::recycle::inside(dir) && ui.menu_item(tr("Empty Recycle Bin"))) { env_.cmd.empty_recycle_bin(core::recycle::drive_of(dir)); }
     if (ui.menu_item(tr("New folder here"))) {

@@ -1,4 +1,5 @@
 #include "core/file_index.hpp"
+#include "core/thread_priority.hpp"
 
 #include "core/log.hpp"
 #include "core/text.hpp"
@@ -183,6 +184,7 @@ std::shared_ptr<const SearchResult> FileIndex::result() const
 
 void FileIndex::worker()
 {
+    lower_thread_priority();
     for (;;) {
         Query          q;
         std::uint64_t  gen = 0;

@@ -1,6 +1,7 @@
 #include "core/shell_menu.hpp"
 
 #include "core/bitmap.hpp"
+#include "core/crash.hpp"
 #include "core/path.hpp"
 #include "core/text.hpp"
 
@@ -282,7 +283,7 @@ void ShellMenu::run()
             ci.lpDirectoryW = cur.dir.c_str();
             ci.lpDirectory  = narrow_dir.c_str();
             ci.nShow        = SW_SHOWNORMAL;
-            (void)cur.menu->InvokeCommand(reinterpret_cast<CMINVOKECOMMANDINFO*>(&ci));
+            (void)crash::guard("shell extension (invoke)", [&] { (void)cur.menu->InvokeCommand(reinterpret_cast<CMINVOKECOMMANDINFO*>(&ci)); });
         }
 
         if (do_query) {
@@ -292,12 +293,16 @@ void ShellMenu::run()
             if (cur.menu != nullptr) {
                 cur.dir   = text::widen(req.background ? req.paths.front() : path::parent(req.paths.front()));
                 cur.hmenu = ::CreatePopupMenu();
-                if (SUCCEEDED(cur.menu->QueryContextMenu(cur.hmenu, 0, k_first, k_last, CMF_NORMAL))) {
-                    ComPtr<IContextMenu2> cm2;
-                    (void)cur.menu.As(&cm2);
-                    collect(cur.hmenu, cur.menu.Get(), cm2.Get(), items, 0);
-                    tidy(items);
-                }
+                // every installed shell extension is asked to add its entries here: a faulty one just leaves the menu shorter
+                const bool built = crash::guard("shell extensions (build menu)", [&] {
+                    if (SUCCEEDED(cur.menu->QueryContextMenu(cur.hmenu, 0, k_first, k_last, CMF_NORMAL))) {
+                        ComPtr<IContextMenu2> cm2;
+                        (void)cur.menu.As(&cm2);
+                        collect(cur.hmenu, cur.menu.Get(), cm2.Get(), items, 0);
+                        tidy(items);
+                    }
+                });
+                if (!built) { items.clear(); }
             }
             {
                 std::lock_guard lock{mutex_};

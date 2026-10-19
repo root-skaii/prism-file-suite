@@ -163,6 +163,7 @@ void Shell::spawn_window(const std::string& folder, std::optional<std::pair<int,
     si.cb = sizeof si;
     PROCESS_INFORMATION pi{};
     if (::CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+        ::AllowSetForegroundWindow(pi.dwProcessId); // (this window has the foreground: the new one may take it, so it opens on top)
         ::CloseHandle(pi.hThread);
         ::CloseHandle(pi.hProcess);
     }
@@ -570,6 +571,7 @@ void Shell::service_ops()
 // extract / compress the selection through core::ArchiveOps (tar.exe); the result arrives in service_archives()
 void Shell::archive_action(const std::string& name)
 {
+    if (!settings_.browse_archives) { return; } // (archive support is off in Settings)
     model::Tab&           tab = env_.tab();
     const model::Listing& L   = tab.listing();
     if (tab.path().empty() || tab.searching()) { toast(tr("Open a folder first (not a search result)"), toast_kind::info); return; }

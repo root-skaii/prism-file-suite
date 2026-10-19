@@ -1,4 +1,5 @@
 #include "core/duplicates.hpp"
+#include "core/thread_priority.hpp"
 
 #include "core/path.hpp"
 #include "core/text.hpp"
@@ -93,6 +94,7 @@ void DuplicateScan::start(const std::string& folder, std::uint64_t min_size)
     s_        = std::make_shared<State>();
     s_->stage = static_cast<int>(Stage::listing);
     std::thread{[s = s_, folder, min_size] {
+        lower_thread_priority();
         // 1. every file, by size
         std::map<std::uint64_t, std::vector<Item>> by_size;
         std::vector<std::wstring>                  todo{text::widen(folder)};

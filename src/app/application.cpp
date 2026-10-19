@@ -1,5 +1,6 @@
 #include "app/application.hpp"
 
+#include "core/crash.hpp"
 #include "core/default_manager.hpp"
 #include "core/i18n.hpp"
 #include "core/log.hpp"
@@ -9,6 +10,7 @@
 #include "ui/ui_strings.hpp"
 #include "core/text.hpp"
 #include "platform/dnd.hpp"
+#include "platform/standby.hpp"
 #include "strata/frame.hpp"
 
 #include <windows.h>
@@ -19,8 +21,19 @@
 #include <chrono>
 #include <cmath>
 #include <format>
+#include <thread>
 
 namespace prism::app {
+
+void Application::prewarm()
+{
+    if (device_thread_.joinable()) { return; }
+    // loading the gpu driver takes ~180 ms and needs nothing else: it starts first and everything else runs beside it
+    device_thread_ = std::jthread{[this] {
+        device_ok_ = gpu_.create_device();
+        device_ready_.store(true, std::memory_order_release);
+    }};
+}
 
 bool Application::init(const Options& opts)
 {
@@ -32,9 +45,19 @@ bool Application::init(const Options& opts)
         core::log::info("startup: {} {:.0f} ms", what, std::chrono::duration<double, std::milli>(now - lap_t).count());
         lap_t = std::chrono::steady_clock::now();
     };
+    prewarm();
+    // under full cpu load a normal-priority ui thread shares time evenly with the hogs (the "lag when the pc is busy"); an
+    // interactive app wants to run first, and must opt out of efficiency-mode throttling (EcoQoS) to be sure of it
+    ::SetPriorityClass(::GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
+    PROCESS_POWER_THROTTLING_STATE throttle{PROCESS_POWER_THROTTLING_CURRENT_VERSION, PROCESS_POWER_THROTTLING_EXECUTION_SPEED, 0};
+    ::SetProcessInformation(::GetCurrentProcess(), ProcessPowerThrottling, &throttle, sizeof throttle);
     ui::register_actions(binds_);
     settings_.binds = &binds_;
     settings_.load();
+    {
+        const std::string p = ui::Settings::file_path(); // (crash reports go in a folder beside the settings)
+        core::crash::set_directory(core::text::widen(p.substr(0, p.find_last_of('\\') == std::string::npos ? 0 : p.find_last_of('\\') + 1) + "crashes"));
+    }
     core::i18n::scan(ui::Settings::language_dirs());
     core::i18n::set_language(settings_.language);
     if (opts.log) { settings_.log_enabled = true; }
@@ -60,17 +83,13 @@ bool Application::init(const Options& opts)
     const int win_h = opts.height > 0 ? opts.height : settings_.window_h > 0 ? settings_.window_h : 840;
     if (!window_.create({.title = "PrismFS", .width = win_w, .height = win_h, .has_at = opts.has_at, .at_x = opts.at_x, .at_y = opts.at_y})) { return false; }
 
+    {
+        const strata::color bg = theme_.pal().window; // (something on screen at once; the first real frame replaces it)
+        window_.show_blank((static_cast<std::uint32_t>(bg.r) << 16) | (static_cast<std::uint32_t>(bg.g) << 8) | bg.b);
+    }
     lap("window");
 
-    auto created = ui::create_context(theme_.style(), window_.dpi_scale() * static_cast<float>(scale_pct_) / 100.0f);
-    if (!created) { return false; }
-    ui_.emplace(std::move(*created));
-    ui_->set_clipboard(window_.input().clipboard());
-    lap("fonts and ui context");
-
-    if (!gpu_.create(window_.handle(), *ui_)) { return false; }
-    lap("direct3d device and swap chain");
-
+    // the folder listing, the d3d device and the font bake do not depend on each other: run them side by side
     ops_  = std::make_unique<core::FileOps>(window_.waker(), window_.handle());
     tabs_ = std::make_unique<model::TabSet>(window_.waker());
     if (!start_path.empty()) {
@@ -88,6 +107,17 @@ bool Application::init(const Options& opts)
     }
 
     lap("first tabs (folder listing starts)");
+
+    // the language's own characters (and anything else already noted) go into the first bake, so it needs no rebuild at once
+    baked_revision_ = core::text::demand_revision();
+    auto created = ui::create_context(theme_.style(), window_.dpi_scale() * static_cast<float>(scale_pct_) / 100.0f, core::text::demanded_codepoints());
+    lap("fonts and ui context");
+    device_thread_.join();
+    if (!created || !device_ok_ ||!gpu_.create_swap_chain(window_.handle())) { return false; }
+    ui_.emplace(std::move(*created));
+    ui_->set_clipboard(window_.input().clipboard());
+    if (!gpu_.create_renderer(*ui_)) { return false; }
+    lap("direct3d swap chain and renderer (the device was made meanwhile)");
 
     images_ = std::make_unique<platform::ImageCache>(window_.waker());
     shell_ = std::make_unique<ui::Shell>(window_, theme_, ui::FontSet{}, *tabs_, *ops_, settings_, *images_, binds_, history_);
@@ -129,6 +159,11 @@ bool Application::init(const Options& opts)
     if (opts.palette) { shell_->show_palette(); }
     if (!opts.properties.empty()) { shell_->show_properties({opts.properties}, opts.properties_tab); }
     apply_theme();
+    standby_on_      = settings_.standby || settings_.tray;
+    tray_on_         = settings_.tray;
+    standby_pending_ = standby_on_;
+    // after the first frame, out of its way (sooner with the tray icon: it is gone from the clock until the next spare is up)
+    standby_at_      = std::chrono::steady_clock::now() + std::chrono::milliseconds{tray_on_ ? 400 : 1500};
     lap("final setup");
     core::log::info("startup: init finished, the first frame comes next");
     return true;
@@ -178,6 +213,21 @@ bool Application::step(bool force_draw)
         ui::register_actions(binds_);
         (void)binds_.load(chords);
     }
+    if (const bool want = settings_.standby || settings_.tray; want != standby_on_ || settings_.tray != tray_on_) { // (switched in Settings)
+        const bool tray_changed = settings_.tray != tray_on_;
+        standby_on_ = want;
+        tray_on_    = settings_.tray;
+        if (!want) {
+            standby_pending_ = false;
+            platform::standby::stop(false);
+        } else if (tray_changed) {
+            standby_pending_ = false;
+            platform::standby::restart(tray_on_); // (the icon belongs to the spare, which has to start again with / without it)
+        } else {
+            standby_pending_ = true;
+            standby_at_      = std::chrono::steady_clock::now();
+        }
+    }
     if (settings_.log_enabled != core::log::enabled()) { // (switched in Settings)
         if (settings_.log_enabled) { start_log(); } else { core::log::info("log switched off"); core::log::disable(); }
     }
@@ -222,6 +272,11 @@ bool Application::step(bool force_draw)
     shell_->frame(*ui_, frame_in);
     strata::end_frame(*ui_, window_.input());
     const double ui_ms = ms_since(ui_start);
+    // this frame met characters the fonts lack (they would draw as '?', on the dim first frame of the fade-in): do not show
+    // it. the rebuild happens at the start of the next step, which must come at once, and the window keeps the last good
+    // frame meanwhile (a rebuild takes a few hundred ms)
+    const bool stale_glyphs = !force_draw && core::text::demand_revision() != baked_revision_;
+    if (stale_glyphs) { ui_->invalidate(); }
     if (shell_->take_restyle()) { apply_theme(); }
     if (const int pct = shell_->take_scale_request(); pct > 0) {
         scale_pct_ = pct;
@@ -231,7 +286,7 @@ bool Application::step(bool force_draw)
 
     bool presented = false;
     const auto present_start = std::chrono::steady_clock::now();
-    if (force_draw || !ui_->frame_unchanged()) {
+    if (!stale_glyphs && (force_draw || !ui_->frame_unchanged())) {
         presented = true;
         const bool ok = gpu_.present(*ui_, theme_.pal().window);
         static bool first_frame = true;
@@ -288,9 +343,19 @@ int Application::run()
         if (presented_) { gpu_.wait_for_frame(); }
         presented_ = step(false);
 
+        double standby_left = 0.0; // seconds until a spare process is due
+        if (standby_pending_) {
+            standby_left = std::chrono::duration<double>(standby_at_ - std::chrono::steady_clock::now()).count();
+            if (standby_left <= 0.0) {
+                standby_pending_ = false;
+                platform::standby::ensure(tray_on_);
+            }
+        }
+
         // sleep until input arrives or the ui needs a frame (animation, caret, tooltip delay). a directory loader
         // posts a message when it has rows, which ends the sleep
-        const double wait = ui_->next_wake_seconds();
+        double wait = ui_->next_wake_seconds();
+        if (standby_pending_ && standby_left > 0.0 && wait > 0.0) { wait = std::min(wait, standby_left); }
         if (wait > 0.0) {
             window_.wait(wait >= 3600.0 ? 0xffffffffu : static_cast<std::uint32_t>(std::ceil(wait * 1000.0)));
         } else {

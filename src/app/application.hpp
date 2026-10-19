@@ -13,9 +13,12 @@
 #include "ui/shell.hpp"
 #include "ui/theme.hpp"
 
+#include <atomic>
+#include <chrono>
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 
 namespace prism::app {
 
@@ -39,8 +42,15 @@ public:
         bool        has_at{};   // window top-left in screen pixels (a window started by another one); not remembered
         int         at_x{}, at_y{};
         int         width{}, height{}; // logical client size for this window only (0: the remembered one)
+        bool        standby{};  // --standby: a spare process, see platform/standby.hpp (not a window)
+        bool        tray{};     // --tray (with --standby): the spare owns the notification-area icon
+        bool        crash_test{}; // --crash-test: fault on purpose, to check the report
+        std::string crashed;  // --crashed <report>: not a window, just the notice that a PrismFS process crashed (core/crash)
     };
 
+    // starts the gpu driver load on its own thread, ahead of init() (a spare does this while it waits for a launch)
+    void prewarm();
+    [[nodiscard]] bool device_ready() const noexcept { return device_ready_.load(std::memory_order_acquire); }
     [[nodiscard]] bool init(const Options& opts);
     int run();
 
@@ -66,6 +76,13 @@ private:
     std::optional<strata::context> ui_;
     std::unique_ptr<ui::Shell>     shell_;
     bool                           presented_{};
+    std::jthread                   device_thread_;
+    bool                           device_ok_{};
+    std::atomic<bool>              device_ready_{false};
+    bool                           standby_on_{};      // a spare is wanted (Settings::standby or tray) as last applied
+    bool                           tray_on_{};         // Settings::tray as last applied
+    bool                           standby_pending_{}; // a spare is still to be started (a moment after the first frame)
+    std::chrono::steady_clock::time_point standby_at_{};
 };
 
 } // namespace prism::app

@@ -200,13 +200,15 @@ bool SettingsDialog::frame(Painter& p)
             if (kit.switch_row("##sw_compact", tr("Compact density"), tr("Smaller rows in the file list"), s.compact, false)) { changed = true; }
             kit.card_end("##card_look");
 
-            kit.card_begin("##card_beh", tr("Behavior"), kit.row_h() * 7.0f + 16.0f * 5.0f);
+            kit.card_begin("##card_beh", tr("Behavior"), kit.row_h() * 9.0f + 16.0f * 7.0f);
             if (kit.switch_row("##sw_hidden", tr("Show hidden files"), {}, s.show_hidden, true)) { changed = true; }
             if (kit.switch_row("##sw_confirm", tr("Ask before deleting"), tr("Before a file goes to the Recycle Bin"), s.confirm_delete, true)) { changed = true; }
             if (kit.switch_row("##sw_tabs", tr("Open my tabs again next time"), {}, s.restore_tabs, true)) { changed = true; }
+            if (kit.switch_row("##sw_standby", tr("Start faster"), tr("Keeps a small PrismFS process ready in the background, so new windows open almost at once"), s.standby, true)) { changed = true; }
+            if (kit.switch_row("##sw_tray", tr("Tray icon"), tr("An icon near the clock while PrismFS runs in the background: right-click for Open, Settings and Exit. Keeps a small background process"), s.tray, true)) { changed = true; }
             if (kit.switch_row("##sw_index", tr("Index drives for instant search"), trf("Lets Search everywhere ({}) find files instantly.", key_hint(env_.binds, "search_everywhere")), s.index_drives, true)) { changed = true; }
             if (kit.switch_row("##sw_copyengine",tr("Copy and move in PrismFS"), tr("Shows progress with pause and cancel. When off, Windows' own copy window is used."), s.builtin_copy, true)) { changed = true; }
-            if (kit.switch_row("##sw_archives",tr("Open archives like folders"), tr("Enter on a zip, 7z or tar shows what is inside"), s.browse_archives, true)) { changed = true; }
+            if (kit.switch_row("##sw_archives",tr("Archive support"), tr("Enter on a zip, 7z or tar shows what is inside; adds Extract and Compress. When off, archives open with Windows' default app"), s.browse_archives, true)) { changed = true; }
             if (kit.switch_row("##sw_shellmenu", tr("Windows context menu entries"), tr("Open with Code, 7-Zip and the other entries Explorer shows"), s.shell_menu, false)) { changed = true; }
             kit.card_end("##card_beh");
 
