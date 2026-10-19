@@ -1,10 +1,12 @@
 #include "model/tab.hpp"
 
 #include "core/path.hpp"
+#include "core/recycle.hpp"
+#include "core/text.hpp"
 
 namespace prism::model {
 
-Tab::Tab(std::function<void()> wake) : loader_{std::move(wake)} {}
+Tab::Tab(std::function<void()> wake) : loader_{wake}, quiet_loader_{wake}, watcher_{wake} {}
 
 const std::string& Tab::path() const noexcept
 {
@@ -114,26 +116,55 @@ void Tab::load(bool keep_scroll)
     listing_.set_query({}); // (a filter belongs to the folder it was typed in)
     listing_.clear();
     if (reveal_name.empty() && keep_scroll) { reveal_name = history_[index_].focus_name; }
+    quiet_loader_.cancel();
+    quiet_dirty_ = false;
+    watcher_.watch(path());
     loader_.start(path());
 }
 
 bool Tab::poll()
 {
+    bool changed = false;
     std::vector<core::FileEntry> batch;
     const core::DirectoryLoader::Progress p = loader_.poll(batch);
-    if (!p.any) { return false; }
-    if (!batch.empty()) { listing_.append(std::move(batch)); }
-    if (p.done) {
-        error_ = p.error;
-        listing_.finish();
+    if (p.any) {
+        changed = true;
+        if (!batch.empty()) { listing_.append(std::move(batch)); }
+        if (p.done) {
+            error_ = p.error;
+            listing_.finish();
+        }
     }
-    return true;
+
+    if (searching_) { return changed; }
+    if (watcher_.take_changed()) { quiet_dirty_ = true; }
+    if (!loader_.running()) {
+        if (quiet_dirty_ && !quiet_loader_.running()) {
+            quiet_dirty_ = false;
+            quiet_.clear();
+            quiet_loader_.start(path());
+        }
+        // (a finished job keeps reporting `done`: only a running one is polled, or the next call would swap in an empty list)
+        std::vector<core::FileEntry> more;
+        const core::DirectoryLoader::Progress q = quiet_loader_.running() ? quiet_loader_.poll(more) : core::DirectoryLoader::Progress{};
+        if (q.any) {
+            quiet_.insert(quiet_.end(), std::make_move_iterator(more.begin()), std::make_move_iterator(more.end()));
+            if (q.done && q.error == 0 && listing_.finished()) {
+                listing_.replace_entries(std::move(quiet_));
+                quiet_.clear();
+                changed = true;
+            }
+        }
+    }
+    return changed;
 }
 
 std::string Tab::title() const
 {
     const std::string& p = path();
     if (p.empty()) { return "New tab"; }
+    // (the bin's folder is named after your SID)
+    if (core::recycle::inside(p) && core::text::lower_ascii(core::path::leaf(core::path::parent(p))) == "$recycle.bin") { return "Recycle Bin"; }
     return core::path::leaf(p);
 }
 

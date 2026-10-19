@@ -1,7 +1,13 @@
 #include "ui/title_bar.hpp"
+#include "ui/tr.hpp"
 
 #include "core/path.hpp"
+#include "core/shell_ops.hpp"
+#include "ui/tr.hpp"
 #include "ui/panel.hpp"
+#include "ui/tr.hpp"
+
+#include <windows.h>
 
 #include <algorithm>
 #include <cmath>
@@ -22,7 +28,7 @@ std::string TitleBar::drop_target_at(vec2 p) const
 platform::HitZone TitleBar::hit_test(vec2 pt) const
 {
     if (max_.contains(pt)) { return platform::HitZone::maximize_button; }
-    if (!area_.contains(pt) || strip_.contains(pt) || min_.contains(pt) || close_.contains(pt)) { return platform::HitZone::client; }
+    if (!area_.contains(pt) || strip_.contains(pt) || admin_.contains(pt) || min_.contains(pt) || close_.contains(pt)) { return platform::HitZone::client; }
     return platform::HitZone::caption;
 }
 
@@ -56,8 +62,14 @@ void TitleBar::frame(Painter& p, const rect& area)
     const item_result strip = ui.custom_item("##tabstrip", {strip_w, h});
     strip_ = strip.bounds;
     ui.same_line();
-    const float rest = std::max(0.0f, area.width() - strip_w - btn * 3.0f);
+    // administrator: a shield button starts an elevated window; in an elevated one a badge says so
+    const bool  elevated = core::shell::is_elevated();
+    constexpr float admin_w = 28.0f; // square, like the new-tab button
+    const float rest = std::max(0.0f, area.width() - strip_w - btn * 3.0f - admin_w - 6.0f);
     (void)ui.custom_item("##titlegap", {rest, h});
+    ui.same_line();
+    const item_result radmin = ui.custom_item("##admin", {admin_w + 6.0f, h});
+    admin_ = rect::from_size({radmin.bounds.min.x, area.min.y + (h - admin_w) * 0.5f}, {admin_w, admin_w});
     ui.same_line();
 
     const vec2  origin = strip.bounds.min;
@@ -109,6 +121,7 @@ void TitleBar::frame(Painter& p, const rect& area)
             } else {
                 tabs.activate(static_cast<std::size_t>(hover_tab));
                 drag_ = hover_tab;
+                drag_origin_ = mp;
             }
         }
     }
@@ -117,8 +130,28 @@ void TitleBar::frame(Painter& p, const rect& area)
     }
     if (drag_ >= 0) {
         if (!ui.mouse_down(mouse_button::left)) {
+            POINT cursor{};
+            env_.window.hide_drag_ghost();
+            env_.window.clear_window_hint();
+            if (::GetCursorPos(&cursor) != FALSE && !env_.window.contains_screen_point(cursor.x, cursor.y)) {
+                env_.cmd.move_tab_out(static_cast<std::size_t>(drag_), cursor.x, cursor.y);
+            }
             drag_ = -1;
         } else {
+            // outside the window the tab becomes a card on the pointer; a PrismFS window under it outlines itself
+            POINT cursor{};
+            if (::GetCursorPos(&cursor) != FALSE && !env_.window.contains_screen_point(cursor.x, cursor.y) && drag_ < static_cast<int>(tabs.size())) {
+                const std::string path = tabs.at(static_cast<std::size_t>(drag_)).path();
+                const bool other = env_.window.hint_window_at(cursor.x, cursor.y);
+                const std::string leaf = core::path::leaf(path);
+                env_.window.show_drag_ghost(leaf.empty() ? path : leaf,
+                                            other ? tr("Release to move it to this window") : (tabs.size() > 1 ? tr("Release to open it in a new window") : std::string_view{}),
+                                            cursor.x, cursor.y, env_.settings.accent, other || tabs.size() > 1);
+                ui.invalidate();
+            } else {
+                env_.window.hide_drag_ghost();
+                env_.window.clear_window_hint();
+            }
             const int target = std::clamp(static_cast<int>(std::floor((mp.x - view_l + scroll_x_) / tw)), 0, static_cast<int>(tabs.size()) - 1);
             if (target != drag_ && drag_ < static_cast<int>(tabs.size())) {
                 tabs.move(static_cast<std::size_t>(drag_), static_cast<std::size_t>(target));
@@ -128,6 +161,7 @@ void TitleBar::frame(Painter& p, const rect& area)
     }
 
     // --- tabs
+    const bool lifted = drag_ >= 0 && ui.mouse_down(mouse_button::left) && std::abs(mp.x - drag_origin_.x) + std::abs(mp.y - drag_origin_.y) > 6.0f;
     p.dl().push_clip(rect{{view_l - 2.0f, area.min.y}, {view_r + 2.0f, area.max.y}});
     for (std::size_t i = 0; i < tabs.size(); ++i) {
         model::Tab& tab    = tabs.at(i);
@@ -139,7 +173,7 @@ void TitleBar::frame(Painter& p, const rect& area)
         auto& seen = born_[&tab];
         ++seen;
         const float appear = ui.animate(key + "b", seen > 1 ? 1.0f : 0.0f, 12.0f);
-        p.dl().push_alpha(appear);
+        p.dl().push_alpha(appear * (lifted && static_cast<int>(i) == drag_ ? 0.3f : 1.0f)); // (its slot stays, faded, while the card is lifted)
         const rect  body{{x, y0}, {x + tw - 2.0f, y1}};
         if (i == 0) { tab_rects_.clear(); }
         // (only the part inside the strip takes drops: a tab scrolled out of sight is not a target)
@@ -179,8 +213,41 @@ void TitleBar::frame(Painter& p, const rect& area)
     }
     p.dl().pop_clip();
 
+    // the tab being dragged follows the pointer as a raised card (outside the window a native card takes over)
+    if (lifted && drag_ < static_cast<int>(tabs.size()) && ui.display_size().x > mp.x && mp.x >= 0.0f && mp.y >= 0.0f && mp.y < ui.display_size().y) {
+        auto fg = ui.layer(layer::foreground);
+        model::Tab& tab = tabs.at(static_cast<std::size_t>(drag_));
+        const float cw  = std::min(tw - 2.0f, 220.0f);
+        const rect  card = rect::from_size({mp.x - cw * 0.5f, mp.y - m.tab_height * 0.5f}, {cw, m.tab_height});
+        p.dl().rect_filled(rect::from_size({card.min.x - 2.0f, card.min.y + 1.0f}, {card.width() + 4.0f, card.height() + 4.0f}), color{0, 0, 0, 80}, m.pane_radius + 2.0f);
+        p.dl().rect_filled(card, pal.raised, m.pane_radius - 2.0f);
+        p.dl().rect_outline(card, pal.accent, m.pane_radius - 2.0f, 1.5f);
+        p.folder_icon(rect::from_size({card.min.x + 10.0f, card.min.y + (m.tab_height - 16.0f) * 0.5f}, {16.0f, 16.0f}));
+        p.text_left(rect{{card.min.x + 34.0f, card.min.y}, {card.max.x - 10.0f, card.max.y}}, tab.title(), pal.text, env_.fonts.body);
+        env_.cmd.set_cursor(cursor_kind::hand);
+        ui.invalidate();
+    }
+
     if (hover_plus) { p.dl().rect_filled(plus_rect, pal.hover, 7.0f); }
     p.glyph_center(plus_rect, glyph::add, pal.text_dim, env_.fonts.tile);
+
+    if (elevated) {
+        const bool over = radmin.hovered && admin_.contains(mp);
+        p.dl().rect_filled(admin_, pal.warning.scaled_alpha(over ? 0.30f : 0.18f), 7.0f);
+        p.glyph_center(admin_, glyph::shield, pal.warning, env_.fonts.tile);
+        if (over) {
+            ui.tooltip(tr("Running as administrator. Click to reopen without administrator rights"));
+            if (ui.mouse_clicked(mouse_button::left)) { env_.cmd.restart_unelevated(); }
+        }
+    } else {
+        const bool over = radmin.hovered && admin_.contains(mp);
+        if (over) { p.dl().rect_filled(admin_, pal.hover, 7.0f); }
+        p.glyph_center(admin_, glyph::shield, over ? pal.text : pal.text_dim, env_.fonts.tile);
+        if (over) {
+            ui.tooltip(tr("Reopen as administrator"));
+            if (ui.mouse_clicked(mouse_button::left)) { env_.cmd.restart_elevated(); }
+        }
+    }
 
     // --- window buttons
     const float bx = area.max.x - btn * 3.0f;

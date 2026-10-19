@@ -12,7 +12,8 @@ namespace prism::ui {
 struct Settings {
     bool  dark{true};
     bool  compact{false};
-    int   dark_style{0};        // DarkStyle: 0 neutral, 1 graphite, 2 slate
+    std::string language{"en"}; // core::i18n code
+    int   dark_style{0};      // DarkStyle: 0 neutral, 1 graphite, 2 slate
     unsigned accent{0x6d8cff};  // 0xRRGGBB, any colour
     bool  show_hidden{false};
     bool  confirm_delete{false}; // ask before moving to the recycle bin (deleting for good always asks)
@@ -21,6 +22,7 @@ struct Settings {
     bool  browse_archives{true}; // Enter on a zip / 7z / tar opens it as a folder (a temporary unpacked copy) instead of the default app
     bool  index_drives{true};    // a background index of the fixed drives' file names, for "Search everywhere" (Ctrl+Shift+F)
     bool  builtin_copy{true};   // copy and move run in the app's own queue (progress panel, conflict prompt); off: Windows' copy window
+    bool  log_enabled{false};   // write a troubleshooting log (startup steps, slow frames, slow folders) beside the settings file
     bool  track_history{true};  // remember visited folders (Recent / Frequent in the sidebar); off: nothing is recorded or kept
     bool  search_subfolders{false}; // the filter box searches below the folder (Enter) instead of filtering what is shown
     bool  search_case{false};       // match case
@@ -56,12 +58,16 @@ struct Settings {
     [[nodiscard]] static std::string visits_path(); // the folders you visited (Recent / Frequent)
     // documents offered in the "New" menu: a Templates folder beside the settings file
     [[nodiscard]] static std::string templates_path();
+    // *.lang translation files: the ones shipped beside the exe, then the user's own (same code overrides)
+    [[nodiscard]] static std::vector<std::string> language_dirs();
     // the order remembered per folder (when sort_per_folder is on)
     [[nodiscard]] static std::string folder_sorts_path();
     // named sessions (tabs + second pane)
     [[nodiscard]] static std::string sessions_path();
     // colour labels on files
     [[nodiscard]] static std::string tags_path();
+    // the troubleshooting log (when log_enabled)
+    [[nodiscard]] static std::string log_path();
 };
 
 } // namespace prism::ui

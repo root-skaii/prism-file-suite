@@ -1,7 +1,10 @@
 #include "ui/search_dialog.hpp"
+#include "ui/tr.hpp"
 
 #include "core/path.hpp"
+#include "ui/tr.hpp"
 #include "core/text.hpp"
+#include "ui/tr.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -56,14 +59,14 @@ void SearchDialog::frame(Painter& p)
     kit.begin_frame();
     {
         const item_result r = ui.custom_item("##se_head", {ui.content_width() - 36.0f, 48.0f});
-        p.text_left(rect{{r.bounds.min.x, r.bounds.min.y + 2.0f}, {r.bounds.max.x, r.bounds.min.y + 30.0f}}, "Search everywhere", pal.text, f.title);
+        p.text_left(rect{{r.bounds.min.x, r.bounds.min.y + 2.0f}, {r.bounds.max.x, r.bounds.min.y + 30.0f}}, tr("Search everywhere"), pal.text, f.title);
         std::string sub;
-        if (index_.building() && !index_.ready()) { sub = std::format("Indexing your drives for the first time ... {} items so far", index_.scanned()); }
-        else if (index_.building()) { sub = std::format("Refreshing the index ... {} items so far (searching the earlier one)", index_.scanned()); }
-        else { sub = std::format("{} items indexed, {} min ago", index_.entries(), static_cast<long long>(index_.age_seconds() / 60.0)); }
+        if (index_.building() && !index_.ready()) { sub = trf("Indexing your drives for the first time ... {} items so far", index_.scanned()); }
+        else if (index_.building()) { sub = trf("Refreshing the index ... {} items so far (searching the earlier one)", index_.scanned()); }
+        else { sub = trf("{} items indexed, {} min ago", index_.entries(), static_cast<long long>(index_.age_seconds() / 60.0)); }
         p.text_left(rect{{r.bounds.min.x, r.bounds.min.y + 28.0f}, {r.bounds.max.x, r.bounds.max.y}}, sub, pal.text_dim, f.body);
         ui.same_line();
-        if (kit.icon_button("##se_close", glyph::close, "Close  (Esc)", true, true, 32.0f)) { ui.close_modal(); }
+        if (kit.icon_button("##se_close", glyph::close, tr("Close  (Esc)"), true, true, 32.0f)) { ui.close_modal(); }
     }
     kit.vgap(8.0f);
 
@@ -83,7 +86,7 @@ void SearchDialog::frame(Painter& p)
         ++age_;
         ui.push_var(style_var::frame_padding_y, (h - p.line_height(f.body)) * 0.5f);
         ui.push_color(style_color::widget_bg, color{0, 0, 0, 0});
-        (void)ui.input_text("##se_text", text_, "Type a name, *.ext, ext:pdf, size:>100mb, modified:7d ...");
+        (void)ui.input_text("##se_text", text_, tr("Type a name, *.ext, ext:pdf, size:>100mb, modified:7d ..."));
         ui.pop_color();
         ui.pop_var();
     }
@@ -102,10 +105,10 @@ void SearchDialog::frame(Painter& p)
     {
         const item_result r = ui.custom_item("##se_status", {ui.content_width(), 28.0f});
         std::string line;
-        if (text_.empty()) { line = "Names only. Words are all required; | means or; -word leaves it out."; }
-        else if (stale && index_.searching()) { line = "Searching ..."; }
-        else if (res.total == 0) { line = "Nothing found"; }
-        else { line = std::format("{} found{}  ({:.0f} ms)", res.total, res.total > res.hits.size() ? std::format(", the first {} are listed", res.hits.size()) : std::string{}, res.milliseconds); }
+        if (text_.empty()) { line = tr("Names only. Words are all required; | means or; -word leaves it out."); }
+        else if (stale && index_.searching()) { line = tr("Searching ..."); }
+        else if (res.total == 0) { line = tr("Nothing found"); }
+        else { line = trf("{} found{}  ({:.0f} ms)", res.total, res.total > res.hits.size() ? trf(", the first {} are listed", res.hits.size()) : std::string{}, res.milliseconds); }
         p.text_left(r.bounds, line, pal.text_dim, f.small, 4.0f);
     }
 

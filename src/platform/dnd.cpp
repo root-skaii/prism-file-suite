@@ -205,11 +205,21 @@ bool run_drag(const std::vector<std::string>& paths)
     }
     bool dropped = false;
     if (!ids.empty()) {
-        // (with no parent folder the shell reads the items as absolute ids)
+        // child ids relative to the first item's parent; other applications (and Explorer) need a real parent folder to get CF_HDROP.
+        // Items living elsewhere (search results) are left out.
+        PIDLIST_ABSOLUTE parent = ::ILClone(ids.front());
+        ::ILRemoveLastID(parent);
         std::vector<PCUITEMID_CHILD> items;
-        for (PIDLIST_ABSOLUTE id : ids) { items.push_back(reinterpret_cast<PCUITEMID_CHILD>(id)); }
+        for (PIDLIST_ABSOLUTE id : ids) {
+            PIDLIST_ABSOLUTE p = ::ILClone(id);
+            ::ILRemoveLastID(p);
+            if (::ILIsEqual(p, parent) != FALSE) { items.push_back(::ILFindLastID(id)); }
+            ::ILFree(p);
+        }
         ComPtr<IDataObject> data;
-        if (SUCCEEDED(::SHCreateDataObject(nullptr, static_cast<UINT>(items.size()), items.data(), nullptr, IID_PPV_ARGS(&data)))) {
+        const HRESULT created = ::SHCreateDataObject(parent, static_cast<UINT>(items.size()), items.data(), nullptr, IID_PPV_ARGS(&data));
+        ::ILFree(parent);
+        if (SUCCEEDED(created)) {
             auto* source = new DropSource;
             DWORD effect = DROPEFFECT_NONE;
             g_own_drag = paths;

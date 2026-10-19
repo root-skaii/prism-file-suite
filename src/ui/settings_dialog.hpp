@@ -19,8 +19,8 @@ public:
 private:
     Env& env_;
     bool want_open_{};
-    bool shown_{};
-    bool default_manager_{}; // PrismFS opens folders for other programs (read from the registry when the dialog opens)
+    bool bin_handler_{}; // the desktop Recycle Bin icon opens in PrismFS (read from the registry too)
+    bool shown_{};    bool default_manager_{}; // PrismFS opens folders for other programs (read from the registry when the dialog opens)
     float keys_h_{900.0f};    // the shortcut table's height, measured last frame
     float content_h_{900.0f}; // the body's content height, measured last frame
 };

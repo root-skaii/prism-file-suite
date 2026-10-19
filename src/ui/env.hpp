@@ -31,6 +31,9 @@ public:
     virtual ~Commands() = default;
     virtual void open_tab(const std::string& path, bool activate) = 0;
     virtual void close_tab(std::size_t index) = 0;
+    virtual void move_tab_out(std::size_t index, int screen_x, int screen_y) = 0; // a tab released outside the window
+    virtual void restart_elevated() = 0; // reopen the current folder(s) in an administrator window, then close this one
+    virtual void restart_unelevated() = 0; // the way back: a normal window from an administrator one
     virtual void toggle_theme() = 0;
     virtual void toggle_density() = 0;
     virtual void toggle_hidden() = 0;
@@ -50,6 +53,8 @@ public:
     virtual void transfer(std::vector<std::string> paths, const std::string& dest, bool move) = 0;
     // delete these paths (asks first when the setting says so, or when permanent); the shell shows the dialog
     virtual void request_delete(std::vector<std::string> paths, bool permanent) = 0;
+    virtual void restore_from_bin(std::vector<std::string> items) = 0; // Recycle Bin items back where they were deleted from
+    virtual void empty_recycle_bin(std::string drive_root) = 0; // one drive's ("D:\"), or all of them when empty
     // removes a sidebar section; when it holds folders the shell asks whether they go too or move to a neighbour section
     virtual void request_remove_section(std::size_t section) = 0;
     // pins the folder to the sidebar, or unpins it when it is there (says so in a toast)
@@ -58,7 +63,7 @@ public:
     virtual void copy_sidebar() = 0;
     virtual void paste_sidebar() = 0;
     // runs an edit of the sidebar layout and puts it on the undo stack (false: it changed nothing)
-    virtual bool edit_sidebar(std::string label, const std::function<void(model::SidebarLayout&)>& edit) = 0;
+    virtual bool edit_sidebar(std::string_view label, const std::function<void(model::SidebarLayout&)>& edit) = 0;
     // runs a named action (ui/actions.cpp) at the end of the frame, on the pane that has the keyboard
     virtual void request_action(std::string name) = 0;
     // colour labels on these paths: label `index` (core::tag::names) goes on, or off when all of them already have it
@@ -68,7 +73,7 @@ public:
     virtual void open_archive(const std::string& path) = 0;
     // one step up: out of a folder, or out of an archive to the folder that holds it
     virtual void go_up(model::Tab& tab) = 0;
-    virtual void toast(std::string text, strata::toast_kind kind) = 0;
+    virtual void toast(std::string_view text, strata::toast_kind kind) = 0;
     // pointer shape for this frame (strata only knows its own widgets)
     virtual void set_cursor(strata::cursor_kind kind) = 0;
 };

@@ -1,6 +1,6 @@
 #pragma once
 
-// where the space goes: a background scan of a folder into a size tree. folders are kept three levels deep (deeper ones only
+// where the space goes: a background scan of a folder into a size tree. folders are kept five levels deep (deeper ones only
 // add to their ancestor's total: scan the folder itself to look inside), and each folder keeps its biggest files while the
 // rest are lumped into one entry, so the tree stays small however large the disk is. links are not followed
 
@@ -40,7 +40,7 @@ public:
     // null until the scan is done (or when it was cancelled)
     [[nodiscard]] std::shared_ptr<const UsageNode> result() const;
 
-    static constexpr int         depth_limit = 3;   // levels of folders kept below the root
+    static constexpr int         depth_limit = 5;   // levels of folders kept below the root
     static constexpr std::size_t keep_files  = 24;  // individual files kept per folder
 
 private:

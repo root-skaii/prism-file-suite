@@ -77,6 +77,7 @@ private:
     void header(Painter& p, std::size_t si, float top_space);
     void item_row(Painter& p, std::size_t si, std::size_t ii);
     void drive_row(Painter& p, const core::Place& place);
+    void devices_header(Painter& p, std::size_t si);
     void empty_row(Painter& p, std::size_t si);
     void visit_row(Painter& p, std::size_t si, const std::string& path);
     void note_row(Painter& p, std::size_t si, std::string_view text);
@@ -104,6 +105,7 @@ private:
     std::vector<core::Place>   drives_;
     core::DriveWatcher         drive_watch_;   // (the drive list is read on a worker: a slow disk must not stall a frame)
     unsigned                   drives_rev_{};
+    bool                       devices_collapsed_{};
     core::PathProbe            probe_;
     strata::rect               area_{};
     std::vector<Row>           rows_;    // this frame's rows, screen space (the drop target reads last frame's)

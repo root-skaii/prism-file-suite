@@ -1,8 +1,12 @@
 #include "ui/status_bar.hpp"
+#include "ui/tr.hpp"
 
 #include "core/path.hpp"
+#include "ui/tr.hpp"
 #include "core/git_status.hpp"
+#include "ui/tr.hpp"
 #include "ui/panel.hpp"
+#include "ui/tr.hpp"
 
 #include <format>
 
@@ -24,24 +28,25 @@ void StatusBar::frame(Painter& p, const rect& area)
     std::string left;
     color       left_col = pal.text_dim;
     if (!L.query().valid()) {
-        left     = "Invalid search: " + L.query().error();
+        left     = trf("Invalid search: {}", L.query().error());
         left_col = pal.danger;
     } else if (tab.searching()) {
-        left = std::format("{} \"{}\":  {} {}", tab.loading() ? "Searching" : "Search", tab.search_query(), L.rows(),
-                           tab.loading() ? "found" : (L.rows() == 1 ? "result" : "results"));
+        const long long rows = static_cast<long long>(L.rows());
+        left = tab.loading() ? trf_n("Searching \"{}\":  {} result found", "Searching \"{}\":  {} results found", rows, tab.search_query(), L.rows())
+                             : trf_n("Search \"{}\":  {} result", "Search \"{}\":  {} results", rows, tab.search_query(), L.rows());
     } else {
-        left = L.rows() == 1 ? "1 item" : std::format("{} items", L.rows());
-        if (L.total() > L.rows()) { left += std::format("  ({} hidden or filtered)", L.total() - L.rows()); }
+        left = trf_n("{} item", "{} items", static_cast<long long>(L.rows()), L.rows());
+        if (L.total() > L.rows()) { left += trf("  ({} hidden or filtered)", L.total() - L.rows()); }
     }
     if (L.selected_count() > 0) {
-        left += std::format("   |   {} selected", L.selected_count());
+        left += "   |   " + trf("{} selected", L.selected_count());
         if (L.selected_bytes() > 0) { left += "  " + core::path::format_size(L.selected_bytes()); }
     }
     p.text_left(rect{area.min, {area.max.x - 160.0f, area.max.y}}, left, left_col, env_.fonts.small, 16.0f);
 
     // a running search can be stopped, a finished one dismissed
     if (tab.searching()) {
-        const char* label = tab.loading() ? "Cancel search" : "Back to folder";
+        const std::string_view label = tab.loading() ? tr("Cancel search") : tr("Back to folder");
         const float w     = p.measure(env_.fonts.small, label).x + 20.0f;
         const rect  btn{{area.max.x - w - 12.0f, area.min.y + 3.0f}, {area.max.x - 12.0f, area.max.y - 3.0f}};
         const bool  over = hit.hovered && btn.contains(ui.mouse_pos());
@@ -49,7 +54,7 @@ void StatusBar::frame(Painter& p, const rect& area)
         p.text_center(btn, label, over ? pal.text : pal.accent, env_.fonts.small);
         if (over && ui.mouse_released(mouse_button::left)) { tab.clear_search(); }
     } else if (tab.loading()) {
-        p.text_right(area, "Loading...", pal.accent, env_.fonts.small, 16.0f);
+        p.text_right(area, tr("Loading..."), pal.accent, env_.fonts.small, 16.0f);
     } else if (env_.settings.git_badges) {
         // the branch of the repository this folder is in, with how far it is from its upstream and how much is changed
         if (const auto repo = env_.git.lookup(tab.path()); repo && !repo->branch.empty()) {
@@ -57,7 +62,7 @@ void StatusBar::frame(Painter& p, const rect& area)
             if (repo->ahead > 0) { g += std::format("  +{}", repo->ahead); }
             if (repo->behind > 0) { g += std::format("  -{}", repo->behind); }
             const std::size_t changed = repo->files.size() + repo->untracked_dirs.size();
-            g += changed == 0 ? "  clean" : std::format("  {} changed", changed);
+            g += changed == 0 ? "  " + std::string{tr("clean")} : trf("  {} changed", changed);
             p.text_right(area, g, changed == 0 ? pal.text_dim : pal.warning, env_.fonts.small, 16.0f);
         }
     }

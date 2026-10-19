@@ -40,6 +40,8 @@ public:
     // is nearly sorted already); finish() sorts once at the end
     void append(std::vector<core::FileEntry>&& more);
     void finish();
+    // swaps in a fresh read of the same folder without a reload flash: selection, focus and anchor follow the names
+    void replace_entries(std::vector<core::FileEntry>&& fresh);
     [[nodiscard]] bool finished() const noexcept { return finished_; }
 
     void set_sort(SortSpec s);

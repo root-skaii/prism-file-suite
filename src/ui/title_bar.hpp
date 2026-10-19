@@ -28,8 +28,10 @@ private:
     Env&         env_;
     strata::rect area_{};
     strata::rect strip_{};     // tabs + the new-tab button
+    strata::rect admin_{};     // shield button / "Administrator" badge
     strata::rect min_{}, max_{}, close_{};
     int          drag_{-1};    // tab being dragged
+    strata::vec2 drag_origin_{}; // where the press landed (a few pixels of movement make it a drag)
     float        scroll_x_{};  // how far the tabs are scrolled (when there are more than fit)
     const void*  last_active_{};
     std::size_t  last_count_{};

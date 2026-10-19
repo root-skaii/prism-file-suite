@@ -1,8 +1,12 @@
 #include "ui/preview_pane.hpp"
+#include "ui/tr.hpp"
 
 #include "core/path.hpp"
+#include "ui/tr.hpp"
 #include "core/text.hpp"
+#include "ui/tr.hpp"
 #include "ui/panel.hpp"
+#include "ui/tr.hpp"
 
 #include <windows.h>
 
@@ -87,7 +91,7 @@ void PreviewPane::frame(Painter& p, const rect& area)
     const std::size_t sel = L.selected_count();
     if (sel > 1) {
         const rect center{{area.min.x, area.min.y + area.height() * 0.35f}, {area.max.x, area.min.y + area.height() * 0.35f + 28.0f}};
-        p.text_center(center, std::format("{} items selected", sel), pal.text, f.bold);
+        p.text_center(center, trf("{} items selected", sel), pal.text, f.bold);
         p.text_center(rect{{area.min.x, center.max.y}, {area.max.x, center.max.y + 24.0f}}, core::path::format_size(L.selected_bytes()), pal.text_dim, f.body);
         return;
     }
@@ -144,18 +148,18 @@ void PreviewPane::frame(Painter& p, const rect& area)
     };
     if (info_.is_dir) {
         if (scan_) {
-            row("Contains", std::format("{} files, {} folders{}", scan_->files(), scan_->folders(), scan_->done() ? "" : " ..."));
-            row("Size", core::path::format_size(scan_->bytes()) + (scan_->done() ? "" : " ..."));
+            row(tr("Contains"), trf("{} files, {} folders{}", scan_->files(), scan_->folders(), scan_->done() ? "" : " ..."));
+            row(tr("Size"), core::path::format_size(scan_->bytes()) + (scan_->done() ? "" : " ..."));
         }
     } else {
-        row("Size", core::path::format_size(info_.size));
+        row(tr("Size"), core::path::format_size(info_.size));
     }
-    row("Modified", core::path::format_time(info_.modified));
-    row("Created", core::path::format_time(info_.created));
+    row(tr("Modified"), core::path::format_time(info_.modified));
+    row(tr("Created"), core::path::format_time(info_.created));
     for (const auto& [k, v] : info_.version) {
-        if (k == "FileDescription" || k == "FileVersion" || k == "CompanyName") { row(k == "FileDescription" ? "Description" : (k == "FileVersion" ? "Version" : "Company"), v); }
+        if (k == "FileDescription" || k == "FileVersion" || k == "CompanyName") { row(k == "FileDescription" ? tr("Description") : (k == "FileVersion" ? tr("Version") : tr("Company")), v); }
     }
-    if (!info_.owner.empty()) { row("Owner", info_.owner); }
+    if (!info_.owner.empty()) { row(tr("Owner"), info_.owner); }
 }
 
 } // namespace prism::ui

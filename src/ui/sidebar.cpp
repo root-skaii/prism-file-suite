@@ -1,9 +1,15 @@
 #include "ui/sidebar.hpp"
+#include "ui/tr.hpp"
 
 #include "core/path.hpp"
+#include "ui/tr.hpp"
+#include "core/recycle.hpp"
 #include "core/shell_ops.hpp"
+#include "ui/tr.hpp"
 #include "core/text.hpp"
+#include "ui/tr.hpp"
 #include "ui/panel.hpp"
+#include "ui/tr.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -17,6 +23,10 @@ namespace prism::ui {
 using namespace strata;
 
 namespace {
+
+// the names the sidebar starts with; they are stored as typed, so they are translated only when shown
+[[maybe_unused]] constexpr const char* k_default_names[] = {N_("Quick access"), N_("This PC"), N_("Recent"), N_("Frequent"), N_("Home"), N_("Desktop"),
+                                                            N_("Downloads"), N_("Documents"), N_("Pictures"), N_("Music"), N_("Videos")};
 
 constexpr std::string_view k_pin_prefix = "\x01pin:";
 constexpr std::size_t      k_end        = std::string::npos; // (an insertion slot past the last element)
@@ -116,7 +126,7 @@ Sidebar::Spot Sidebar::spot_at(vec2 p, bool into_ok) const
         }
         case Kind::drive:
         case Kind::visit:
-            if (into_ok) {
+            if (into_ok && !core::is_device_path(r.path) && !core::recycle::inside(r.path)) {
                 spot.type = Spot::Type::into;
                 spot.path = r.path;
             }
@@ -154,11 +164,11 @@ void Sidebar::pin_dropped(const std::vector<std::string>& paths, std::string_vie
         if (core::path::is_directory(s)) { folders.push_back(s); }
     }
     if (folders.empty()) {
-        env_.cmd.toast("Only folders can be pinned to the sidebar", toast_kind::info);
+        env_.cmd.toast(tr("Only folders can be pinned to the sidebar"), toast_kind::info);
         return;
     }
     std::size_t pinned = 0;
-    const std::string label = folders.size() == 1 ? "Pin " + core::path::leaf(folders.front()) : "Pin folders";
+    const std::string label = folders.size() == 1 ? trf("Pin {}", core::path::leaf(folders.front())) : std::string{tr("Pin folders")};
     (void)env_.cmd.edit_sidebar(label, [&](model::SidebarLayout& l) {
         for (const std::string& f : folders) {
             if (l.pin(section, slot, f)) {
@@ -167,7 +177,7 @@ void Sidebar::pin_dropped(const std::vector<std::string>& paths, std::string_vie
             }
         }
     });
-    if (pinned == 0) { env_.cmd.toast("Already in the sidebar", toast_kind::info); }
+    if (pinned == 0) { env_.cmd.toast(tr("Already in the sidebar"), toast_kind::info); }
 }
 
 // --- rows -----------------------------------------------------------------------------------------------------------
@@ -227,7 +237,7 @@ void Sidebar::header(Painter& p, std::size_t si, float top_space)
 
     const color c = over ? pal.text_dim : pal.text_faint;
     const bool  renaming = rename_.active && rename_.target.kind == Kind::header && rename_.target.section == si;
-    if (!renaming) { p.text_left(rect{hdr.min, {plus.min.x, hdr.max.y}}, upper(sec.title), c, f.small, 20.0f); }
+    if (!renaming) { p.text_left(rect{hdr.min, {plus.min.x, hdr.max.y}}, upper(tr(sec.title)), c, f.small, 20.0f); }
     p.glyph_center(chev, sec.collapsed ? glyph::chevron_r : glyph::chevron_d, c);
     if (over && !sec.dynamic()) {
         if (over_plus) { p.dl().rect_filled(plus, pal.hover, 6.0f); }
@@ -241,9 +251,26 @@ void Sidebar::header(Painter& p, std::size_t si, float top_space)
                 if (over_plus) { pin_current(si); }
                 else { press_ = Press{true, false, Target{Kind::header, si, 0, {}}, mp}; }
             }
-            if (over_plus) { ui.tooltip("Pin the current folder here"); }
+            if (over_plus) { ui.tooltip(tr("Pin the current folder here")); }
         }
     }
+}
+
+// "Devices" title under the drives while a phone / camera is connected: collapses like a section, but is not part of the layout
+void Sidebar::devices_header(Painter& p, std::size_t si)
+{
+    context&       ui  = p.ui();
+    const Palette& pal = p.pal();
+    constexpr float top = 14.0f;
+
+    const item_result r   = ui.custom_item("##devices", {ui.content_width(), top + 26.0f});
+    const rect        hdr{{r.bounds.min.x, r.bounds.min.y + top}, r.bounds.max};
+    rows_.push_back({hdr, hdr, Kind::note, si, 0, {}});
+    const bool  over = r.hovered && hdr.contains(ui.mouse_pos()) && !press_.active && !drop_.has_value();
+    const color c    = over ? pal.text_dim : pal.text_faint;
+    p.text_left(hdr, upper(tr("Devices")), c, env_.fonts.small, 20.0f);
+    p.glyph_center(rect::from_size({hdr.max.x - 30.0f, hdr.min.y}, {22.0f, hdr.height()}), devices_collapsed_ ? glyph::chevron_r : glyph::chevron_d, c);
+    if (over && ui.mouse_clicked(mouse_button::left)) { devices_collapsed_ = !devices_collapsed_; }
 }
 
 void Sidebar::item_row(Painter& p, std::size_t si, std::size_t ii)
@@ -253,7 +280,8 @@ void Sidebar::item_row(Painter& p, std::size_t si, std::size_t ii)
     const Metrics& m   = p.metrics();
     const FontSet& f   = env_.fonts;
     const model::SidebarItem& it = env_.layout.sections()[si].items[ii];
-    const std::string label = it.label();
+    // (the built-in names are translated; a name the user typed stays as it is)
+    const std::string label = it.known.empty() ? it.label() : std::string{tr(it.label())};
     core::text::note_codepoints(label);
 
     const std::string key = it.query.empty() ? it.path : it.path + "?" + it.query; // (a folder and a search in it are two rows)
@@ -287,7 +315,7 @@ void Sidebar::item_row(Painter& p, std::size_t si, std::size_t ii)
         if (ui.mouse_clicked(mouse_button::left) && !rename_.active) { press_ = Press{true, false, t, ui.mouse_pos()}; }
         if (ui.mouse_clicked(mouse_button::right)) { menu_ = t; }
         if (ui.mouse_clicked(mouse_button::middle) && !missing) { env_.cmd.open_tab(it.path, false); }
-        ui.tooltip(missing ? it.path + "\nFolder not found" : (it.query.empty() ? it.path : "Search \"" + it.query + "\" in " + it.path));
+        ui.tooltip(missing ? trf("{}\nFolder not found", it.path) : (it.query.empty() ? it.path : trf("Search \"{}\" in {}", it.query, it.path)));
     }
 }
 
@@ -299,7 +327,8 @@ void Sidebar::drive_row(Painter& p, const core::Place& place)
     const FontSet& f   = env_.fonts;
     (void)m;
     const bool  compact = env_.theme.density() == Density::compact;
-    const float h       = compact ? 54.0f : 62.0f;
+    // (the bin has just a name: a row as short as a pinned folder's, not a drive's)
+    const float h       = place.recycle ? (compact ? 40.0f : 46.0f) : compact ? 54.0f : 62.0f;
     const std::string key = "##drive:" + place.path;
 
     const item_result r   = ui.custom_item(key, {ui.content_width(), h});
@@ -307,17 +336,20 @@ void Sidebar::drive_row(Painter& p, const core::Place& place)
     rows_.push_back({r.bounds, row, Kind::drive, 0, 0, place.path});
 
     const std::string& current = env_.tab().path();
-    const bool active = current.size() >= 2 && std::toupper(static_cast<unsigned char>(current[0])) == std::toupper(static_cast<unsigned char>(place.path[0])) && current[1] == ':';
+    // (a drive lights up for anything on it, except the bin that lives on it: that has a row of its own)
+    const bool in_bin = core::recycle::inside(current);
+    const bool active = place.recycle ? in_bin
+                                      : !in_bin && current.size() >= 2 && std::toupper(static_cast<unsigned char>(current[0])) == std::toupper(static_cast<unsigned char>(place.path[0])) && current[1] == ':';
     row_background(p, key, r, row, active);
     if (hint_.type == Spot::Type::into && hint_.path == place.path) {
         p.dl().rect_outline(row, pal.accent, 8.0f, 2.0f);
     }
 
     const color tint = pal.tint[static_cast<std::size_t>(core::FileKind::drive)];
-    const float tile = compact ? 30.0f : 34.0f;
+    const float tile = place.recycle ? (compact ? 26.0f : 30.0f) : compact ? 30.0f : 34.0f;
     const rect  ibox = rect::from_size({row.min.x + 12.0f, row.center().y - tile * 0.5f}, {tile, tile});
     p.dl().rect_filled(ibox, tint.scaled_alpha(0.16f), 9.0f);
-    p.glyph_center(ibox, place.removable ? glyph::usb : glyph::drive, tint);
+    p.glyph_center(ibox, place.device ? glyph::phone : place.recycle ? glyph::delete_ : place.optical ? glyph::disc : place.removable ? glyph::usb : glyph::drive, tint);
 
     // name, bar and free-space line, centred in the row (tighter in compact mode)
     const float tx    = ibox.max.x + 12.0f;
@@ -326,14 +358,21 @@ void Sidebar::drive_row(Painter& p, const core::Place& place)
     const float y0    = row.center().y - block * 0.5f - 1.0f;
     const float bar_y = compact ? 22.0f : 25.0f;
     const float free_y = compact ? 27.0f : 31.0f;
-    p.text_left(rect{{tx, y0}, {right, y0 + (compact ? 18.0f : 20.0f)}}, place.name, pal.text, f.body);
-    if (place.total > 0) {
+    if (place.total <= 0) {
+        // no bar: the name (and a device's second line) sits centred in the row instead of at the top of the bar layout
+        const float cy  = row.center().y;
+        const float gap = compact ? 8.0f : 9.0f;
+        const bool  two = place.device;
+        p.text_left(rect{{tx, cy - (two ? gap : 0.0f) - 9.0f}, {right, cy - (two ? gap : 0.0f) + 9.0f}}, place.name, pal.text, f.body);
+        if (two) { p.text_left(rect{{tx, cy + gap - 9.0f}, {right, cy + gap + 9.0f}}, tr("Opens in Explorer"), pal.text_dim, f.small); }
+    } else {
+        p.text_left(rect{{tx, y0}, {right, y0 + (compact ? 18.0f : 20.0f)}}, place.name, pal.text, f.body);
         const float used = std::clamp(1.0f - static_cast<float>(place.free) / static_cast<float>(place.total), 0.0f, 1.0f);
         const rect  bar{{tx, y0 + bar_y}, {right, y0 + bar_y + 4.0f}};
         p.dl().rect_filled(bar, pal.text_faint.scaled_alpha(0.30f), 2.0f);
         const float filled = ui.animate(key + "#u", used, 6.0f);
         p.dl().rect_filled({bar.min, {bar.min.x + bar.width() * filled, bar.max.y}}, used > 0.9f ? pal.danger : pal.accent, 2.0f);
-        const std::string free = core::path::format_size(place.free) + " free of " + core::path::format_size(place.total);
+        const std::string free = trf("{} free of {}", core::path::format_size(place.free), core::path::format_size(place.total));
         p.text_left(rect{{tx, y0 + free_y}, {right, y0 + free_y + 18.0f}}, free, pal.text_dim, f.small);
     }
 
@@ -341,7 +380,10 @@ void Sidebar::drive_row(Painter& p, const core::Place& place)
         const Target t{Kind::drive, 0, 0, place.path};
         if (ui.mouse_clicked(mouse_button::left)) { press_ = Press{true, false, t, ui.mouse_pos()}; }
         if (ui.mouse_clicked(mouse_button::right)) { menu_ = t; }
-        if (ui.mouse_clicked(mouse_button::middle)) { env_.cmd.open_tab(place.path, false); }
+        if (ui.mouse_clicked(mouse_button::middle)) {
+            if (place.device) { (void)core::shell::open_device(place.path); } else { env_.cmd.open_tab(place.path, false); }
+        }
+        if (place.device) { ui.tooltip(tr("Phones and cameras open in Windows Explorer")); }
     }
 }
 
@@ -355,7 +397,7 @@ void Sidebar::empty_row(Painter& p, std::size_t si)
     rows_.push_back({r.bounds, row, Kind::empty, si, 0, {}});
     const bool hot = hint_.type == Spot::Type::between && hint_.section == si;
     p.dl().rect_outline(row, hot ? pal.accent : pal.text_faint.scaled_alpha(0.35f), 8.0f, hot ? 2.0f : 1.0f);
-    p.text_center(row, "Drop folders here", pal.text_faint, env_.fonts.small);
+    p.text_center(row, tr("Drop folders here"), pal.text_faint, env_.fonts.small);
     if (r.hovered && ui.mouse_clicked(mouse_button::right)) { menu_ = Target{Kind::header, si, 0, {}}; }
 }
 
@@ -450,11 +492,19 @@ void Sidebar::frame(Painter& p, const rect& area, const FrameInput& in)
             if (!sec.collapsed) {
                 if (sec.drives) {
                     for (const core::Place& pl : drives_) {
-                        if (!env_.layout.drive_hidden(pl.path)) { drive_row(p, pl); }
+                        if (!pl.device && !env_.layout.drive_hidden(pl.path)) { drive_row(p, pl); }
+                    }
+                    if (std::ranges::any_of(drives_, [](const core::Place& pl) { return pl.device; })) {
+                        devices_header(p, si);
+                        if (!devices_collapsed_) {
+                            for (const core::Place& pl : drives_) {
+                                if (pl.device) { drive_row(p, pl); }
+                            }
+                        }
                     }
                 } else if (sec.auto_kind != model::SidebarSection::Auto::none) {
                     if (auto_rows_[si].empty()) {
-                        note_row(p, si, !env_.settings.track_history ? "History is off (Settings)" : sec.auto_kind == model::SidebarSection::Auto::recent ? "Folders you open show up here" : "Folders you keep coming back to");
+                        note_row(p, si, !env_.settings.track_history ? tr("History is off (Settings)") : sec.auto_kind == model::SidebarSection::Auto::recent ? tr("Folders you open show up here") : tr("Folders you keep coming back to"));
                     }
                     for (const std::string& path : auto_rows_[si]) { visit_row(p, si, path); }
                 } else if (sec.items.empty()) {
@@ -512,7 +562,7 @@ void Sidebar::click(const Target& t)
         break;
     case Kind::item:
         if (probe_.missing(t.path)) {
-            env_.cmd.toast("This folder is gone: " + t.path, toast_kind::warning);
+            env_.cmd.toast(trf("This folder is gone: {}", t.path), toast_kind::warning);
             probe_.poke();
         } else if (const std::string& q = env_.layout.sections()[t.section].items[t.index].query; !q.empty()) {
             // a saved search: the folder, then the query below it (the filter box follows the tab)
@@ -530,7 +580,7 @@ void Sidebar::click(const Target& t)
         break;
     case Kind::drive:
     case Kind::visit:
-        env_.tab().navigate(t.path);
+        if (core::is_device_path(t.path)) { (void)core::shell::open_device(t.path); } else { env_.tab().navigate(t.path); }
         break;
     case Kind::empty:
     case Kind::note:
@@ -570,12 +620,12 @@ void Sidebar::settle_press(Painter& p)
         const Spot s = spot_at(mp, false);
         if (s.type == Spot::Type::between) {
             const model::ItemPos from{pr.target.section, pr.target.index};
-            (void)env_.cmd.edit_sidebar("Move " + secs[from.section].items[from.index].label(),
+            (void)env_.cmd.edit_sidebar(trf("Move {}", secs[from.section].items[from.index].label()),
                                         [&](model::SidebarLayout& l) { (void)l.move_item(from, s.section, s.slot); });
         }
     } else if (pr.target.kind == Kind::header) {
         const std::size_t slot = section_slot_at(mp.y).first;
-        (void)env_.cmd.edit_sidebar("Move " + secs[pr.target.section].title,
+        (void)env_.cmd.edit_sidebar(trf("Move {}", secs[pr.target.section].title),
                                     [&](model::SidebarLayout& l) { (void)l.move_section(pr.target.section, slot); });
     }
 }
@@ -650,16 +700,16 @@ void Sidebar::pin_current(std::size_t section)
 {
     const std::string path = env_.tab().path();
     if (path.empty() || !core::path::is_directory(path)) {
-        env_.cmd.toast("Open a folder first", toast_kind::info);
+        env_.cmd.toast(tr("Open a folder first"), toast_kind::info);
         return;
     }
     if (env_.layout.find(path)) {
-        env_.cmd.toast("Already in the sidebar", toast_kind::info);
+        env_.cmd.toast(tr("Already in the sidebar"), toast_kind::info);
         return;
     }
     const std::string name = core::path::leaf(path);
-    if (env_.cmd.edit_sidebar("Pin " + name, [&](model::SidebarLayout& l) { (void)l.pin(section, k_end, path); })) {
-        env_.cmd.toast("Pinned " + name, toast_kind::info);
+    if (env_.cmd.edit_sidebar(trf("Pin {}", name), [&](model::SidebarLayout& l) { (void)l.pin(section, k_end, path); })) {
+        env_.cmd.toast(trf("Pinned {}", name), toast_kind::info);
     }
 }
 
@@ -721,10 +771,10 @@ void Sidebar::draw_rename(Painter& p)
     const std::string text = trimmed(rename_.text);
     core::text::note_codepoints(text);
     if (t.kind == Kind::item) {
-        (void)env_.cmd.edit_sidebar("Rename " + env_.layout.sections()[t.section].items[t.index].label(),
+        (void)env_.cmd.edit_sidebar(trf("Rename {}", env_.layout.sections()[t.section].items[t.index].label()),
                                     [&](model::SidebarLayout& l) { (void)l.rename_item({t.section, t.index}, text); });
     } else if (!text.empty()) {
-        (void)env_.cmd.edit_sidebar("Rename section", [&](model::SidebarLayout& l) { (void)l.rename_section(t.section, text); });
+        (void)env_.cmd.edit_sidebar(tr("Rename section"), [&](model::SidebarLayout& l) { (void)l.rename_section(t.section, text); });
     }
 }
 
@@ -769,7 +819,7 @@ void Sidebar::icon_popup(Painter& p)
     const color tint = color_now != 0 ? from_argb(color_now) : auto_tint;
 
     const item_result title = ui.custom_item("##ic_title", {288.0f, 28.0f});
-    p.text_left(title.bounds, "Icon and colour", pal.text, env_.fonts.bold, 6.0f);
+    p.text_left(title.bounds, tr("Icon and colour"), pal.text, env_.fonts.bold, 6.0f);
 
     constexpr int   cols = 8;
     constexpr float cell = 34.0f;
@@ -800,14 +850,14 @@ void Sidebar::icon_popup(Painter& p)
         }
         if (sel) { p.dl().rect_outline(c.expanded(3.0f), pal.text, r + 3.0f, 1.5f); }
         else if (hot) { p.dl().rect_outline(c.expanded(2.0f), pal.text_dim, r + 2.0f, 1.0f); }
-        if (hot) { ui.tooltip(k_colors[i] == 0 ? "Automatic" : "Colour"); }
+        if (hot) { ui.tooltip(k_colors[i] == 0 ? tr("Automatic") : tr("Colour")); }
         if (hot && ui.mouse_released(mouse_button::left)) { color_now = k_colors[i]; changed = true; }
     }
 
     const item_result reset = ui.custom_item("##ic_reset", {288.0f, 30.0f});
     const rect rb = rect{{reset.bounds.min.x + 4.0f, reset.bounds.min.y + 2.0f}, {reset.bounds.max.x - 4.0f, reset.bounds.max.y - 2.0f}};
     if (reset.hovered) { p.dl().rect_filled(rb, pal.hover, 7.0f); }
-    p.text_center(rb, "Back to automatic", pal.text_dim, env_.fonts.small);
+    p.text_center(rb, tr("Back to automatic"), pal.text_dim, env_.fonts.small);
     if (reset.hovered && ui.mouse_released(mouse_button::left)) {
         glyph_now = 0;
         color_now = 0;
@@ -815,7 +865,7 @@ void Sidebar::icon_popup(Painter& p)
     }
 
     if (changed) {
-        (void)env_.cmd.edit_sidebar("Change icon of " + it.label(),
+        (void)env_.cmd.edit_sidebar(trf("Change icon of {}", it.label()),
                                     [&](model::SidebarLayout& l) { (void)l.set_item_style(at, glyph_now, color_now); });
     }
 }
@@ -831,7 +881,7 @@ void Sidebar::context_menu(Painter& p)
 
     const Target t = valid(menu_) ? menu_ : Target{};
     const auto&  secs = env_.layout.sections();
-    const auto   edit = [&](std::string label, const std::function<void(model::SidebarLayout&)>& fn) { (void)env_.cmd.edit_sidebar(std::move(label), fn); };
+    const auto   edit = [&](std::string_view label, const std::function<void(model::SidebarLayout&)>& fn) { (void)env_.cmd.edit_sidebar(label, fn); };
 
     if (t.kind == Kind::item) {
         // (copies: the edits below change the layout under these references)
@@ -846,72 +896,92 @@ void Sidebar::context_menu(Painter& p)
         }
         const model::ItemPos at{t.section, t.index};
 
-        if (ui.menu_item("Open", "", false, !gone)) { env_.tab().navigate(it.path); }
-        if (ui.menu_item("Open in new tab", "", false, !gone)) { env_.cmd.open_tab(it.path, true); }
+        if (ui.menu_item(tr("Open"), "", false, !gone)) { env_.tab().navigate(it.path); }
+        if (ui.menu_item(tr("Open in new tab"), "", false, !gone)) { env_.cmd.open_tab(it.path, true); }
         ui.menu_separator();
-        if (ui.menu_item("Rename")) { begin_rename(t); }
-        if (ui.menu_item("Change icon and colour")) {
+        if (ui.menu_item(tr("Rename"))) { begin_rename(t); }
+        if (ui.menu_item(tr("Change icon and colour"))) {
             icon_target_ = t;
             icon_want_   = true;
             icon_pos_    = ui.mouse_pos();
         }
-        if (ui.menu_item("Move up", "", false, !first)) { edit("Move " + label, [=](model::SidebarLayout& l) { (void)l.move_item(at, at.section, at.index - 1); }); }
-        if (ui.menu_item("Move down", "", false, !last)) { edit("Move " + label, [=](model::SidebarLayout& l) { (void)l.move_item(at, at.section, at.index + 2); }); }
-        if (auto sub = ui.menu("Move to section", !others.empty())) {
+        if (ui.menu_item(tr("Move up"), "", false, !first)) { edit("Move " + label, [=](model::SidebarLayout& l) { (void)l.move_item(at, at.section, at.index - 1); }); }
+        if (ui.menu_item(tr("Move down"), "", false, !last)) { edit("Move " + label, [=](model::SidebarLayout& l) { (void)l.move_item(at, at.section, at.index + 2); }); }
+        if (auto sub = ui.menu(tr("Move to section"), !others.empty())) {
             for (const auto& other : others) {
                 const std::size_t to = other.first;
-                if (ui.menu_item(other.second)) { edit("Move " + label, [=](model::SidebarLayout& l) { (void)l.move_item(at, to, k_end); }); }
+                if (ui.menu_item(other.second)) { edit(trf("Move {}", label), [=](model::SidebarLayout& l) { (void)l.move_item(at, to, k_end); }); }
             }
         }
         ui.menu_separator();
-        if (ui.menu_item("Remove from sidebar")) { edit("Unpin " + label, [=](model::SidebarLayout& l) { (void)l.remove_item(at); }); }
-        if (ui.menu_item("Properties", "", false, !gone)) { env_.cmd.open_properties({it.path}); }
+        if (ui.menu_item(tr("Remove from sidebar"))) { edit("Unpin " + label, [=](model::SidebarLayout& l) { (void)l.remove_item(at); }); }
+        if (ui.menu_item(tr("Properties"), "", false, !gone)) { env_.cmd.open_properties({it.path}); }
+        return;
+    }
+
+    if (t.kind == Kind::drive && core::is_device_path(t.path)) {
+        const std::string id = t.path;
+        if (ui.menu_item(tr("Open in Explorer"))) { (void)core::shell::open_device(id); }
+        return;
+    }
+
+    if (t.kind == Kind::drive && core::recycle::inside(t.path)) { // the Recycle Bin row
+        const std::string bin = t.path;
+        if (ui.menu_item(tr("Open"))) { env_.tab().navigate(bin); }
+        if (ui.menu_item(tr("Open in new tab"))) { env_.cmd.open_tab(bin, true); }
+        ui.menu_separator();
+        if (ui.menu_item(tr("Empty Recycle Bin"))) { env_.cmd.empty_recycle_bin(core::recycle::drive_of(bin)); }
         return;
     }
 
     if (t.kind == Kind::drive) {
         const std::string root = t.path;
-        if (ui.menu_item("Open")) { env_.tab().navigate(root); }
-        if (ui.menu_item("Open in new tab")) { env_.cmd.open_tab(root, true); }
+        const auto        found = std::ranges::find(drives_, root, &core::Place::path);
+        const std::string bin   = found != drives_.end() ? found->bin : std::string{};
+        if (ui.menu_item(tr("Open"))) { env_.tab().navigate(root); }
+        if (ui.menu_item(tr("Open in new tab"))) { env_.cmd.open_tab(root, true); }
         ui.menu_separator();
-        if (ui.menu_item("Hide from sidebar")) { edit("Hide " + root, [=](model::SidebarLayout& l) { (void)l.hide_drive(root); }); }
-        if (ui.menu_item("Properties")) { env_.cmd.open_properties({root}); }
+        if (ui.menu_item(tr("Open Recycle Bin"), "", false, !bin.empty())) { env_.tab().navigate(bin); }
+        if (ui.menu_item(tr("Empty Recycle Bin"), "", false, !bin.empty())) { env_.cmd.empty_recycle_bin(root); }
+        ui.menu_separator();
+        if (ui.menu_item(tr("Hide from sidebar"))) { edit("Hide " + root, [=](model::SidebarLayout& l) { (void)l.hide_drive(root); }); }
+        if (ui.menu_item(tr("Properties"))) { env_.cmd.open_properties({root}); }
         return;
     }
 
     if (t.kind == Kind::visit) {
         const std::string path = t.path;
-        if (ui.menu_item("Open")) { env_.tab().navigate(path); }
-        if (ui.menu_item("Open in new tab")) { env_.cmd.open_tab(path, true); }
+        if (ui.menu_item(tr("Open"))) { env_.tab().navigate(path); }
+        if (ui.menu_item(tr("Open in new tab"))) { env_.cmd.open_tab(path, true); }
         ui.menu_separator();
-        if (ui.menu_item("Pin to sidebar")) { env_.cmd.toggle_pin(path); }
-        if (ui.menu_item("Remove from this list")) { env_.visits.forget(path); }
-        if (ui.menu_item("Properties")) { env_.cmd.open_properties({path}); }
+        if (ui.menu_item(tr("Pin to sidebar"))) { env_.cmd.toggle_pin(path); }
+        if (ui.menu_item(tr("Remove from this list"))) { env_.visits.forget(path); }
+        if (ui.menu_item(tr("Properties"))) { env_.cmd.open_properties({path}); }
         return;
     }
 
     if (t.kind == Kind::header) {
         const model::SidebarSection sec = secs[t.section];
         const std::size_t s = t.section;
-        if (!sec.dynamic() && ui.menu_item("Pin current folder here")) { pin_current(s); }
-        if (ui.menu_item("Rename")) { begin_rename(t); }
-        if (ui.menu_item(sec.collapsed ? "Expand" : "Collapse")) { (void)env_.layout.set_collapsed(s, !sec.collapsed); }
-        if (ui.menu_item("Move up", "", false, s > 0)) { edit("Move " + sec.title, [=](model::SidebarLayout& l) { (void)l.move_section(s, s - 1); }); }
-        if (ui.menu_item("Move down", "", false, s + 1 < secs.size())) { edit("Move " + sec.title, [=](model::SidebarLayout& l) { (void)l.move_section(s, s + 2); }); }
+        if (!sec.dynamic() && ui.menu_item(tr("Pin current folder here"))) { pin_current(s); }
+        if (ui.menu_item(tr("Rename"))) { begin_rename(t); }
+        if (ui.menu_item(sec.collapsed ? tr("Expand") : tr("Collapse"))) { (void)env_.layout.set_collapsed(s, !sec.collapsed); }
+        if (ui.menu_item(tr("Move up"), "", false, s > 0)) { edit("Move " + sec.title, [=](model::SidebarLayout& l) { (void)l.move_section(s, s - 1); }); }
+        if (ui.menu_item(tr("Move down"), "", false, s + 1 < secs.size())) { edit("Move " + sec.title, [=](model::SidebarLayout& l) { (void)l.move_section(s, s + 2); }); }
         ui.menu_separator();
-        if (sec.auto_kind != model::SidebarSection::Auto::none && ui.menu_item("Clear history")) { env_.visits.clear(); }
-        if (ui.menu_item("Remove section")) { env_.cmd.request_remove_section(s); }
+        if (sec.auto_kind != model::SidebarSection::Auto::none && ui.menu_item(tr("Clear history"))) { env_.visits.clear(); }
+        if (ui.menu_item(tr("Remove section"))) { env_.cmd.request_remove_section(s); }
         return;
     }
 
     // empty space
-    if (ui.menu_item("New section")) {
+    if (ui.menu_item(tr("New section"))) {
         // after the last folder section, so it does not land below the drives
         std::size_t slot = 0;
         for (std::size_t s = 0; s < secs.size(); ++s) {
             if (!secs[s].dynamic()) { slot = s + 1; }
         }
-        if (env_.cmd.edit_sidebar("New section", [=](model::SidebarLayout& l) { (void)l.add_section(slot, "New section"); })) {
+        if (env_.cmd.edit_sidebar(tr("New section"), [=](model::SidebarLayout& l) { (void)l.add_section(slot, "New section"); })) {
             begin_rename(Target{Kind::header, slot, 0, {}});
         }
     }
@@ -919,32 +989,32 @@ void Sidebar::context_menu(Painter& p)
     for (std::size_t s = 0; s < secs.size(); ++s) {
         if (!secs[s].drives) { auto_slot = s + 1; }
     }
-    if (!env_.layout.has_drives() && ui.menu_item("Show This PC")) {
-        edit("Show This PC", [](model::SidebarLayout& l) { (void)l.add_drives_section(k_end); });
+    if (!env_.layout.has_drives() && ui.menu_item(tr("Show This PC"))) {
+        edit(tr("Show This PC"), [](model::SidebarLayout& l) { (void)l.add_drives_section(k_end); });
     }
-    if (!env_.layout.has_auto(model::SidebarSection::Auto::recent) && ui.menu_item("Show recent folders")) {
-        edit("Show recent folders", [=](model::SidebarLayout& l) { (void)l.add_auto_section(auto_slot, model::SidebarSection::Auto::recent); });
+    if (!env_.layout.has_auto(model::SidebarSection::Auto::recent) && ui.menu_item(tr("Show recent folders"))) {
+        edit(tr("Show recent folders"), [=](model::SidebarLayout& l) { (void)l.add_auto_section(auto_slot, model::SidebarSection::Auto::recent); });
     }
-    if (!env_.layout.has_auto(model::SidebarSection::Auto::frequent) && ui.menu_item("Show frequent folders")) {
-        edit("Show frequent folders", [=](model::SidebarLayout& l) { (void)l.add_auto_section(auto_slot, model::SidebarSection::Auto::frequent); });
+    if (!env_.layout.has_auto(model::SidebarSection::Auto::frequent) && ui.menu_item(tr("Show frequent folders"))) {
+        edit(tr("Show frequent folders"), [=](model::SidebarLayout& l) { (void)l.add_auto_section(auto_slot, model::SidebarSection::Auto::frequent); });
     }
     if (const auto& hidden = env_.layout.hidden_drives(); !hidden.empty()) {
         const std::vector<std::string> roots = hidden; // (a copy: showing one changes the list)
-        if (auto sub = ui.menu("Hidden drives")) {
+        if (auto sub = ui.menu(tr("Hidden drives"))) {
             for (const std::string& root : roots) {
                 std::string name = root;
                 for (const core::Place& d : drives_) {
                     if (d.path == root) { name = d.name; }
                 }
-                if (ui.menu_item("Show " + name)) { edit("Show " + root, [=](model::SidebarLayout& l) { (void)l.show_drive(root); }); }
+                if (ui.menu_item(trf("Show {}", name))) { edit(trf("Show {}", root), [=](model::SidebarLayout& l) { (void)l.show_drive(root); }); }
             }
         }
     }
     ui.menu_separator();
-    if (ui.menu_item("Copy layout")) { env_.cmd.copy_sidebar(); }
-    if (ui.menu_item("Paste layout", "", false, paste_ok_)) { env_.cmd.paste_sidebar(); }
+    if (ui.menu_item(tr("Copy layout"))) { env_.cmd.copy_sidebar(); }
+    if (ui.menu_item(tr("Paste layout"), "", false, paste_ok_)) { env_.cmd.paste_sidebar(); }
     ui.menu_separator();
-    if (ui.menu_item("Reset sidebar to defaults")) { edit("Reset sidebar", [](model::SidebarLayout& l) { l.reset(); }); }
+    if (ui.menu_item(tr("Reset sidebar to defaults"))) { edit(tr("Reset sidebar"), [](model::SidebarLayout& l) { l.reset(); }); }
 }
 
 } // namespace prism::ui

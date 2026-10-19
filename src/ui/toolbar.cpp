@@ -1,11 +1,19 @@
 #include "ui/toolbar.hpp"
+#include "ui/tr.hpp"
 
 #include "core/path.hpp"
+#include "ui/tr.hpp"
+#include "core/recycle.hpp"
 #include "core/text.hpp"
+#include "ui/tr.hpp"
 #include "core/shell_menu.hpp"
+#include "ui/tr.hpp"
 #include "core/shell_ops.hpp"
+#include "ui/tr.hpp"
 #include "ui/new_menu.hpp"
+#include "ui/tr.hpp"
 #include "ui/panel.hpp"
+#include "ui/tr.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -50,20 +58,20 @@ struct HelpRow {
 };
 
 constexpr HelpRow help_rows[] = {
-    {"report 2026",       "all words must match"},
-    {"\"annual report\"", "an exact phrase"},
-    {"*.cpp",             "wildcards: * any text, ? one character"},
-    {"report?.txt",       "a wildcard pattern matches the whole name"},
-    {".png | .jpg",       "either one  (| or OR)"},
-    {"-draft",            "leave out names containing draft"},
-    {"ext:cpp,h",         "by extension  (-ext:obj to exclude)"},
-    {"type:image",        "image video audio doc code archive text pdf exe font ..."},
-    {"kind:folder",       "only folders  (kind:file: only files)"},
-    {"size:>10mb",        "also <, >=, 1kb..1mb  (b kb mb gb)"},
-    {"modified:today",    "yesterday week month year 3d 2026-10 >2026-01-01"},
-    {"hidden:yes",        "hidden items (they are shown for this query)"},
-    {"re:^IMG_\\d+",      "a regular expression on the name"},
-    {"src\\*.h",          "a path: only in Subfolders results"},
+    {"report 2026",       N_("all words must match")},
+    {"\"annual report\"", N_("an exact phrase")},
+    {"*.cpp",             N_("wildcards: * any text, ? one character")},
+    {"report?.txt",       N_("a wildcard pattern matches the whole name")},
+    {".png | .jpg",       N_("either one  (| or OR)")},
+    {"-draft",            N_("leave out names containing draft")},
+    {"ext:cpp,h",         N_("by extension  (-ext:obj to exclude)")},
+    {"type:image",        N_("image video audio doc code archive text pdf exe font ...")},
+    {"kind:folder",       N_("only folders  (kind:file: only files)")},
+    {"size:>10mb",        N_("also <, >=, 1kb..1mb  (b kb mb gb)")},
+    {"modified:today",    N_("yesterday week month year 3d 2026-10 >2026-01-01")},
+    {"hidden:yes",        N_("hidden items (they are shown for this query)")},
+    {"re:^IMG_\\d+",      N_("a regular expression on the name")},
+    {"src\\*.h",          N_("a path: only in Subfolders results")},
 };
 
 } // namespace
@@ -130,7 +138,7 @@ bool Toolbar::scope_control(Painter& p, float half, float height)
         p.dl().rect_filled(rect{{m.x - 4.0f, m.y + 4.0f}, {m.x + 8.0f, m.y + 5.5f}}, c, 0.75f);
     }
     if (over >= 0) {
-        ui.tooltip(over == 0 ? "This folder: filter what is shown, as you type" : "Subfolders: search everything below this folder");
+        ui.tooltip(over == 0 ? tr("This folder: filter what is shown, as you type") : tr("Subfolders: search everything below this folder"));
         env_.cmd.set_cursor(cursor_kind::hand);
     }
     if (over >= 0 && ui.mouse_released(mouse_button::left) && (over == 1) != sub) {
@@ -164,12 +172,12 @@ void Toolbar::help_popup(Painter& p, model::Tab& tab)
 
     const float row_h = 28.0f;
     const item_result title = ui.custom_item("##help_title", {540.0f, 26.0f});
-    p.text_left(title.bounds, "Search and filter", pal.text, f.bold, 8.0f);
+    p.text_left(title.bounds, tr("Search and filter"), pal.text, f.bold, 8.0f);
     for (std::size_t i = 0; i < std::size(help_rows); ++i) {
         const item_result r = ui.custom_item("##help" + std::to_string(i), {540.0f, row_h});
         if (r.hovered) { p.dl().rect_filled(r.bounds, pal.hover, 6.0f); }
         p.text_left(rect{r.bounds.min, {r.bounds.min.x + 190.0f, r.bounds.max.y}}, help_rows[i].example, pal.accent, f.body, 8.0f);
-        p.text_left(rect{{r.bounds.min.x + 192.0f, r.bounds.min.y}, r.bounds.max}, help_rows[i].what, pal.text_dim, f.small, 4.0f);
+        p.text_left(rect{{r.bounds.min.x + 192.0f, r.bounds.min.y}, r.bounds.max}, tr(help_rows[i].what), pal.text_dim, f.small, 4.0f);
         if (r.hovered && ui.mouse_released(mouse_button::left)) {
             filter_text_ = help_rows[i].example;
             apply_filter(tab, env_.settings.search_subfolders);
@@ -180,16 +188,16 @@ void Toolbar::help_popup(Painter& p, model::Tab& tab)
         // keep what you typed: it becomes a sidebar entry that reopens this folder and runs the search
         const item_result r = ui.custom_item("##help_save", {540.0f, row_h});
         if (r.hovered) { p.dl().rect_filled(r.bounds, pal.hover, 6.0f); env_.cmd.set_cursor(cursor_kind::hand); }
-        p.text_left(r.bounds, "Save this search to the sidebar  (Ctrl+Shift+S)", pal.accent, f.bold, 8.0f);
+        p.text_left(r.bounds, trf("Save this search to the sidebar  ({})", key_hint(env_.binds, "save_search")), pal.accent, f.bold, 8.0f);
         if (r.hovered && ui.mouse_released(mouse_button::left)) {
             env_.cmd.request_action("save_search");
             ui.close_popup();
         }
     }
     const rect foot = ui.custom_item("##help_foot", {540.0f, 56.0f}).bounds;
-    p.text_left(rect{foot.min, {foot.max.x, foot.min.y + 18.0f}}, "This folder filters the list as you type.", pal.text_dim, f.small, 8.0f);
-    p.text_left(rect{{foot.min.x, foot.min.y + 18.0f}, {foot.max.x, foot.min.y + 36.0f}}, "Subfolders searches everything below it: press Enter  (Ctrl+Enter from This folder).", pal.text_dim, f.small, 8.0f);
-    p.text_left(rect{{foot.min.x, foot.min.y + 36.0f}, {foot.max.x, foot.max.y}}, "Aa matches case. .* reads plain words as regular expressions. Esc clears.", pal.text_dim, f.small, 8.0f);
+    p.text_left(rect{foot.min, {foot.max.x, foot.min.y + 18.0f}}, tr("This folder filters the list as you type."), pal.text_dim, f.small, 8.0f);
+    p.text_left(rect{{foot.min.x, foot.min.y + 18.0f}, {foot.max.x, foot.min.y + 36.0f}}, tr("Subfolders searches everything below it: press Enter  (Ctrl+Enter from This folder)."), pal.text_dim, f.small, 8.0f);
+    p.text_left(rect{{foot.min.x, foot.min.y + 36.0f}, {foot.max.x, foot.max.y}}, tr("Aa matches case. .* reads plain words as regular expressions. Esc clears."), pal.text_dim, f.small, 8.0f);
 }
 
 void Toolbar::address(Painter& p, float area_x, float area_y, float width, float height)
@@ -213,7 +221,7 @@ void Toolbar::address(Painter& p, float area_x, float area_y, float width, float
         ui.set_next_item_width(width);
         ui.push_var(style_var::frame_padding_y, (height - p.line_height(f.body)) * 0.5f);
         ui.push_color(style_color::widget_bg, color{0, 0, 0, 0});
-        (void)ui.input_text("##address", edit_text_, "Type a path");
+        (void)ui.input_text("##address", edit_text_, tr("Type a path"));
         ui.pop_color();
         ui.pop_var();
         ++edit_age_;
@@ -227,7 +235,7 @@ void Toolbar::address(Painter& p, float area_x, float area_y, float width, float
                 if (core::shell::run_command(edit_text_, tab.path())) {
                     editing_ = false;
                 } else {
-                    env_.cmd.toast("Not a folder or a command: " + edit_text_, toast_kind::error);
+                    env_.cmd.toast(trf("Not a folder or a command: {}", edit_text_), toast_kind::error);
                 }
             }
         } else if (ui.key_pressed(key::escape) || (edit_age_ >= 3 && !ui.field_focused("##address"))) {
@@ -268,7 +276,15 @@ void Toolbar::address(Painter& p, float area_x, float area_y, float width, float
             from = to + 1;
         }
     } else {
-        for (auto& s : core::path::segments(tab.path())) { add_seg(std::move(s.name), std::move(s.path)); }
+        auto parts = core::path::segments(tab.path());
+        // the Recycle Bin: "Recycle Bin > ..." instead of "C:\ > $Recycle.Bin > S-1-5-21-..."
+        const auto bin = std::ranges::find_if(parts, [](const auto& s) { return core::text::lower_ascii(s.name) == "$recycle.bin"; });
+        if (bin != parts.end() && std::next(bin) != parts.end()) {
+            for (auto it = parts.begin(); it != bin; ++it) { add_seg(std::move(it->name), std::move(it->path)); } // ("C:\")
+            add_seg(std::string{tr("Recycle Bin")}, std::next(bin)->path);
+            parts.erase(parts.begin(), bin + 2);
+        }
+        for (auto& s : parts) { add_seg(std::move(s.name), std::move(s.path)); }
     }
     const float chev = 16.0f;
     const float avail = width - 16.0f;
@@ -342,36 +358,37 @@ void Toolbar::crumb_context_menu(Painter& p)
     const std::string& dir = crumb_ctx_path_;
     model::Tab&        tab = env_.tab();
 
-    if (ui.menu_item("Open")) { tab.navigate(dir); }
-    if (ui.menu_item("Open in new tab")) { env_.cmd.open_tab(dir, true); }
+    if (ui.menu_item(tr("Open"))) { tab.navigate(dir); }
+    if (ui.menu_item(tr("Open in new tab"))) { env_.cmd.open_tab(dir, true); }
     ui.menu_separator();
-    if (ui.menu_item("New folder here")) {
+    if (core::recycle::inside(dir) && ui.menu_item(tr("Empty Recycle Bin"))) { env_.cmd.empty_recycle_bin(core::recycle::drive_of(dir)); }
+    if (ui.menu_item(tr("New folder here"))) {
         const std::string name = core::FileOps::create_folder(dir);
         if (name.empty()) {
-            env_.cmd.toast("Could not create a folder there", toast_kind::error);
+            env_.cmd.toast(tr("Could not create a folder there"), toast_kind::error);
         } else {
             const std::string made = core::path::join(dir, name);
-            env_.history.push({"New folder " + name, [made] { return core::FileOps::remove_empty_folder(made); }, {}});
-            env_.cmd.toast("Created " + name, toast_kind::success);
+            env_.history.push({trf("New folder {}", name), [made] { return core::FileOps::remove_empty_folder(made); }, {}});
+            env_.cmd.toast(trf("Created {}", name), toast_kind::success);
             if (core::path::normalize(tab.path()) == core::path::normalize(dir)) { tab.reveal_name = name; }
             tab.refresh();
         }
     }
-    if (ui.menu_item("Paste into folder", "", false, crumb_ctx_paste_)) {
+    if (ui.menu_item(tr("Paste into folder"), "", false, crumb_ctx_paste_)) {
         std::vector<std::string> paths;
         bool cut = false;
         if (core::clipboard_get_files(paths, cut)) { env_.ops.start(cut ? core::OpKind::move : core::OpKind::copy, std::move(paths), dir); }
     }
     ui.menu_separator();
-    if (ui.menu_item(env_.layout.find(dir) ? "Unpin from sidebar" : "Pin to sidebar")) { env_.cmd.toggle_pin(dir); }
-    if (ui.menu_item("Copy path")) {
+    if (ui.menu_item(env_.layout.find(dir) ? tr("Unpin from sidebar") : tr("Pin to sidebar"))) { env_.cmd.toggle_pin(dir); }
+    if (ui.menu_item(tr("Copy path"))) {
         (void)core::shell::set_clipboard_text(dir);
-        env_.cmd.toast("Path copied", toast_kind::info);
+        env_.cmd.toast(tr("Path copied"), toast_kind::info);
     }
-    if (ui.menu_item("Show in File Explorer")) { (void)core::shell::reveal_in_explorer(dir); }
-    if (ui.menu_item("Properties", "Alt+Enter")) { env_.cmd.open_properties({dir}); }
+    if (ui.menu_item(tr("Show in File Explorer"))) { (void)core::shell::reveal_in_explorer(dir); }
+    if (ui.menu_item(tr("Properties"), env_.binds.text("properties"))) { env_.cmd.open_properties({dir}); }
     ui.menu_separator();
-    if (ui.menu_item("Windows options")) { (void)core::shell::show_native_menu({dir}, env_.window.handle()); }
+    if (ui.menu_item(tr("Windows options"))) { (void)core::shell::show_native_menu({dir}, env_.window.handle()); }
 }
 
 void Toolbar::crumb_menu(Painter& p)
@@ -381,7 +398,7 @@ void Toolbar::crumb_menu(Painter& p)
     auto menu = ui.popup_menu("##crumb_menu");
     if (!menu) { return; }
     if (crumb_dirs_.empty()) {
-        (void)ui.menu_item("No subfolders", menu_item_options{.enabled = false});
+        (void)ui.menu_item(tr("No subfolders"), menu_item_options{.enabled = false});
         return;
     }
     char icon[5];
@@ -466,7 +483,7 @@ void Toolbar::frame(Painter& p, const rect& area, bool show_hidden)
         want_filter_focus_ = false;
         ui.request_text_focus("##filter");
     }
-    const bool typed_in_filter = ui.input_text("##filter", filter_text_, st.search_subfolders ? "Search subfolders" : "Filter this folder");
+    const bool typed_in_filter = ui.input_text("##filter", filter_text_, st.search_subfolders ? tr("Search subfolders") : tr("Filter this folder"));
     const bool filter_focus = ui.field_focused("##filter");
     ui.pop_color();
     ui.pop_var();
@@ -538,9 +555,9 @@ void Toolbar::new_menu(Painter& p, const model::Tab& tab)
         o.icon_font = env_.fonts.icons;
         return ui.menu_item(label, o);
     };
-    if (item(glyph::folder, "Folder", "Ctrl+Shift+N")) { env_.cmd.request_action("new_folder"); }
-    if (item(glyph::document, "Empty file", "")) { env_.cmd.request_action("new_file"); }
-    if (item(glyph::document, "Text document", "")) { env_.cmd.request_action("new_text"); }
+    if (item(glyph::folder, tr("Folder"), env_.binds.text("new_folder"))) { env_.cmd.request_action("new_folder"); }
+    if (item(glyph::document, tr("Empty file"), "")) { env_.cmd.request_action("new_file"); }
+    if (item(glyph::document, tr("Text document"), "")) { env_.cmd.request_action("new_text"); }
 
     // what Windows' own "New" menu has (Shortcut, Bitmap image, Word document ...): the same entries, run by the shell
     if (env_.settings.shell_menu && !tab.path().empty() && !tab.searching()) {
@@ -590,19 +607,19 @@ void Toolbar::view_menu(Painter& p, bool show_hidden)
         return ui.menu_item(label, o);
     };
     const Settings& st = env_.settings;
-    if (item(glyph::list, "Details", "", !st.grid_view) && st.grid_view) { env_.cmd.toggle_view(); }
-    if (item(glyph::grid, "Thumbnails", "Ctrl+Shift+G", st.grid_view) && !st.grid_view) { env_.cmd.toggle_view(); }
+    if (item(glyph::list, tr("Details"), "", !st.grid_view) && st.grid_view) { env_.cmd.toggle_view(); }
+    if (item(glyph::grid, tr("Thumbnails"), env_.binds.text("view_grid"), st.grid_view) && !st.grid_view) { env_.cmd.toggle_view(); }
     ui.menu_separator();
-    if (item(glyph::rows, "Compact rows", "Ctrl+Shift+M", st.compact)) { env_.cmd.toggle_density(); }
-    if (item(glyph::split, "Two panes", "F3", st.split)) { env_.cmd.toggle_split(); }
-    if (item(glyph::preview, "Preview pane", "Alt+P", st.preview)) { env_.cmd.toggle_preview(); }
+    if (item(glyph::rows, tr("Compact rows"), env_.binds.text("density"), st.compact)) { env_.cmd.toggle_density(); }
+    if (item(glyph::split, tr("Two panes"), env_.binds.text("split"), st.split)) { env_.cmd.toggle_split(); }
+    if (item(glyph::preview, tr("Preview pane"), env_.binds.text("preview"), st.preview)) { env_.cmd.toggle_preview(); }
     ui.menu_separator();
-    if (item(glyph::eye, "Show hidden files", "Ctrl+H", show_hidden)) { env_.cmd.toggle_hidden(); }
-    if (item(glyph::drive, "Folder sizes", "", st.folder_sizes)) {
+    if (item(glyph::eye, tr("Show hidden files"), env_.binds.text("hidden"), show_hidden)) { env_.cmd.toggle_hidden(); }
+    if (item(glyph::drive, tr("Folder sizes"), "", st.folder_sizes)) {
         env_.settings.folder_sizes = !env_.settings.folder_sizes;
         env_.cmd.settings_changed();
     }
-    if (item(glyph::code, "Git status", "", st.git_badges)) {
+    if (item(glyph::code, tr("Git status"), "", st.git_badges)) {
         env_.settings.git_badges = !env_.settings.git_badges;
         env_.cmd.settings_changed();
     }
@@ -611,42 +628,46 @@ void Toolbar::view_menu(Painter& p, bool show_hidden)
         menu_item_options o;
         o.icon      = glyph_utf8(glyph::copy, icons[n++]);
         o.icon_font = env_.fonts.icons;
-        if (ui.menu_item("Find duplicate files", o)) { env_.cmd.request_action("find_duplicates"); }
+        if (ui.menu_item(tr("Find duplicate files"), o)) { env_.cmd.request_action("find_duplicates"); }
     }
     {
         menu_item_options o;
         o.icon      = glyph_utf8(glyph::folder, icons[n++]);
         o.icon_font = env_.fonts.icons;
-        if (ui.menu_item("Find empty folders", o)) { env_.cmd.request_action("empty_folders"); }
+        if (ui.menu_item(tr("Find empty folders"), o)) { env_.cmd.request_action("empty_folders"); }
     }
     {
         menu_item_options o;
-        o.shortcut  = "Ctrl+Shift+F";
+        const std::string sc = env_.binds.text("search_everywhere");
+        o.shortcut  = sc;
         o.icon      = glyph_utf8(glyph::search, icons[n++]);
         o.icon_font = env_.fonts.icons;
-        if (ui.menu_item("Search everywhere", o)) { env_.cmd.request_action("search_everywhere"); }
+        if (ui.menu_item(tr("Search everywhere"), o)) { env_.cmd.request_action("search_everywhere"); }
     }
     {
         menu_item_options o;
-        o.shortcut  = "Ctrl+Shift+U";
+        const std::string sc = env_.binds.text("disk_usage");
+        o.shortcut  = sc;
         o.icon      = glyph_utf8(glyph::grid, icons[n++]);
         o.icon_font = env_.fonts.icons;
-        if (ui.menu_item("Disk usage", o)) { env_.cmd.request_action("disk_usage"); }
+        if (ui.menu_item(tr("Disk usage"), o)) { env_.cmd.request_action("disk_usage"); }
     }
     {
         menu_item_options o;
-        o.shortcut  = "Ctrl+Shift+O";
+        const std::string sc = env_.binds.text("sessions");
+        o.shortcut  = sc;
         o.icon      = glyph_utf8(glyph::folder_open, icons[n++]);
         o.icon_font = env_.fonts.icons;
-        if (ui.menu_item("Sessions", o)) { env_.cmd.request_action("sessions"); }
+        if (ui.menu_item(tr("Sessions"), o)) { env_.cmd.request_action("sessions"); }
     }
     {
         menu_item_options o;
-        o.shortcut  = "Ctrl+Shift+E";
+        const std::string sc = env_.binds.text("compare_panes");
+        o.shortcut  = sc;
         o.icon      = glyph_utf8(glyph::split, icons[n++]);
         o.icon_font = env_.fonts.icons;
         o.enabled   = st.split;
-        if (ui.menu_item("Compare panes", o)) { env_.cmd.request_action("compare_panes"); }
+        if (ui.menu_item(tr("Compare panes"), o)) { env_.cmd.request_action("compare_panes"); }
     }
 }
 

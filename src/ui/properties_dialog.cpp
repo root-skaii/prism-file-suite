@@ -1,8 +1,12 @@
 #include "ui/properties_dialog.hpp"
+#include "ui/tr.hpp"
 
 #include "core/path.hpp"
+#include "ui/tr.hpp"
 #include "core/shell_ops.hpp"
+#include "ui/tr.hpp"
 #include "core/text.hpp"
+#include "ui/tr.hpp"
 
 #include <algorithm>
 #include <array>
@@ -29,7 +33,7 @@ std::string bytes_text(std::uint64_t n)
 {
     std::string digits = std::to_string(n);
     for (int i = static_cast<int>(digits.size()) - 3; i > 0; i -= 3) { digits.insert(static_cast<std::size_t>(i), ","); }
-    return digits + (n == 1 ? " byte" : " bytes");
+    return digits + " " + std::string{tr_n("byte", "bytes", static_cast<long long>(n))};
 }
 
 [[nodiscard]] core::FileKind kind_of(const core::FileInfo& f)
@@ -133,14 +137,14 @@ void PropertiesDialog::header(Kit& kit)
         else { p.file_icon(icon, kind); }
     }
     const float tx = tile.max.x + 16.0f;
-    const std::string title = single ? first.name : std::format("{} items", infos_.size());
+    const std::string title = single ? first.name : trf_n("{} item", "{} items", static_cast<long long>(infos_.size()), infos_.size());
     p.text_left(rect{{tx, r.bounds.min.y + 6.0f}, {r.bounds.max.x, r.bounds.min.y + 34.0f}}, title, pal.text, f.title);
     std::string sub;
     if (single) {
         sub = first.type;
         if (!first.is_dir) { sub += "  \xc2\xb7  " + core::path::format_size(first.size); }
     } else {
-        sub = std::format("{} {}, {} {}", files, files == 1 ? "file" : "files", folders, folders == 1 ? "folder" : "folders");
+        sub = trf_n("{} file", "{} files", static_cast<long long>(files), files) + ", " + trf_n("{} folder", "{} folders", static_cast<long long>(folders), folders);
         if (size > 0) { sub += "  \xc2\xb7  " + core::path::format_size(size); }
     }
     p.text_left(rect{{tx, r.bounds.min.y + 36.0f}, {r.bounds.max.x, r.bounds.min.y + 58.0f}}, sub, pal.text_dim, f.body);
@@ -148,22 +152,22 @@ void PropertiesDialog::header(Kit& kit)
     // actions sit beside the close button (no footer: the dialog stays compact)
     const std::string& path = first.path;
     ui.same_line();
-    if (kit.icon_button("##prop_winprops", glyph::info, "Windows properties", true, false, 32.0f)) { (void)core::shell::show_properties(path); }
+    if (kit.icon_button("##prop_winprops", glyph::info, tr("Windows properties"), true, false, 32.0f)) { (void)core::shell::show_properties(path); }
     kit.hgap(4.0f);
-    if (kit.icon_button("##prop_winopts", glyph::list, "Windows options", true, false, 32.0f)) {
+    if (kit.icon_button("##prop_winopts", glyph::list, tr("Windows options"), true, false, 32.0f)) {
         std::vector<std::string> all;
         for (const core::FileInfo& i : infos_) { all.push_back(i.path); }
         (void)core::shell::show_native_menu(all, env_.window.handle());
     }
     kit.hgap(4.0f);
-    if (kit.icon_button("##prop_show", glyph::open_new, "Show in Explorer", true, false, 32.0f)) { (void)core::shell::reveal_in_explorer(path); }
+    if (kit.icon_button("##prop_show", glyph::open_new, tr("Show in Explorer"), true, false, 32.0f)) { (void)core::shell::reveal_in_explorer(path); }
     kit.hgap(4.0f);
-    if (kit.icon_button("##prop_copy", glyph::copy, "Copy path", true, false, 32.0f)) {
+    if (kit.icon_button("##prop_copy", glyph::copy, tr("Copy path"), true, false, 32.0f)) {
         (void)core::shell::set_clipboard_text(path);
-        env_.cmd.toast("Path copied", toast_kind::info);
+        env_.cmd.toast(tr("Path copied"), toast_kind::info);
     }
     kit.hgap(14.0f);
-    if (kit.icon_button("##prop_close", glyph::close, "Close  (Esc)", true, true, 32.0f)) {
+    if (kit.icon_button("##prop_close", glyph::close, tr("Close  (Esc)"), true, true, 32.0f)) {
         ui.close_modal();
     }
 
@@ -223,15 +227,15 @@ void PropertiesDialog::general(Kit& kit)
     // size breakdown
     std::array<Kit::Stat, 3> tiles;
     std::size_t n = 0;
-    tiles[n++] = {"Size", core::path::format_size(size), scanning ? std::string_view{"counting..."} : std::string_view{}};
+    tiles[n++] = {tr("Size"), core::path::format_size(size), scanning ? tr("counting...") : std::string_view{}};
     const std::string size_sub = bytes_text(size);
     if (!scanning) { tiles[0].sub = size_sub; }
-    const std::string slack = disk > size ? "+" + core::path::format_size(disk - size) + " slack" : std::string{};
-    tiles[n++] = {"On disk", core::path::format_size(disk), slack};
-    const std::string contains = std::format("{} {}", files, files == 1 ? "file" : "files");
-    const std::string contains_sub = std::format("{} {}", single ? scans_[0]->folders() : folders, (single ? scans_[0]->folders() : folders) == 1 ? "folder" : "folders");
-    if (is_folder_item) { tiles[n++] = {"Contains", contains, contains_sub}; }
-    kit.card_begin("##card_size", "Size", kit.stat_tiles_height());
+    const std::string slack = disk > size ? trf("+{} slack", core::path::format_size(disk - size)) : std::string{};
+    tiles[n++] = {tr("On disk"), core::path::format_size(disk), slack};
+    const std::string contains = trf_n("{} file", "{} files", static_cast<long long>(files), files);
+    const std::string contains_sub = trf_n("{} folder", "{} folders", static_cast<long long>(single ? scans_[0]->folders() : folders), single ? scans_[0]->folders() : folders);
+    if (is_folder_item) { tiles[n++] = {tr("Contains"), contains, contains_sub}; }
+    kit.card_begin("##card_size", tr("Size"), kit.stat_tiles_height());
     kit.stat_tiles("##tiles", std::span<const Kit::Stat>{tiles.data(), n});
     kit.card_end("##card_size");
 
@@ -243,12 +247,12 @@ void PropertiesDialog::general(Kit& kit)
     const std::string accessed = single ? core::path::format_time(first.accessed) : std::string{};
     const float rh = kit.row_h();
     kit.card_begin("##card_where", single ? "Details" : "Selection", rh * (single ? (first.owner.empty() ? 4.0f : 5.0f) : 1.0f));
-    kit.key_value({"##kv_loc", "Location", location, false, true, single});
+    kit.key_value({"##kv_loc", tr("Location"), location, false, true, single});
     if (single) {
-        kit.key_value({"##kv_created", "Created", created});
-        kit.key_value({"##kv_modified", "Modified", modified});
-        kit.key_value({"##kv_accessed", "Accessed", accessed, false, true, !first.owner.empty()});
-        if (!first.owner.empty()) { kit.key_value({"##kv_owner", "Owner", first.owner, false, true, false}); }
+        kit.key_value({"##kv_created", tr("Created"), created});
+        kit.key_value({"##kv_modified", tr("Modified"), modified});
+        kit.key_value({"##kv_accessed", tr("Accessed"), accessed, false, true, !first.owner.empty()});
+        if (!first.owner.empty()) { kit.key_value({"##kv_owner", tr("Owner"), first.owner, false, true, false}); }
     }
     kit.card_end("##card_where");
 
@@ -256,21 +260,21 @@ void PropertiesDialog::general(Kit& kit)
 
     // attributes: read-only and hidden can be flipped here, the rest are shown
     std::string flags;
-    const auto flag = [&](std::uint32_t bit, const char* name) {
-        if ((first.attributes & bit) != 0) { flags += flags.empty() ? name : std::string{", "} + name; }
+    const auto flag = [&](std::uint32_t bit, std::string_view name) {
+        if ((first.attributes & bit) != 0) { flags += flags.empty() ? std::string{name} : ", " + std::string{name}; }
     };
-    flag(attr_system, "System");
-    flag(attr_archive, "Archive");
-    flag(attr_compressed, "Compressed");
-    flag(attr_encrypted, "Encrypted");
-    flag(attr_reparse, "Link");
+    flag(attr_system, tr("System"));
+    flag(attr_archive, tr("Archive"));
+    flag(attr_compressed, tr("Compressed"));
+    flag(attr_encrypted, tr("Encrypted"));
+    flag(attr_reparse, tr("Link"));
     const float body = kit.row_h() * 2.0f + 16.0f * 2.0f + (flags.empty() ? 0.0f : kit.row_h());
-    kit.card_begin("##card_attr", "Attributes", body);
+    kit.card_begin("##card_attr", tr("Attributes"), body);
     bool ro = (first.attributes & attr_readonly) != 0;
     bool hid = (first.attributes & attr_hidden) != 0;
-    if (kit.switch_row("##sw_ro", "Read-only", "The file cannot be changed or deleted by accident", ro, true)) { attr_flag_ = attr_readonly; attr_on_ = ro; }
-    if (kit.switch_row("##sw_hid", "Hidden", "Not shown in listings unless hidden files are on", hid, !flags.empty())) { attr_flag_ = attr_hidden; attr_on_ = hid; }
-    if (!flags.empty()) { kit.key_value({"##kv_flags", "Also", flags, false, false, false}); }
+    if (kit.switch_row("##sw_ro", tr("Read-only"), tr("The file cannot be changed or deleted by accident"), ro, true)) { attr_flag_ = attr_readonly; attr_on_ = ro; }
+    if (kit.switch_row("##sw_hid", tr("Hidden"), tr("Not shown in listings unless hidden files are on"), hid, !flags.empty())) { attr_flag_ = attr_hidden; attr_on_ = hid; }
+    if (!flags.empty()) { kit.key_value({"##kv_flags", tr("Also"), flags, false, false, false}); }
     kit.card_end("##card_attr");
     (void)ui;
 }
@@ -292,28 +296,28 @@ void PropertiesDialog::details(Kit& kit)
     const std::string attrs = std::format("0x{:X}", f.attributes);
     struct Row { std::string_view key; const std::string* value; bool mono; };
     std::vector<Row> rows;
-    rows.push_back({"Full path", &f.path, false});
-    if (!f.volume.empty()) { rows.push_back({"Volume", &volume, false}); }
-    if (f.file_id != 0) { rows.push_back({"File ID", &file_id, true}); }
-    if (f.hard_links > 1) { rows.push_back({"Hard links", &links, false}); }
-    rows.push_back({"Attributes", &attrs, true});
-    if (!f.link_target.empty()) { rows.push_back({"Link target", &f.link_target, false}); }
+    rows.push_back({tr("Full path"), &f.path, false});
+    if (!f.volume.empty()) { rows.push_back({tr("Volume"), &volume, false}); }
+    if (f.file_id != 0) { rows.push_back({tr("File ID"), &file_id, true}); }
+    if (f.hard_links > 1) { rows.push_back({tr("Hard links"), &links, false}); }
+    rows.push_back({tr("Attributes"), &attrs, true});
+    if (!f.link_target.empty()) { rows.push_back({tr("Link target"), &f.link_target, false}); }
 
-    kit.card_begin("##card_file", "File", rh * static_cast<float>(rows.size()));
+    kit.card_begin("##card_file", tr("File"), rh * static_cast<float>(rows.size()));
     for (std::size_t i = 0; i < rows.size(); ++i) {
         kit.key_value({"##dr" + std::to_string(i), rows[i].key, *rows[i].value, rows[i].mono, true, i + 1 < rows.size()});
     }
     kit.card_end("##card_file");
 
     if (!f.version.empty()) {
-        kit.card_begin("##card_ver", "Version information", rh * static_cast<float>(f.version.size()));
+        kit.card_begin("##card_ver", tr("Version information"), rh * static_cast<float>(f.version.size()));
         for (std::size_t i = 0; i < f.version.size(); ++i) {
             kit.key_value({"##vr" + std::to_string(i), f.version[i].first, f.version[i].second, false, true, i + 1 < f.version.size(), 170.0f});
         }
         kit.card_end("##card_ver");
     }
     if (!f.streams.empty()) {
-        kit.card_begin("##card_ads", "Alternate data streams", rh * static_cast<float>(f.streams.size()));
+        kit.card_begin("##card_ads", tr("Alternate data streams"), rh * static_cast<float>(f.streams.size()));
         for (std::size_t i = 0; i < f.streams.size(); ++i) {
             kit.key_value({"##ads" + std::to_string(i), core::path::format_size(f.streams[i].second), f.streams[i].first, false, true, i + 1 < f.streams.size(), 90.0f});
         }
@@ -343,25 +347,25 @@ void PropertiesDialog::hashes(Kit& kit)
         return;
     }
     if (hash_.running()) {
-        kit.card_begin("##card_hash", "Checksums", rh + 20.0f);
+        kit.card_begin("##card_hash", tr("Checksums"), rh + 20.0f);
         const item_result r = ui.custom_item("##hash_run", {ui.content_width(), rh});
-        p.text_left(r.bounds, "Computing MD5, SHA-1 and SHA-256 ...", pal.text_dim, f.body, Kit::pad());
+        p.text_left(r.bounds, tr("Computing MD5, SHA-1 and SHA-256 ..."), pal.text_dim, f.body, Kit::pad());
         p.text_right(r.bounds, std::format("{:.0f} %", hash_.progress() * 100.0f), pal.text, f.bold, Kit::pad());
         kit.bar("##hash_bar", hash_.progress(), Tone::accent, 6.0f, Kit::pad());
         kit.card_end("##card_hash");
         return;
     }
     const std::string md5 = hash_.md5(), sha1 = hash_.sha1(), sha256 = hash_.sha256();
-    kit.card_begin("##card_hash", "Checksums", rh * 3.0f);
-    kit.key_value({"##h_md5", "MD5", md5, true, true, true, 74.0f});
-    kit.key_value({"##h_sha1", "SHA-1", sha1, true, true, true, 74.0f});
-    kit.key_value({"##h_sha256", "SHA-256", sha256, true, true, false, 74.0f});
+    kit.card_begin("##card_hash", tr("Checksums"), rh * 3.0f);
+    kit.key_value({"##h_md5", tr("MD5"), md5, true, true, true, 74.0f});
+    kit.key_value({"##h_sha1", tr("SHA-1"), sha1, true, true, true, 74.0f});
+    kit.key_value({"##h_sha256", tr("SHA-256"), sha256, true, true, false, 74.0f});
     kit.card_end("##card_hash");
 
     // compare with a checksum from a download page
     const float field_h = 36.0f;
     const float badge_w = 120.0f;
-    kit.card_begin("##card_cmp", "Compare with", 4.0f + field_h);
+    kit.card_begin("##card_cmp", tr("Compare with"), 4.0f + field_h);
     kit.vgap(4.0f);
     const item_result lead = ui.custom_item("##cmp_lead", {Kit::pad(), field_h});
     const float fw = ui.content_width() - Kit::pad() * 2.0f - badge_w;
@@ -375,7 +379,7 @@ void PropertiesDialog::hashes(Kit& kit)
     ui.set_next_item_width(fw);
     ui.push_var(style_var::frame_padding_y, (field_h - p.line_height(f.body)) * 0.5f);
     ui.push_color(style_color::widget_bg, color{0, 0, 0, 0});
-    (void)ui.input_text("##compare", compare_, "Paste a checksum");
+    (void)ui.input_text("##compare", compare_, tr("Paste a checksum"));
     ui.pop_color();
     ui.pop_var();
     ui.same_line();
@@ -385,7 +389,7 @@ void PropertiesDialog::hashes(Kit& kit)
         std::string c = core::text::lower_ascii(compare_);
         c.erase(std::remove_if(c.begin(), c.end(), [](char ch) { return ch <= ' '; }), c.end());
         const char* algo = c == md5 ? "MD5" : (c == sha1 ? "SHA-1" : (c == sha256 ? "SHA-256" : nullptr));
-        const std::string label = algo != nullptr ? std::string{"Match \xc2\xb7 "} + algo : "No match";
+        const std::string label = algo != nullptr ? trf("Match \xc2\xb7 {}", algo) : std::string{tr("No match")};
         const float bw = kit.chip_width(label, true);
         (void)ui.custom_item("##cmp_pad", {std::max(8.0f, badge_w - bw), field_h});
         ui.same_line();
@@ -421,7 +425,7 @@ void PropertiesDialog::frame(Painter& p)
     kit.begin_frame();
     header(kit);
 
-    static constexpr std::array<std::string_view, 3> tabs{"General", "Details", "Hashes"};
+    const std::array<std::string_view, 3> tabs{tr("General"), tr("Details"), tr("Hashes")};
     const int before = tab_;
     if (kit.pill_tabs("##prop_tabs", tabs, tab_, 330.0f) && before != tab_) {
         ++fade_gen_;

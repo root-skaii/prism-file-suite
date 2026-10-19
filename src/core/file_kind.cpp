@@ -1,4 +1,5 @@
 #include "core/file_kind.hpp"
+#include "core/i18n.hpp"
 
 #include <unordered_map>
 
@@ -55,24 +56,24 @@ FileKind classify_extension(std::string_view ext) noexcept
 std::string type_label(FileKind kind, std::string_view ext)
 {
     switch (kind) {
-    case FileKind::folder:       return "File folder";
-    case FileKind::drive:        return "Local disk";
-    case FileKind::shortcut:     return "Shortcut";
-    case FileKind::executable:   return ext == "msi" ? "Windows Installer" : "Application";
-    case FileKind::library:      return ext == "dll" ? "Application extension" : "System file";
-    case FileKind::text:         return ext == "txt" ? "Text document" : (ext == "md" || ext == "markdown") ? "Markdown" : "Text file";
-    case FileKind::pdf:          return ext == "pdf" ? "PDF document" : "Document";
-    case FileKind::document:     return "Word document";
-    case FileKind::spreadsheet:  return ext == "csv" ? "CSV file" : "Spreadsheet";
-    case FileKind::presentation: return "Presentation";
-    case FileKind::archive:      return "Compressed archive";
-    case FileKind::disk_image:   return "Disk image";
+    case FileKind::folder:       return std::string{i18n::tr("File folder")};
+    case FileKind::drive:        return std::string{i18n::tr("Local disk")};
+    case FileKind::shortcut:     return std::string{i18n::tr("Shortcut")};
+    case FileKind::executable:   return ext == "msi" ? std::string{i18n::tr("Windows Installer")} : std::string{i18n::tr("Application")};
+    case FileKind::library:      return ext == "dll" ? std::string{i18n::tr("Application extension")} : std::string{i18n::tr("System file")};
+    case FileKind::text:         return ext == "txt" ? std::string{i18n::tr("Text document")} : (ext == "md" || ext == "markdown") ? std::string{i18n::tr("Markdown")} : std::string{i18n::tr("Text file")};
+    case FileKind::pdf:          return ext == "pdf" ? std::string{i18n::tr("PDF document")} : std::string{i18n::tr("Document")};
+    case FileKind::document:     return std::string{i18n::tr("Word document")};
+    case FileKind::spreadsheet:  return ext == "csv" ? std::string{i18n::tr("CSV file")} : std::string{i18n::tr("Spreadsheet")};
+    case FileKind::presentation: return std::string{i18n::tr("Presentation")};
+    case FileKind::archive:      return std::string{i18n::tr("Compressed archive")};
+    case FileKind::disk_image:   return std::string{i18n::tr("Disk image")};
     default: break;
     }
-    if (ext.empty()) { return "File"; }
+    if (ext.empty()) { return std::string{i18n::tr("File")}; }
     std::string label;
     for (const char c : ext) { label.push_back(c >= 'a' && c <= 'z' ? static_cast<char>(c - 32) : c); }
-    label += " file";
+    label = i18n::trf("{} file", label);
     return label;
 }
 

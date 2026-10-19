@@ -1,6 +1,8 @@
 #include "ui/compare_dialog.hpp"
+#include "ui/tr.hpp"
 
 #include "core/path.hpp"
+#include "ui/tr.hpp"
 
 #include <algorithm>
 #include <format>
@@ -18,13 +20,13 @@ constexpr std::size_t k_cap = 1500; // rows listed (and applied)
 [[nodiscard]] std::string_view kind_label(DiffKind k) noexcept
 {
     switch (k) {
-    case DiffKind::only_left:    return "Only on the left";
-    case DiffKind::only_right:   return "Only on the right";
-    case DiffKind::left_newer:   return "Newer on the left";
-    case DiffKind::right_newer:  return "Newer on the right";
-    case DiffKind::size_differs: return "Different size";
-    case DiffKind::type_differs: return "File here, folder there";
-    case DiffKind::same:         return "Identical";
+    case DiffKind::only_left:    return tr("Only on the left");
+    case DiffKind::only_right:   return tr("Only on the right");
+    case DiffKind::left_newer:   return tr("Newer on the left");
+    case DiffKind::right_newer:  return tr("Newer on the right");
+    case DiffKind::size_differs: return tr("Different size");
+    case DiffKind::type_differs: return tr("File here, folder there");
+    case DiffKind::same:         return tr("Identical");
     }
     return {};
 }
@@ -78,7 +80,7 @@ void CompareDialog::apply()
     }
     if (count == 0) { return; }
     for (auto& [dest, sources] : jobs) { env_.ops.start(core::OpKind::copy, std::move(sources), dest); }
-    env_.cmd.toast(std::format("Copying {} items ...", count), toast_kind::info);
+    env_.cmd.toast(trf("Copying {} items ...", count), toast_kind::info);
 }
 
 void CompareDialog::frame(Painter& p)
@@ -95,7 +97,7 @@ void CompareDialog::frame(Painter& p)
     const FontSet     f   = p.fonts();
     const DialogStyle style{ui, pal};
     const float width = std::min(960.0f, ui.display_size().x - 40.0f);
-    auto modal = ui.modal("Compare folders", {width, 0.0f}, modal_flags::esc_closes | modal_flags::backdrop_closes | modal_flags::no_title_bar);
+    auto modal = ui.modal("Compare folders", {width, 0.0f}, modal_flags::esc_closes | modal_flags::no_title_bar);
     if (!modal) {
         open_ = false;
         scan_.cancel();
@@ -122,46 +124,46 @@ void CompareDialog::frame(Painter& p)
     kit.begin_frame();
     {
         const item_result r = ui.custom_item("##cmp_head", {ui.content_width() - 36.0f, 48.0f});
-        p.text_left(rect{{r.bounds.min.x, r.bounds.min.y + 2.0f}, {r.bounds.max.x, r.bounds.min.y + 30.0f}}, "Compare folders", pal.text, f.title);
+        p.text_left(rect{{r.bounds.min.x, r.bounds.min.y + 2.0f}, {r.bounds.max.x, r.bounds.min.y + 30.0f}}, tr("Compare folders"), pal.text, f.title);
         p.text_left(rect{{r.bounds.min.x, r.bounds.min.y + 28.0f}, {r.bounds.max.x, r.bounds.max.y}}, left_ + "   <>   " + right_, pal.text_dim, f.body);
         ui.same_line();
-        if (kit.icon_button("##cmp_close", glyph::close, "Close  (Esc)", true, true, 32.0f)) { ui.close_modal(); }
+        if (kit.icon_button("##cmp_close", glyph::close, tr("Close  (Esc)"), true, true, 32.0f)) { ui.close_modal(); }
     }
     kit.vgap(10.0f);
 
     if (!items_) {
         const item_result r = ui.custom_item("##cmp_run", {ui.content_width(), 34.0f});
-        p.text_left(r.bounds, std::format("Comparing ... {} entries looked at", scan_.seen()), pal.text_dim, f.body, 4.0f);
+        p.text_left(r.bounds, trf("Comparing ... {} entries looked at", scan_.seen()), pal.text_dim, f.body, 4.0f);
         kit.bar("##cmp_bar", 0.0f, Tone::accent, 6.0f, 4.0f);
         kit.vgap(14.0f);
-        if (kit.button({"##cmp_cancel", "Cancel"})) { ui.close_modal(); }
+        if (kit.button({"##cmp_cancel", tr("Cancel")})) { ui.close_modal(); }
         return;
     }
 
     // options
     {
         const item_result lr = ui.custom_item("##cmp_opts_l", {ui.content_width() - 2.0f * 190.0f - 24.0f, 34.0f});
-        p.text_left(lr.bounds, std::format("{} differences", std::ranges::count_if(shown_, [&](std::size_t i) { return (*items_)[i].kind != DiffKind::same; })), pal.text_dim, f.body, 4.0f);
+        p.text_left(lr.bounds, trf("{} differences", std::ranges::count_if(shown_, [&](std::size_t i) { return (*items_)[i].kind != DiffKind::same; })), pal.text_dim, f.body, 4.0f);
         ui.same_line();
         bool changed = false;
         bool sub = recursive_;
         if (kit.toggle_switch("##cmp_sub", sub)) { recursive_ = sub; changed = true; }
         ui.same_line();
         const item_result t1 = ui.custom_item("##cmp_sub_t", {130.0f, 34.0f});
-        p.text_left(t1.bounds, "Subfolders", pal.text_dim, f.body, 6.0f);
+        p.text_left(t1.bounds, tr("Subfolders"), pal.text_dim, f.body, 6.0f);
         ui.same_line();
         bool same = show_same_;
         if (kit.toggle_switch("##cmp_same", same)) { show_same_ = same; shown_.clear(); }
         ui.same_line();
         const item_result t2 = ui.custom_item("##cmp_same_t", {100.0f, 34.0f});
-        p.text_left(t2.bounds, "Identical", pal.text_dim, f.body, 6.0f);
+        p.text_left(t2.bounds, tr("Identical"), pal.text_dim, f.body, 6.0f);
         if (changed) { rescan(); return; }
     }
     kit.vgap(6.0f);
 
     if (shown_.empty()) {
         const item_result r = ui.custom_item("##cmp_none", {ui.content_width(), 80.0f});
-        p.text_center(r.bounds, "The two folders match.", pal.text_dim, f.body);
+        p.text_center(r.bounds, tr("The two folders match."), pal.text_dim, f.body);
         return;
     }
 
@@ -192,13 +194,13 @@ void CompareDialog::frame(Painter& p)
                 const bool over = r.hovered && btn.contains(ui.mouse_pos());
                 const bool on   = acts_[i] != Act::skip;
                 p.dl().rect_filled(btn, on ? pal.accent.scaled_alpha(over ? 0.38f : 0.25f) : (over ? pal.hover : pal.raised), 8.0f);
-                p.text_center(btn, acts_[i] == Act::to_right ? "->" : acts_[i] == Act::to_left ? "<-" : "skip", on ? pal.text : pal.text_faint, f.bold);
+                p.text_center(btn, acts_[i] == Act::to_right ? "->" : acts_[i] == Act::to_left ? "<-" : tr("skip"), on ? pal.text : pal.text_faint, f.bold);
                 if (over) { env_.cmd.set_cursor(cursor_kind::hand); }
                 if (over && ui.mouse_released(mouse_button::left)) { flip = i; }
             }
             if (shown_.size() > rows) {
                 const item_result r = ui.custom_item("##cmp_more", {ui.content_width(), rowh});
-                p.text_left(r.bounds, std::format("... and {} more differences (not shown, they are not copied)", shown_.size() - rows), pal.text_faint, f.small, 8.0f);
+                p.text_left(r.bounds, trf("... and {} more differences (not shown, they are not copied)", shown_.size() - rows), pal.text_faint, f.small, 8.0f);
             }
         }
     }
@@ -211,19 +213,19 @@ void CompareDialog::frame(Painter& p)
 
     std::size_t todo = 0;
     for (std::size_t n = 0; n < rows; ++n) { todo += acts_[shown_[n]] != Act::skip ? 1 : 0; }
-    const float bw_none = kit.button_width("Skip all", false);
-    const float bw_ok   = kit.button_width("Copy", false, Kit::ButtonKind::primary) + 70.0f;
+    const float bw_none = kit.button_width(tr("Skip all"), false);
+    const float bw_ok   = kit.button_width(tr("Copy"), false, Kit::ButtonKind::primary) + 70.0f;
     const item_result sr = ui.custom_item("##cmp_sum", {ui.content_width() - bw_none - bw_ok - 24.0f, kit.control_h()});
-    p.text_left(sr.bounds, "Nothing is deleted. Click an arrow to change a row's direction.", pal.text_dim, f.small, 4.0f);
+    p.text_left(sr.bounds, tr("Nothing is deleted. Click an arrow to change a row's direction."), pal.text_dim, f.small, 4.0f);
     ui.same_line();
-    if (kit.button({"##cmp_none_b", "Skip all"})) {
+    if (kit.button({"##cmp_none_b", tr("Skip all")})) {
         for (Act& a : acts_) { a = Act::skip; }
         ui.invalidate();
     }
     ui.same_line();
     (void)ui.custom_item("##cmp_gap", {8.0f, kit.control_h()});
     ui.same_line();
-    const std::string label = std::format("Copy {}", todo);
+    const std::string label = trf("Copy {}", todo);
     if (kit.button({"##cmp_go", label, 0, Kit::ButtonKind::primary, todo > 0, {}, bw_ok}) && todo > 0) {
         apply();
         ui.close_modal();

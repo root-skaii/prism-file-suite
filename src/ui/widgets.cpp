@@ -1,10 +1,13 @@
 #include "ui/widgets.hpp"
+#include "ui/tr.hpp"
 
 #include "core/shell_ops.hpp"
+#include "ui/tr.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <unordered_map>
 #include <vector>
 
 namespace prism::ui {
@@ -370,8 +373,51 @@ void Kit::badge(std::string_view id, std::string_view label, Tone tone, char32_t
 
 // --- cards and rows ---------------------------------------------------------------------------------------------
 
+// extra height each card needed last frame for wrapped hints
+static std::unordered_map<std::string, float>& card_extras()
+{
+    static std::unordered_map<std::string, float> m;
+    return m;
+}
+
+std::vector<std::string_view> Kit::hint_lines(std::string_view hint, float width) const
+{
+    std::vector<std::string_view> lines;
+    const font_id f = p_.fonts().small;
+    const auto utf8_edge = [&](std::size_t at) { // (never cut inside a utf-8 sequence)
+        while (at < hint.size() && (static_cast<unsigned char>(hint[at]) & 0xC0u) == 0x80u) { ++at; }
+        return at;
+    };
+    while (!hint.empty()) {
+        std::size_t end = hint.size(), skip = 0;
+        if (p_.measure(f, hint).x > width) {
+            std::size_t lo = 1, hi = hint.size(); // the longest prefix that fits
+            while (lo < hi) {
+                const std::size_t mid = (lo + hi + 1) / 2;
+                if (p_.measure(f, hint.substr(0, utf8_edge(mid))).x <= width) { lo = mid; } else { hi = mid - 1; }
+            }
+            end = utf8_edge(lo);
+            if (end < hint.size()) { // break at the last space when there is one
+                if (const std::size_t sp = hint.substr(0, end).find_last_of(' '); sp != std::string_view::npos && sp > 0) { end = sp; skip = 1; }
+            }
+        }
+        lines.push_back(hint.substr(0, end));
+        hint.remove_prefix(std::min(hint.size(), end + skip));
+    }
+    if (lines.empty()) { lines.push_back({}); }
+    return lines;
+}
+
+float Kit::hint_extra(std::size_t lines) const
+{
+    return lines <= 1 ? 0.0f : static_cast<float>(lines - 1) * (p_.line_height(p_.fonts().small) + 1.0f);
+}
+
 void Kit::card_begin(std::string_view id, std::string_view title, float body_h)
 {
+    cur_card_  = std::string{id};
+    cur_extra_ = 0.0f;
+    if (const auto it = card_extras().find(cur_card_); it != card_extras().end()) { body_h += it->second; }
     context&       ui  = p_.ui();
     const Palette& pal = p_.pal();
     const float w  = ui.content_width();
@@ -390,6 +436,11 @@ void Kit::card_begin(std::string_view id, std::string_view title, float body_h)
 
 void Kit::card_end(std::string_view id)
 {
+    float& known = card_extras()[cur_card_];
+    if (std::abs(known - cur_extra_) > 0.5f) { // (the box was drawn with last frame's amount: draw once more)
+        known = cur_extra_;
+        p_.ui().invalidate();
+    }
     (void)p_.ui().custom_item(std::string{id} + "_end", {1.0f, 8.0f + 14.0f});
     cards_h_ += card_h_;
 }
@@ -422,13 +473,13 @@ void Kit::key_value(const KeyValue& kv)
         if (cut) {
             ui.tooltip(kv.value);
         } else if (kv.copyable) {
-            ui.tooltip("Click to copy");
+            ui.tooltip(tr("Click to copy"));
         }
         if (kv.copyable) { cmd_.set_cursor(cursor_kind::hand); }
     }
     if (hot && ui.mouse_released(mouse_button::left)) {
         (void)core::shell::set_clipboard_text(std::string{kv.value});
-        cmd_.toast("Copied", toast_kind::info);
+        cmd_.toast(tr("Copied"), toast_kind::info);
     }
 }
 
@@ -437,17 +488,27 @@ bool Kit::switch_row(std::string_view id, std::string_view label, std::string_vi
     context&       ui  = p_.ui();
     const Palette& pal = p_.pal();
     const FontSet  f   = p_.fonts();
-    const float h = row_h() + (hint.empty() ? 0.0f : 16.0f);
+    const float sw_w   = 42.0f;
+    const float text_w = ui.content_width() - pad() * 2.0f - sw_w - 12.0f;
+    const auto  lines  = hint_lines(hint, text_w);
+    const float extra  = hint.empty() ? 0.0f : hint_extra(lines.size());
+    add_extra(extra);
+    const float h = row_h() + (hint.empty() ? 0.0f : 16.0f) + extra;
     const Hit ht = hit(id, {ui.content_width(), h}, true);
     const std::string key{id};
     const float ok = ui.animate(key + "o", on ? 1.0f : 0.0f, 22.0f);
     const float hk = ui.animate(key + "h", ht.hot ? 1.0f : 0.0f, 18.0f);
     const rect  b  = ht.r.bounds;
     if (hk > 0.01f) { p_.dl().rect_filled(rect{{b.min.x + 6.0f, b.min.y + 2.0f}, {b.max.x - 6.0f, b.max.y - 2.0f}}, pal.hover.scaled_alpha(hk), 6.0f); }
-    const float sw_w = 42.0f;
     const rect  label_box{{b.min.x + pad(), b.min.y}, {b.max.x - pad() - sw_w - 12.0f, hint.empty() ? b.max.y : b.min.y + row_h()}};
     p_.text_left(label_box, label, pal.text, f.body);
-    if (!hint.empty()) { p_.text_left(rect{{b.min.x + pad(), b.min.y + row_h() - 8.0f}, {label_box.max.x, b.max.y - 2.0f}}, hint, pal.text_dim, f.small); }
+    if (!hint.empty()) {
+        const float lh = p_.line_height(f.small) + 1.0f;
+        for (std::size_t i = 0; i < lines.size(); ++i) {
+            const float y = b.min.y + row_h() - 8.0f + lh * static_cast<float>(i);
+            p_.text_left(rect{{b.min.x + pad(), y}, {label_box.max.x, y + lh + 2.0f}}, lines[i], pal.text_dim, f.small);
+        }
+    }
     draw_switch(p_, rect::from_size({b.max.x - pad() - sw_w, b.center().y - 11.0f}, {sw_w, 22.0f}), ok, hk, true);
     if (separator) { p_.dl().rect_filled(rect{{b.min.x + pad(), b.max.y - 1.0f}, {b.max.x - pad(), b.max.y}}, pal.divider); }
     if (ht.focused) { focus_ring(b.expanded(-4.0f), 8.0f); }

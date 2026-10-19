@@ -29,11 +29,16 @@ public:
         bool        light{};
         bool        compact{};
         bool        settings{};
+        bool        palette{};
         std::string properties;  // open the Properties dialog for this path at start
         int         properties_tab{};
         bool        grid{};
         bool        preview{};
         bool        split{};
+        bool        log{};      // write the troubleshooting log from the very start (also a setting)
+        bool        has_at{};   // window top-left in screen pixels (a window started by another one); not remembered
+        int         at_x{}, at_y{};
+        int         width{}, height{}; // logical client size for this window only (0: the remembered one)
     };
 
     [[nodiscard]] bool init(const Options& opts);
@@ -43,10 +48,13 @@ private:
     // one iteration: platform input -> ui -> (gpu). true if something was presented
     bool step(bool force_draw);
     void apply_theme();
+    void start_log();   // opens the troubleshooting log and writes what a bug report needs (version, machine, paths)
 
     platform::Window               window_;
     platform::Gpu                  gpu_;
     ui::Theme                      theme_;
+    bool                           strings_dirty_{true}; // strata's own words need setting again (language changed, or a new context)
+    unsigned                       lang_revision_{0}; // core::i18n::revision() the action descriptions were registered for
     strata::keybinds               binds_;      // declared before settings_: it loads the chords
     model::UndoStack               history_;
     ui::Settings                   settings_;

@@ -1,5 +1,8 @@
 #include "core/default_manager.hpp"
 
+#include "core/recycle.hpp"
+#include "core/text.hpp"
+
 #include <windows.h>
 
 #include <string>
@@ -9,6 +12,7 @@ namespace prism::core {
 namespace {
 
 constexpr const wchar_t* k_classes[] = {L"Directory", L"Drive"};
+constexpr const wchar_t* k_bin_class = L"CLSID\\{645FF040-5081-101B-9F08-00AA002F954E}"; // the desktop Recycle Bin
 
 [[nodiscard]] std::wstring shell_key(const wchar_t* cls) { return std::wstring{L"Software\\Classes\\"} + cls + L"\\shell"; }
 
@@ -74,6 +78,15 @@ void unregister_class(const wchar_t* cls)
         ::RegCloseKey(shell);
     }
     (void)::RegDeleteKeyW(HKEY_CURRENT_USER, key.c_str()); // (only if nothing else is in it)
+    // the class key we may have created around it, if it is empty now (a user's own values or verbs keep it)
+    const std::wstring class_key = std::wstring{L"Software\\Classes\\"} + cls;
+    HKEY k{};
+    if (::RegOpenKeyExW(HKEY_CURRENT_USER, class_key.c_str(), 0, KEY_QUERY_VALUE, &k) == ERROR_SUCCESS) {
+        DWORD subkeys = 0, values = 0;
+        const bool empty = ::RegQueryInfoKeyW(k, nullptr, nullptr, nullptr, &subkeys, nullptr, nullptr, &values, nullptr, nullptr, nullptr, nullptr) == ERROR_SUCCESS && subkeys == 0 && values == 0;
+        ::RegCloseKey(k);
+        if (empty) { (void)::RegDeleteKeyW(HKEY_CURRENT_USER, class_key.c_str()); }
+    }
 }
 
 } // namespace
@@ -95,9 +108,29 @@ bool set_default_manager(bool on)
     return ok;
 }
 
+bool recycle_bin_handler_active()
+{
+    return is_ours(read_default(shell_key(k_bin_class) + L"\\open\\command"));
+}
+
+bool set_recycle_bin_handler(bool on)
+{
+    if (!on) {
+        unregister_class(k_bin_class);
+        return true;
+    }
+    const std::string bin = recycle::folder_path();
+    if (exe_path().empty() || bin.empty()) { return false; }
+    return register_class(k_bin_class, L"\"" + exe_path() + L"\" \"" + text::widen(bin) + L"\"");
+}
+
 void refresh_default_manager()
 {
     if (default_manager_active() && read_default(shell_key(k_classes[0]) + L"\\open\\command") != command_line()) { (void)set_default_manager(true); }
+    if (recycle_bin_handler_active()) {
+        const std::string bin = recycle::folder_path();
+        if (!bin.empty() && read_default(shell_key(k_bin_class) + L"\\open\\command") != L"\"" + exe_path() + L"\" \"" + text::widen(bin) + L"\"") { (void)set_recycle_bin_handler(true); }
+    }
 }
 
 } // namespace prism::core

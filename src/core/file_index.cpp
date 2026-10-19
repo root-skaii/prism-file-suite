@@ -1,5 +1,6 @@
 #include "core/file_index.hpp"
 
+#include "core/log.hpp"
 #include "core/text.hpp"
 
 #include <windows.h>
@@ -61,6 +62,7 @@ void FileIndex::start(std::vector<std::string> roots)
 void FileIndex::crawl(std::vector<std::string> roots, std::uint64_t gen)
 {
     ::SetThreadPriority(::GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN); // (low priority for cpu and disk: this is housekeeping)
+    log::Timer crawl_time{"drive index crawl"};
     auto d = std::make_shared<Data>();
     d->nodes.reserve(1u << 20);
     d->pool.reserve(24u << 20);
@@ -144,6 +146,7 @@ void FileIndex::crawl(std::vector<std::string> roots, std::uint64_t gen)
             data_ = std::move(d);
         }
         building_ = false;
+        log::info("drive index ready: {} entries, {} roots", scanned_.load(), roots.size());
         if (wake_) { wake_(); }
     }
 }

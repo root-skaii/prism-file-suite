@@ -1,6 +1,8 @@
 #include "ui/duplicates_dialog.hpp"
+#include "ui/tr.hpp"
 
 #include "core/path.hpp"
+#include "ui/tr.hpp"
 
 #include <algorithm>
 #include <format>
@@ -56,7 +58,7 @@ void DuplicatesDialog::frame(Painter& p)
     const FontSet     f   = p.fonts();
     const DialogStyle style{ui, pal};
     const float width = std::min(760.0f, ui.display_size().x - 40.0f);
-    auto modal = ui.modal("Duplicate files", {width, 0.0f}, modal_flags::esc_closes | modal_flags::backdrop_closes | modal_flags::no_title_bar);
+    auto modal = ui.modal("Duplicate files", {width, 0.0f}, modal_flags::esc_closes | modal_flags::no_title_bar);
     if (!modal) {
         shown_ = false;
         scan_.cancel();
@@ -70,26 +72,26 @@ void DuplicatesDialog::frame(Painter& p)
     if (done && !loaded_) { load_groups(); }
     {
         const item_result r = ui.custom_item("##dup_head", {ui.content_width() - 36.0f, 48.0f});
-        p.text_left(rect{{r.bounds.min.x, r.bounds.min.y + 2.0f}, {r.bounds.max.x, r.bounds.min.y + 30.0f}}, "Duplicate files", pal.text, f.title);
-        p.text_left(rect{{r.bounds.min.x, r.bounds.min.y + 28.0f}, {r.bounds.max.x, r.bounds.max.y}}, folder_ + "  (files under 1 KB are ignored)", pal.text_dim, f.body);
+        p.text_left(rect{{r.bounds.min.x, r.bounds.min.y + 2.0f}, {r.bounds.max.x, r.bounds.min.y + 30.0f}}, tr("Duplicate files"), pal.text, f.title);
+        p.text_left(rect{{r.bounds.min.x, r.bounds.min.y + 28.0f}, {r.bounds.max.x, r.bounds.max.y}}, folder_ + "  " + std::string{tr("(files under 1 KB are ignored)")}, pal.text_dim, f.body);
         ui.same_line();
-        if (kit.icon_button("##dup_close", glyph::close, "Close  (Esc)", true, true, 32.0f)) { ui.close_modal(); }
+        if (kit.icon_button("##dup_close", glyph::close, tr("Close  (Esc)"), true, true, 32.0f)) { ui.close_modal(); }
     }
     kit.vgap(10.0f);
 
     if (!done) {
         const bool comparing = scan_.stage() == core::DuplicateScan::Stage::comparing;
         const item_result r  = ui.custom_item("##dup_run", {ui.content_width(), 34.0f});
-        p.text_left(r.bounds, comparing ? "Comparing files with the same size ..." : std::format("Looking at files ... {} so far", scan_.files_seen()), pal.text_dim, f.body, 4.0f);
+        p.text_left(r.bounds, comparing ? std::string{tr("Comparing files with the same size ...")} : trf("Looking at files ... {} so far", scan_.files_seen()), pal.text_dim, f.body, 4.0f);
         if (comparing) { p.text_right(r.bounds, std::format("{:.0f} %", scan_.progress() * 100.0f), pal.text, f.bold, 4.0f); }
         kit.bar("##dup_bar", comparing ? scan_.progress() : 0.0f, Tone::accent, 6.0f, 4.0f);
         kit.vgap(14.0f);
-        if (kit.button({"##dup_cancel", "Cancel"})) { ui.close_modal(); }
+        if (kit.button({"##dup_cancel", tr("Cancel")})) { ui.close_modal(); }
         return;
     }
     if (groups_.empty()) {
         const item_result r = ui.custom_item("##dup_none", {ui.content_width(), 64.0f});
-        p.text_center(r.bounds, "No duplicates found here.", pal.text_dim, f.body);
+        p.text_center(r.bounds, tr("No duplicates found here."), pal.text_dim, f.body);
         return;
     }
 
@@ -99,7 +101,7 @@ void DuplicatesDialog::frame(Painter& p)
     }
     {
         const item_result r = ui.custom_item("##dup_sum", {ui.content_width(), 30.0f});
-        p.text_left(r.bounds, std::format("{} sets of identical files. {} can be freed. Click a file to keep or remove it.", groups_.size(), core::path::format_size(scan_.reclaimable())), pal.text_dim, f.body, 4.0f);
+        p.text_left(r.bounds, trf("{} sets of identical files. {} can be freed. Click a file to keep or remove it.", groups_.size(), core::path::format_size(scan_.reclaimable())), pal.text_dim, f.body, 4.0f);
     }
 
     const float rowh = 30.0f;
@@ -125,13 +127,13 @@ void DuplicatesDialog::frame(Painter& p)
                     if (mark) { p.dl().rect_filled(box, pal.danger, 4.0f); p.glyph_center(box, glyph::close, pal.window, f.tile); }
                     else { p.dl().rect_outline(box, pal.text_faint, 4.0f, 1.5f); }
                     p.text_left(rect{{box.max.x + 10.0f, r.bounds.min.y}, {r.bounds.max.x - 110.0f, r.bounds.max.y}}, relative(folder_, path), mark ? pal.text_dim : pal.text, f.body);
-                    p.text_right(r.bounds, mark ? "remove" : (i == 0 ? "keep (oldest)" : "keep"), mark ? pal.danger : pal.text_faint, f.small, 12.0f);
+                    p.text_right(r.bounds, mark ? tr("remove") : (i == 0 ? tr("keep (oldest)") : tr("keep")), mark ? pal.danger : pal.text_faint, f.small, 12.0f);
                     if (r.hovered && ui.mouse_released(mouse_button::left)) { toggle = path; }
                 }
             }
             if (groups_.size() > max_groups) {
                 const item_result r = ui.custom_item("##dup_more", {ui.content_width(), rowh});
-                p.text_left(r.bounds, std::format("... and {} more sets (the biggest are shown first)", groups_.size() - max_groups), pal.text_faint, f.small, 8.0f);
+                p.text_left(r.bounds, trf("... and {} more sets (the biggest are shown first)", groups_.size() - max_groups), pal.text_faint, f.small, 8.0f);
             }
         }
     }
@@ -143,19 +145,19 @@ void DuplicatesDialog::frame(Painter& p)
             else {
                 const auto kept = std::count_if(g.paths.begin(), g.paths.end(), [&](const std::string& s) { return !marked_.contains(s); });
                 if (kept > 1) { marked_.insert(toggle); }
-                else { env_.cmd.toast("Keep at least one copy of each file", toast_kind::info); }
+                else { env_.cmd.toast(tr("Keep at least one copy of each file"), toast_kind::info); }
             }
             break;
         }
     }
     kit.vgap(12.0f);
 
-    const std::string label = marked_.empty() ? std::string{"Nothing marked"} : std::format("Move {} files to the Recycle Bin  ({})", marked_.size(), core::path::format_size(free_bytes));
-    const float bw_cancel = kit.button_width("Close", false);
+    const std::string label = marked_.empty() ? std::string{tr("Nothing marked")} : trf("Move {} files to the Recycle Bin  ({})", marked_.size(), core::path::format_size(free_bytes));
+    const float bw_cancel = kit.button_width(tr("Close"), false);
     const float bw_ok     = kit.button_width(label, false, Kit::ButtonKind::primary);
     (void)ui.custom_item("##dup_pad", {std::max(0.0f, ui.content_width() - bw_cancel - bw_ok - 8.0f), kit.control_h()});
     ui.same_line();
-    if (kit.button({"##dup_close2", "Close"})) { ui.close_modal(); }
+    if (kit.button({"##dup_close2", tr("Close")})) { ui.close_modal(); }
     ui.same_line();
     (void)ui.custom_item("##dup_gap", {8.0f, kit.control_h()});
     ui.same_line();

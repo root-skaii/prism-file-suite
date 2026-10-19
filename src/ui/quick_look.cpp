@@ -1,8 +1,12 @@
 #include "ui/quick_look.hpp"
+#include "ui/tr.hpp"
 
 #include "core/path.hpp"
+#include "ui/tr.hpp"
 #include "core/text.hpp"
+#include "ui/tr.hpp"
 #include "ui/preview_pane.hpp"
+#include "ui/tr.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -61,7 +65,7 @@ void QuickLook::frame(Painter& p, const rect& area)
     if (!info_.is_dir) { sub += "  -  " + core::path::format_size(info_.size); }
     sub += "  -  " + core::path::format_time(info_.modified);
     p.text_left(rect{{head.min.x, head.max.y}, {card.max.x - pad - 150.0f, head.max.y + 20.0f}}, sub, pal.text_dim, f.small);
-    p.text_left(rect{{card.max.x - pad - 150.0f, head.min.y + 4.0f}, {card.max.x - pad, head.min.y + 24.0f}}, "Space or Esc to close", pal.text_faint, f.small);
+    p.text_left(rect{{card.max.x - pad - 150.0f, head.min.y + 4.0f}, {card.max.x - pad, head.min.y + 24.0f}}, trf("{} or Esc to close", key_hint(env_.binds, "quick_look")), pal.text_faint, f.small);
 
     const rect body{{card.min.x + pad, card.min.y + 66.0f}, {card.max.x - pad, card.max.y - pad}};
     p.dl().rect_filled(body, pal.raised, 10.0f);

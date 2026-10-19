@@ -68,11 +68,32 @@ std::string Settings::sessions_path()
     return p.substr(0, cut) + (p.substr(cut) == "prismfs-sidebar.ini" ? "prismfs-sessions.ini" : "sessions.ini");
 }
 
+std::string Settings::log_path()
+{
+    const std::string p   = file_path();
+    const std::size_t cut = p.find_last_of('\\') == std::string::npos ? 0 : p.find_last_of('\\') + 1;
+    return p.substr(0, cut) + "prismfs.log";
+}
+
 std::string Settings::templates_path()
 {
     const std::string p   = file_path();
     const std::size_t cut = p.find_last_of('\\') == std::string::npos ? 0 : p.find_last_of('\\') + 1;
     return p.substr(0, cut) + "Templates";
+}
+
+std::vector<std::string> Settings::language_dirs()
+{
+    std::vector<std::string> dirs;
+    wchar_t exe[MAX_PATH]{};
+    if (const DWORD n = ::GetModuleFileNameW(nullptr, exe, MAX_PATH); n > 0 && n < MAX_PATH) {
+        std::string beside = core::text::narrow(exe);
+        beside.resize(beside.find_last_of('\\') + 1);
+        dirs.push_back(beside + "lang");
+    }
+    const std::string p = file_path();
+    dirs.push_back(p.substr(0, p.find_last_of('\\') == std::string::npos ? 0 : p.find_last_of('\\') + 1) + "Languages");
+    return dirs;
 }
 
 void Settings::load()
@@ -82,6 +103,7 @@ void Settings::load()
     if (binds != nullptr) { (void)binds->load(c); }
     dark           = c.get_bool("appearance", "dark", dark);
     compact        = c.get_bool("appearance", "compact", compact);
+    language       = std::string{c.get("appearance", "language")}.empty() ? language : std::string{c.get("appearance", "language")};
     dark_style     = std::clamp(c.get_int("appearance", "dark_style", dark_style), 0, 2);
     accent         = static_cast<unsigned>(c.get_int("appearance", "accent_rgb", static_cast<int>(accent))) & 0xffffffu;
     ui_scale       = std::clamp(c.get_int("appearance", "ui_scale", ui_scale), 75, 200);
@@ -93,6 +115,7 @@ void Settings::load()
     browse_archives = c.get_bool("behavior", "browse_archives", browse_archives);
     builtin_copy    = c.get_bool("behavior", "builtin_copy", builtin_copy);
     index_drives    = c.get_bool("behavior", "index_drives", index_drives);
+    log_enabled     = c.get_bool("diagnostics", "log", log_enabled);
     search_subfolders = c.get_bool("search", "subfolders", search_subfolders);
     search_case    = c.get_bool("search", "match_case", search_case);
     search_regex   = c.get_bool("search", "regex", search_regex);
@@ -125,6 +148,7 @@ void Settings::save() const
     if (binds != nullptr) { binds->store(c); }
     c.set_bool("appearance", "dark", dark);
     c.set_bool("appearance", "compact", compact);
+    c.set("appearance", "language", language);
     c.set_int("appearance", "dark_style", dark_style);
     c.set_int("appearance", "accent_rgb", static_cast<int>(accent));
     c.set_int("appearance", "ui_scale", ui_scale);
@@ -136,6 +160,7 @@ void Settings::save() const
     c.set_bool("behavior", "browse_archives", browse_archives);
     c.set_bool("behavior", "builtin_copy", builtin_copy);
     c.set_bool("behavior", "index_drives", index_drives);
+    c.set_bool("diagnostics", "log", log_enabled);
     c.set_bool("search", "subfolders", search_subfolders);
     c.set_bool("search", "match_case", search_case);
     c.set_bool("search", "regex", search_regex);

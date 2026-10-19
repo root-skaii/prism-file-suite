@@ -1,6 +1,8 @@
 #include "ui/batch_rename_dialog.hpp"
+#include "ui/tr.hpp"
 
 #include "core/path.hpp"
+#include "ui/tr.hpp"
 
 #include <algorithm>
 #include <array>
@@ -67,7 +69,7 @@ void BatchRenameDialog::apply()
     std::vector<std::pair<std::string, std::string>> pairs;
     for (std::size_t i = 0; i < items_.size(); ++i) { pairs.emplace_back(items_[i].name, names[i]); }
     if (!core::apply_renames(dir_, pairs)) {
-        env_.cmd.toast("Could not rename: nothing was changed", toast_kind::warning);
+        env_.cmd.toast(tr("Could not rename: nothing was changed"), toast_kind::warning);
         return;
     }
     std::vector<std::pair<std::string, std::string>> forward, backward;
@@ -77,10 +79,10 @@ void BatchRenameDialog::apply()
         backward.emplace_back(pr.second, pr.first);
     }
     const std::string dir = dir_;
-    env_.history.push({std::format("Rename {} items", forward.size()),
+    env_.history.push({trf_n("Rename {} item", "Rename {} items", static_cast<long long>(forward.size()), forward.size()),
                        [dir, backward] { return core::apply_renames(dir, backward); },
                        [dir, forward] { return core::apply_renames(dir, forward); }});
-    env_.cmd.toast(std::format("Renamed {} items  (Ctrl+Z undoes it)", forward.size()), toast_kind::info);
+    env_.cmd.toast(trf_n("Renamed {} item  ({} undoes it)", "Renamed {} items  ({} undoes it)", static_cast<long long>(forward.size()), forward.size(), key_hint(env_.binds, "undo")), toast_kind::info);
     env_.tab().refresh();
     if (model::Tab* other = env_.other()) { other->refresh(); }
 }
@@ -99,7 +101,7 @@ void BatchRenameDialog::frame(Painter& p)
     const FontSet     f   = p.fonts();
     const DialogStyle style{ui, pal};
     const float width = std::min(700.0f, ui.display_size().x - 40.0f);
-    auto modal = ui.modal("Rename items", {width, 0.0f}, modal_flags::esc_closes | modal_flags::backdrop_closes | modal_flags::no_title_bar);
+    auto modal = ui.modal("Rename items", {width, 0.0f}, modal_flags::esc_closes | modal_flags::no_title_bar);
     if (!modal) {
         shown_ = false;
         Kit::reset_focus();
@@ -110,38 +112,38 @@ void BatchRenameDialog::frame(Painter& p)
     kit.begin_frame();
     {
         const item_result r = ui.custom_item("##br_head", {ui.content_width() - 36.0f, 48.0f});
-        p.text_left(rect{{r.bounds.min.x, r.bounds.min.y + 2.0f}, {r.bounds.max.x, r.bounds.min.y + 30.0f}}, std::format("Rename {} items", items_.size()), pal.text, f.title);
-        p.text_left(rect{{r.bounds.min.x, r.bounds.min.y + 28.0f}, {r.bounds.max.x, r.bounds.max.y}}, "[N] name   [E] extension   [C] counter", pal.text_dim, f.body);
+        p.text_left(rect{{r.bounds.min.x, r.bounds.min.y + 2.0f}, {r.bounds.max.x, r.bounds.min.y + 30.0f}}, trf_n("Rename {} item", "Rename {} items", static_cast<long long>(items_.size()), items_.size()), pal.text, f.title);
+        p.text_left(rect{{r.bounds.min.x, r.bounds.min.y + 28.0f}, {r.bounds.max.x, r.bounds.max.y}}, tr("[N] name   [E] extension   [C] counter"), pal.text_dim, f.body);
         ui.same_line();
-        if (kit.icon_button("##br_close", glyph::close, "Close  (Esc)", true, true, 32.0f)) { ui.close_modal(); }
+        if (kit.icon_button("##br_close", glyph::close, tr("Close  (Esc)"), true, true, 32.0f)) { ui.close_modal(); }
     }
     kit.vgap(10.0f);
 
     if (age_ < 3) { ui.request_text_focus("##br_pattern"); }
     ++age_;
     const float fw = ui.content_width() - 120.0f;
-    field(p, "##br_pattern", "Name", pattern_, "[N]", fw);
+    field(p, "##br_pattern", tr("Name"), pattern_, "[N]", fw);
     kit.vgap(6.0f);
-    field(p, "##br_find", "Find", find_, "text to replace in the name", fw);
+    field(p, "##br_find", tr("Find"), find_, tr("text to replace in the name"), fw);
     kit.vgap(6.0f);
-    field(p, "##br_repl", "Replace with", replace_, "", fw);
+    field(p, "##br_repl", tr("Replace with"), replace_, "", fw);
     kit.vgap(8.0f);
     {
         const item_result lead = ui.custom_item("##br_case_l", {120.0f, 36.0f});
-        p.text_left(lead.bounds, "Letters", pal.text_dim, f.body);
+        p.text_left(lead.bounds, tr("Letters"), pal.text_dim, f.body);
         ui.same_line();
-        static constexpr std::array<std::string_view, 4> cases{"Keep", "lower", "UPPER", "Title Case"};
+        const std::array<std::string_view, 4> cases{tr("Keep"), tr("lower"), tr("UPPER"), tr("Title Case")};
         (void)kit.pill_tabs("##br_case", cases, casing_, 340.0f, 36.0f);
     }
     kit.vgap(6.0f);
     {
         std::string_view none;
         (void)none;
-        field(p, "##br_start", "Counter starts", start_, "1", 110.0f);
+        field(p, "##br_start", tr("Counter starts"), start_, "1", 110.0f);
         ui.same_line();
         (void)ui.custom_item("##br_dgap", {16.0f, 36.0f});
         ui.same_line();
-        static constexpr std::array<std::string_view, 4> digits{"1", "01", "001", "0001"};
+        const std::array<std::string_view, 4> digits{"1", "01", "001", "0001"};
         (void)kit.pill_tabs("##br_digits", digits, digits_, 240.0f, 36.0f);
     }
     kit.vgap(12.0f);
@@ -178,26 +180,26 @@ void BatchRenameDialog::frame(Painter& p)
             }
             if (items_.size() > shown_rows) {
                 const item_result r = ui.custom_item("##br_more", {ui.content_width(), rowh});
-                p.text_left(r.bounds, std::format("... and {} more", items_.size() - shown_rows), pal.text_faint, f.small, 8.0f);
+                p.text_left(r.bounds, trf("... and {} more", items_.size() - shown_rows), pal.text_faint, f.small, 8.0f);
             }
         }
     }
     kit.vgap(12.0f);
 
-    const std::string summary = problems > 0 ? std::format("{} names cannot be used", problems)
-                              : changed == 0 ? std::string{"Nothing would change"}
-                                             : std::format("{} of {} will be renamed", changed, items_.size());
-    const float bw_cancel = kit.button_width("Cancel", false);
-    const float bw_ok     = kit.button_width("Rename", false, Kit::ButtonKind::primary);
+    const std::string summary = problems > 0 ? trf("{} names cannot be used", problems)
+                              : changed == 0 ? std::string{tr("Nothing would change")}
+                                             : trf("{} of {} will be renamed", changed, items_.size());
+    const float bw_cancel = kit.button_width(tr("Cancel"), false);
+    const float bw_ok     = kit.button_width(tr("Rename"), false, Kit::ButtonKind::primary);
     const item_result sr  = ui.custom_item("##br_sum", {ui.content_width() - bw_cancel - bw_ok - 16.0f, kit.control_h()});
     p.text_left(sr.bounds, summary, problems > 0 ? pal.danger : pal.text_dim, f.body);
     ui.same_line();
-    if (kit.button({"##br_cancel", "Cancel"})) { ui.close_modal(); }
+    if (kit.button({"##br_cancel", tr("Cancel")})) { ui.close_modal(); }
     ui.same_line();
     (void)ui.custom_item("##br_bgap", {8.0f, kit.control_h()});
     ui.same_line();
     const bool ok = problems == 0 && changed > 0;
-    if (kit.button({"##br_go", "Rename", 0, Kit::ButtonKind::primary, ok}) && ok) {
+    if (kit.button({"##br_go", tr("Rename"), 0, Kit::ButtonKind::primary, ok}) && ok) {
         apply();
         ui.close_modal();
     }

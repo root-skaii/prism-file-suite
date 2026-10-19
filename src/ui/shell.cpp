@@ -1,12 +1,21 @@
 #include "ui/shell.hpp"
+#include "ui/tr.hpp"
 
 #include "core/links.hpp"
+#include "ui/tr.hpp"
 #include "core/path.hpp"
+#include "ui/tr.hpp"
 #include "core/places.hpp"
+#include "ui/tr.hpp"
+#include "core/recycle.hpp"
 #include "core/shell_ops.hpp"
+#include "ui/tr.hpp"
 #include "core/text.hpp"
+#include "ui/tr.hpp"
 #include "ui/panel.hpp"
+#include "ui/tr.hpp"
 #include "strata/config.hpp"
+#include "ui/tr.hpp"
 
 #include <windows.h>
 #include <shellapi.h>
@@ -79,7 +88,7 @@ void Shell::toggle_tag(const std::vector<std::string>& paths, int index)
         after.emplace_back(p, static_cast<std::uint16_t>(all ? (m & ~bit) : (m | bit)));
     }
     set_tag_masks(after);
-    env_.history.push({std::format("{} label", core::tag::names[index]),
+    env_.history.push({trf("{} label", tag_label(index)),
                        [this, before] { set_tag_masks(before); return true; },
                        [this, after] { set_tag_masks(after); return true; }});
 }
@@ -95,7 +104,7 @@ void Shell::clear_tags(const std::vector<std::string>& paths)
     }
     if (before.empty()) { return; }
     set_tag_masks(after);
-    env_.history.push({"Clear labels",
+    env_.history.push({std::string{tr("Clear labels")},
                        [this, before] { set_tag_masks(before); return true; },
                        [this, after] { set_tag_masks(after); return true; }});
 }
@@ -140,6 +149,52 @@ model::Session Shell::capture_session(std::string name) const
 
 void Shell::open_tab(const std::string& path, bool activate) { pending_open_.push_back({path, activate}); }
 void Shell::close_tab(std::size_t index) { pending_close_.push_back(index); }
+
+// the new window is this one's size, staggered down-right of it (or, for a torn-off tab, under the pointer)
+void Shell::spawn_window(const std::string& folder, std::optional<std::pair<int, int>> pointer)
+{
+    const platform::Window::Placement at = pointer ? env_.window.placement_at(pointer->first, pointer->second) : env_.window.cascaded_placement();
+    const auto [lw, lh] = env_.window.logical_size();
+    wchar_t exe[MAX_PATH]{};
+    ::GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    std::wstring cmd = L"\"" + std::wstring{exe} + L"\" \"" + core::text::widen(folder) + L"\" --at " + std::to_wstring(at.x) + L"," + std::to_wstring(at.y) +
+                       L" --size " + std::to_wstring(lw) + L"," + std::to_wstring(lh);
+    STARTUPINFOW si{};
+    si.cb = sizeof si;
+    PROCESS_INFORMATION pi{};
+    if (::CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+        ::CloseHandle(pi.hThread);
+        ::CloseHandle(pi.hProcess);
+    }
+}
+
+// a tab dropped outside this window: into the PrismFS window under the pointer, else into a window of its own
+void Shell::move_tab_out(std::size_t index, int screen_x, int screen_y)
+{
+    if (index >= env_.tabs.size()) { return; }
+    const std::string path = env_.tabs.at(index).path();
+    if (path.empty()) { return; }
+    if (!env_.window.send_folder_to_window_at(screen_x, screen_y, path)) {
+        if (env_.tabs.size() < 2) { return; } // (the only tab: nothing to tear off)
+        spawn_window(path, std::pair{screen_x, screen_y});
+    }
+    close_tab(index);
+}
+void Shell::restart_elevated()
+{
+    std::vector<std::string> folders{env_.tab().path()};
+    if (settings_.split && right_tab_) { folders.push_back(right_tab_->path()); }
+    if (core::shell::relaunch_elevated(folders)) { env_.window.request_close(); }
+}
+
+void Shell::restart_unelevated()
+{
+    std::vector<std::string> folders{env_.tab().path()};
+    if (settings_.split && right_tab_) { folders.push_back(right_tab_->path()); }
+    if (core::shell::relaunch_unelevated(folders)) { env_.window.request_close(); }
+    else { toast(tr("Could not start a normal window"), toast_kind::warning); }
+}
+
 void Shell::toggle_theme() { settings_.dark = !settings_.dark; settings_dirty_ = true; }
 void Shell::toggle_density() { settings_.compact = !settings_.compact; settings_dirty_ = true; }
 void Shell::toggle_hidden() { settings_.show_hidden = !settings_.show_hidden; settings_dirty_ = true; }
@@ -195,7 +250,7 @@ void Shell::focus_address() { toolbar_.begin_edit(); }
 void Shell::focus_filter() { toolbar_.focus_filter(); }
 void Shell::open_settings() { settings_dialog_.open(); }
 void Shell::open_properties(std::vector<std::string> paths) { properties_dialog_.open(std::move(paths)); }
-void Shell::toast(std::string text, toast_kind kind) { pending_toasts_.push_back({std::move(text), kind}); }
+void Shell::toast(std::string_view text, toast_kind kind) { pending_toasts_.push_back({std::string{text}, kind}); }
 
 // a modal (delete confirmation, Properties, Settings) owns the keyboard: panels and shortcuts behind it still see key
 // presses in strata, so Delete or typing must not reach the file list while one is open. (the palette is a modal too, but
@@ -208,6 +263,7 @@ bool Shell::dialog_has_keyboard(context& ui) const
 void Shell::request_delete(std::vector<std::string> paths, bool permanent)
 {
     if (paths.empty()) { return; }
+    if (std::ranges::all_of(paths, [](const std::string& p) { return core::recycle::inside(p); })) { permanent = true; } // (nothing recycles twice)
     if (!permanent && !settings_.confirm_delete) {
         ops_.start(core::OpKind::recycle, std::move(paths), {});
         return;
@@ -217,17 +273,41 @@ void Shell::request_delete(std::vector<std::string> paths, bool permanent)
     delete_ask_       = true;
 }
 
+void Shell::restore_from_bin(std::vector<std::string> items)
+{
+    int         done = 0;
+    std::string error;
+    for (const std::string& item : items) {
+        std::string why;
+        if (core::recycle::restore(item, why)) { ++done; } else if (error.empty()) { error = why; }
+    }
+    if (done > 0) { toast(trf_n("Restored {} item", "Restored {} items", done, done), toast_kind::success); }
+    if (!error.empty()) { toast(error, toast_kind::error); }
+    refresh_all();
+}
+
+void Shell::empty_recycle_bin(std::string drive_root)
+{
+    if (bin_empty_->load() == 3) { return; }
+    bin_empty_->store(3);
+    // (the shell asks first and may take a while: a worker, which answers through the shared flag and wakes the ui)
+    std::thread{[state = bin_empty_, wake = env_.window.waker(), root = std::move(drive_root)] {
+        state->store(core::recycle::empty(root) ? 1 : 2);
+        wake();
+    }}.detach();
+}
+
 void Shell::service_delete(context& ui)
 {
     if (delete_paths_.empty()) { return; }
     const char* const id = delete_permanent_ ? "pfs_delete_forever" : "pfs_delete";
     if (delete_ask_) {
-        const std::string what = delete_paths_.size() == 1 ? "1 item" : std::to_string(delete_paths_.size()) + " items";
-        ui.ask_confirm(id, delete_permanent_ ? "Permanently delete " + what + "? This can't be undone."
-                                             : "Move " + what + " to the Recycle Bin?");
+        const long long n = static_cast<long long>(delete_paths_.size());
+        ui.ask_confirm(id, delete_permanent_ ? trf_n("Permanently delete {} item? This can't be undone.", "Permanently delete {} items? This can't be undone.", n, n)
+                                             : trf_n("Move {} item to the Recycle Bin?", "Move {} items to the Recycle Bin?", n, n));
         delete_ask_ = false;
     }
-    int result = ui.confirm(id, {delete_permanent_ ? "Delete" : "Move to Recycle Bin", "Cancel"});
+    int result = ui.confirm(id, {delete_permanent_ ? tr("Delete") : tr("Move to Recycle Bin"), tr("Cancel")});
     // strata's confirm only knows Esc and clicks; Enter takes the first button
     if (result == 0 && ui.key_pressed(key::enter)) {
         ui.close_modal();
@@ -243,7 +323,7 @@ void Shell::request_remove_section(std::size_t section)
     if (section >= layout_.sections().size()) { return; }
     if (layout_.sections()[section].items.empty()) {
         const std::string title = layout_.sections()[section].title;
-        (void)edit_sidebar("Remove " + title, [=](model::SidebarLayout& l) { (void)l.remove_section(section); });
+        (void)edit_sidebar(trf("Remove {}", title), [=](model::SidebarLayout& l) { (void)l.remove_section(section); });
         return;
     }
     remove_section_ = section;
@@ -262,13 +342,13 @@ void Shell::service_remove_section(context& ui)
     static constexpr const char* id = "pfs_remove_section";
     const bool keep_possible = layout_.has_neighbour(section);
     if (remove_ask_) {
-        const std::string what = sec.items.size() == 1 ? "1 folder" : std::to_string(sec.items.size()) + " folders";
-        ui.ask_confirm(id, "\"" + sec.title + "\" has " + what + " pinned. " +
-                               (keep_possible ? "Keep them in another section, or remove them too?"
-                                              : "There is no other section to move them to. Remove them too?"));
+        const long long n = static_cast<long long>(sec.items.size());
+        ui.ask_confirm(id, trf_n("\"{}\" has {} folder pinned. ", "\"{}\" has {} folders pinned. ", n, sec.title, n) +
+                               std::string{keep_possible ? tr("Keep them in another section, or remove them too?")
+                                                         : tr("There is no other section to move them to. Remove them too?")});
         remove_ask_ = false;
     }
-    int result = keep_possible ? ui.confirm(id, {"Keep folders", "Remove them too", "Cancel"}) : ui.confirm(id, {"Remove them too", "Cancel"});
+    int result = keep_possible ? ui.confirm(id, {tr("Keep folders"), tr("Remove them too"), tr("Cancel")}) : ui.confirm(id, {tr("Remove them too"), tr("Cancel")});
     if (keep_possible && result == 0 && ui.key_pressed(key::enter)) { // (Enter takes the harmless first button, never "remove")
         ui.close_modal();
         result = 1;
@@ -278,7 +358,7 @@ void Shell::service_remove_section(context& ui)
     // (without a neighbour the first button already is "remove")
     if (result == 1 || (keep_possible && result == 2)) {
         const bool keep = keep_possible && result == 1;
-        (void)edit_sidebar("Remove " + title, [=](model::SidebarLayout& l) { (void)l.remove_section(section, keep); });
+        (void)edit_sidebar(trf("Remove {}", title), [=](model::SidebarLayout& l) { (void)l.remove_section(section, keep); });
     }
     remove_section_ = std::string::npos;
 }
@@ -298,12 +378,12 @@ void Shell::drop_files(std::vector<std::string> paths, const std::string& dest, 
     transfer(std::move(paths), dest, move);
 }
 
-bool Shell::edit_sidebar(std::string label, const std::function<void(model::SidebarLayout&)>& edit)
+bool Shell::edit_sidebar(std::string_view label, const std::function<void(model::SidebarLayout&)>& edit)
 {
     const model::SidebarLayout before = layout_;
     edit(layout_);
     if (layout_.revision() == before.revision()) { return false; }
-    env_.history.push({std::move(label),
+    env_.history.push({std::string{label},
                        [this, before] { layout_.restore(before); return true; },
                        [this, after = layout_] { layout_.restore(after); return true; }});
     return true;
@@ -312,16 +392,16 @@ bool Shell::edit_sidebar(std::string label, const std::function<void(model::Side
 void Shell::toggle_pin(const std::string& path)
 {
     if (path.empty() || !core::path::is_directory(path)) {
-        toast("Only folders can be pinned to the sidebar", toast_kind::info);
+        toast(tr("Only folders can be pinned to the sidebar"), toast_kind::info);
         return;
     }
     const std::string name = core::path::leaf(path);
     if (layout_.find(path)) {
-        (void)edit_sidebar("Unpin " + name, [&](model::SidebarLayout& l) { (void)l.unpin(path); });
-        toast("Unpinned " + name, toast_kind::info);
+        (void)edit_sidebar(trf("Unpin {}", name), [&](model::SidebarLayout& l) { (void)l.unpin(path); });
+        toast(trf("Unpinned {}", name), toast_kind::info);
     } else {
-        (void)edit_sidebar("Pin " + name, [&](model::SidebarLayout& l) { (void)l.pin(l.pin_section(), std::string::npos, path); });
-        toast("Pinned " + name + " to the sidebar", toast_kind::info);
+        (void)edit_sidebar(trf("Pin {}", name), [&](model::SidebarLayout& l) { (void)l.pin(l.pin_section(), std::string::npos, path); });
+        toast(trf("Pinned {} to the sidebar", name), toast_kind::info);
     }
 }
 
@@ -329,7 +409,7 @@ void Shell::copy_sidebar()
 {
     strata::config c;
     layout_.store(c);
-    toast(core::shell::set_clipboard_text(c.to_string()) ? "Sidebar layout copied" : "Could not copy to the clipboard", toast_kind::info);
+    toast(core::shell::set_clipboard_text(c.to_string()) ? tr("Sidebar layout copied") : tr("Could not copy to the clipboard"), toast_kind::info);
 }
 
 void Shell::paste_sidebar()
@@ -338,11 +418,11 @@ void Shell::paste_sidebar()
     (void)c.from_string(core::shell::get_clipboard_text());
     model::SidebarLayout incoming;
     if (!incoming.load(c)) {
-        toast("The clipboard has no sidebar layout", toast_kind::warning);
+        toast(tr("The clipboard has no sidebar layout"), toast_kind::warning);
         return;
     }
-    (void)edit_sidebar("Paste sidebar layout", [&](model::SidebarLayout& l) { l.replace(incoming); });
-    toast("Sidebar layout pasted", toast_kind::info);
+    (void)edit_sidebar(tr("Paste sidebar layout"), [&](model::SidebarLayout& l) { l.replace(incoming); });
+    toast(tr("Sidebar layout pasted"), toast_kind::info);
 }
 
 void Shell::refresh_all()
@@ -380,7 +460,7 @@ void Shell::apply_deferred()
             ++opened;
         }
         if (opened == 0) {
-            toast("None of the folders in this session exist any more", toast_kind::warning);
+            toast(tr("None of the folders in this session exist any more"), toast_kind::warning);
         } else {
             for (std::size_t i = old; i-- > 0;) { (void)env_.tabs.close(i); } // (not into the reopen list: they are not "closed" tabs)
             env_.tabs.activate(active);
@@ -391,7 +471,7 @@ void Shell::apply_deferred()
                 settings_.split = false;
             }
             settings_dirty_ = true;
-            toast(std::format("Session \"{}\" opened", s.name), toast_kind::info);
+            toast(trf("Session \"{}\" opened", s.name), toast_kind::info);
         }
     }
 }
@@ -447,19 +527,24 @@ void Shell::sync_settings()
 
 void Shell::service_ops()
 {
+    if (const int s = bin_empty_->load(); s == 1 || s == 2) {
+        bin_empty_->store(0);
+        if (s == 1) { toast(tr("Recycle Bin emptied"), toast_kind::success); } else { toast(tr("The Recycle Bin was not emptied"), toast_kind::info); }
+        refresh_all();
+    }
     core::OpResult r;
     while (ops_.poll(r)) {
-        const std::string what = r.count == 1 ? "1 item" : std::format("{} items", r.count);
+        const std::string what = trf_n("{} item", "{} items", static_cast<long long>(r.count), r.count);
         if (r.aborted) {
-            toast("Cancelled", toast_kind::warning);
+            toast(tr("Cancelled"), toast_kind::warning);
         } else if (!r.ok) {
-            toast(r.message.empty() ? "The operation failed" : r.message, toast_kind::error);
+            toast(r.message.empty() ? tr("The operation failed") : std::string_view{r.message}, toast_kind::error);
         } else if (!r.silent) { // (an undo / redo reports itself)
             switch (r.kind) {
-            case core::OpKind::copy:    toast("Copied " + what, toast_kind::success); break;
-            case core::OpKind::move:    toast("Moved " + what, toast_kind::success); break;
-            case core::OpKind::recycle: toast(what + " moved to the Recycle Bin", toast_kind::success); break;
-            case core::OpKind::erase:   toast("Deleted " + what, toast_kind::success); break;
+            case core::OpKind::copy:    toast(trf("Copied {}", what), toast_kind::success); break;
+            case core::OpKind::move:    toast(trf("Moved {}", what), toast_kind::success); break;
+            case core::OpKind::recycle: toast(trf("{} moved to the Recycle Bin", what), toast_kind::success); break;
+            case core::OpKind::erase:   toast(trf("Deleted {}", what), toast_kind::success); break;
             }
         }
         // (a transfer that failed or was cancelled half way still left items behind, and undo can take them away again)
@@ -472,7 +557,10 @@ void Shell::service_ops()
                     if (!to.empty()) { tags_.rename_prefix(r.sources[i], to); }
                 }
             } else if (r.kind == core::OpKind::erase) {
-                for (const std::string& s : r.sources) { tags_.remove_prefix(s); }
+                for (const std::string& s : r.sources) {
+                    tags_.remove_prefix(s);
+                    if (core::recycle::inside(s)) { core::recycle::forget(s); } // (the bin's record of what was just deleted for good)
+                }
             }
         }
         refresh_all();
@@ -484,26 +572,26 @@ void Shell::archive_action(const std::string& name)
 {
     model::Tab&           tab = env_.tab();
     const model::Listing& L   = tab.listing();
-    if (tab.path().empty() || tab.searching()) { toast("Open a folder first (not a search result)", toast_kind::info); return; }
+    if (tab.path().empty() || tab.searching()) { toast(tr("Open a folder first (not a search result)"), toast_kind::info); return; }
     const std::vector<std::size_t> rows = L.selected_rows();
     if (name == "compress_zip") {
-        if (rows.empty()) { toast("Select what to compress", toast_kind::info); return; }
+        if (rows.empty()) { toast(tr("Select what to compress"), toast_kind::info); return; }
         std::vector<std::string> names;
         for (const std::size_t r : rows) { names.push_back(L.at(r).name); }
         const std::string zip = rows.size() == 1 ? (L.at(rows.front()).is_dir() ? L.at(rows.front()).name : core::path::leaf(core::archive_stem(L.at(rows.front()).name)))
                                                  : core::path::leaf(tab.path());
-        toast("Compressing ...", toast_kind::info);
+        toast(tr("Compressing ..."), toast_kind::info);
         archives_.compress(tab.path(), std::move(names), zip.empty() ? "Archive" : zip);
         return;
     }
     for (const std::size_t r : rows) {
         const core::FileEntry& e = L.at(r);
         if (e.is_dir() || !core::is_archive_name(e.name)) { continue; }
-        toast("Extracting ...", toast_kind::info);
+        toast(tr("Extracting ..."), toast_kind::info);
         archives_.extract(core::path::join(tab.path(), e.name), tab.path(), name == "extract_folder");
         return;
     }
-    toast("Select an archive (zip, 7z, tar ...) first", toast_kind::info);
+    toast(tr("Select an archive (zip, 7z, tar ...) first"), toast_kind::info);
 }
 
 void Shell::service_images()
@@ -524,10 +612,10 @@ void Shell::open_archive(const std::string& archive)
     }
     const std::string dir = core::archive_cache_dir(archive, true);
     if (!core::path::is_directory(dir)) {
-        toast("Could not make a temporary folder for the archive", toast_kind::error);
+        toast(tr("Could not make a temporary folder for the archive"), toast_kind::error);
         return;
     }
-    toast("Opening " + core::path::leaf(archive) + " ...", toast_kind::info);
+    toast(trf("Opening {} ...", core::path::leaf(archive)), toast_kind::info);
     archives_.extract(archive, dir, false, "view\n" + archive);
 }
 
@@ -575,7 +663,7 @@ void Shell::record_undo(const core::OpResult& r)
         created.push_back(made);
     }
     const std::string dest = r.dest;
-    const std::string what = sources.size() == 1 ? core::path::leaf(sources.front()) : std::format("{} items", sources.size());
+    const std::string what = sources.size() == 1 ? core::path::leaf(sources.front()) : trf_n("{} item", "{} items", static_cast<long long>(sources.size()), sources.size());
     if (sources.empty() && (r.kind == core::OpKind::copy || r.kind == core::OpKind::move)) { return; }
 
     switch (r.kind) {
@@ -586,13 +674,13 @@ void Shell::record_undo(const core::OpResult& r)
                 if (core::path::parent(s) == dest) { return; }
             }
         }
-        env_.history.push({"Copy " + what,
+        env_.history.push({trf("Copy {}", what),
                            [ops, created] { ops->start(core::OpKind::recycle, created, {}, true); return true; },
                            [ops, sources, dest] { ops->start(core::OpKind::copy, sources, dest, true); return true; }});
         break;
     }
     case core::OpKind::move:
-        env_.history.push({"Move " + what,
+        env_.history.push({trf("Move {}", what),
                            [ops, sources, created] {
                                // back to where each item came from (one job per source folder)
                                std::vector<std::string> parents;
@@ -612,7 +700,7 @@ void Shell::record_undo(const core::OpResult& r)
                            [ops, sources, dest] { ops->start(core::OpKind::move, sources, dest, true); return true; }});
         break;
     case core::OpKind::recycle:
-        env_.history.push({"Delete " + what,
+        env_.history.push({trf("Delete {}", what),
                            [sources] { return core::FileOps::restore_from_recycle(sources); },
                            [ops, sources] { ops->start(core::OpKind::recycle, sources, {}, true); return true; }});
         break;
@@ -634,7 +722,9 @@ void Shell::open_goto()
     for (const model::SidebarSection& s : layout_.sections()) {
         for (const model::SidebarItem& it : s.items) { add(it.label(), it.path); }
     }
-    for (const core::Place& d : sidebar_.drives()) { add(d.name, d.path); }
+    for (const core::Place& d : sidebar_.drives()) {
+        if (!d.device) { add(d.name, d.path); }
+    }
     goto_palette_.open();
 }
 
@@ -643,8 +733,8 @@ void Shell::open_batch_rename()
     model::Tab&           tab = env_.tab();
     const model::Listing& L   = tab.listing();
     const std::vector<std::size_t> rows = L.selected_rows();
-    if (rows.size() < 2) { toast("Select two or more items to rename them together", toast_kind::info); return; }
-    if (tab.searching()) { toast("Batch rename works inside one folder: leave the search first", toast_kind::info); return; }
+    if (rows.size() < 2) { toast(tr("Select two or more items to rename them together"), toast_kind::info); return; }
+    if (tab.searching()) { toast(tr("Batch rename works inside one folder: leave the search first"), toast_kind::info); return; }
     std::vector<core::RenameItem> items;
     std::vector<std::string>      others;
     std::vector<bool>             picked(L.rows(), false);
@@ -660,24 +750,24 @@ void Shell::open_batch_rename()
 
 void Shell::do_undo()
 {
-    if (!env_.history.can_undo()) { toast("Nothing to undo", toast_kind::info); return; }
+    if (!env_.history.can_undo()) { toast(tr("Nothing to undo"), toast_kind::info); return; }
     const std::string label = env_.history.undo_label();
     if (env_.history.undo()) {
-        toast("Undone: " + label, toast_kind::info);
+        toast(trf("Undone: {}", label), toast_kind::info);
     } else {
-        toast("Could not undo: " + label, toast_kind::warning);
+        toast(trf("Could not undo: {}", label), toast_kind::warning);
     }
     refresh_all();
 }
 
 void Shell::do_redo()
 {
-    if (!env_.history.can_redo()) { toast("Nothing to redo", toast_kind::info); return; }
+    if (!env_.history.can_redo()) { toast(tr("Nothing to redo"), toast_kind::info); return; }
     const std::string label = env_.history.redo_label();
     if (env_.history.redo()) {
-        toast("Redone: " + label, toast_kind::info);
+        toast(trf("Redone: {}", label), toast_kind::info);
     } else {
-        toast("Could not redo: " + label, toast_kind::warning);
+        toast(trf("Could not redo: {}", label), toast_kind::warning);
     }
     refresh_all();
 }
@@ -721,7 +811,7 @@ void Shell::draw_drag_ghost(Painter& p)
     const FontSet& f   = env_.fonts;
 
     const std::string dest = resolve_drop(*ghost_at_);
-    const std::string what = ghost_paths_.size() == 1 ? core::path::leaf(ghost_paths_.front()) : std::format("{} items", ghost_paths_.size());
+    const std::string what = ghost_paths_.size() == 1 ? core::path::leaf(ghost_paths_.front()) : trf_n("{} item", "{} items", static_cast<long long>(ghost_paths_.size()), ghost_paths_.size());
     std::string       action;
     // dropping onto one of the dragged items, or back into the folder they already live in, does nothing: no hint
     const auto same_path = [](const std::string& a, const std::string& b) {
@@ -731,8 +821,8 @@ void Shell::draw_drag_ghost(Painter& p)
     };
     const bool no_op = !dest.empty() && !Sidebar::is_pin_target(dest) &&
                        std::ranges::any_of(ghost_paths_, [&](const std::string& g) { return same_path(g, dest) || same_path(core::path::parent(g), dest); });
-    if (Sidebar::is_pin_target(dest)) { action = "Pin to sidebar"; }
-    else if (!dest.empty() && !no_op) { action = "Drop in " + core::path::leaf(dest); }
+    if (Sidebar::is_pin_target(dest)) { action = tr("Pin to sidebar"); }
+    else if (!dest.empty() && !no_op) { action = trf("Drop in {}", core::path::leaf(dest)); }
 
     const float w1 = p.measure(f.body, what).x;
     const float w2 = action.empty() ? 0.0f : p.measure(f.small, action).x;
@@ -797,24 +887,13 @@ void Shell::run_action(const std::string& name, context& ui)
     if (name == "new_tab") { open_tab(tab.path(), true); }
     else if (name == "close_tab") { close_tab(tabs.active_index()); }
     else if (name == "reopen_tab") {
-        if (closed_tabs_.empty()) { toast("No closed tab to reopen", toast_kind::info); }
+        if (closed_tabs_.empty()) { toast(tr("No closed tab to reopen"), toast_kind::info); }
         else { open_tab(closed_tabs_.back(), true); closed_tabs_.pop_back(); }
     }
     else if (name == "duplicate_tab") { open_tab(tabs.active().path(), true); }
     else if (name == "next_tab") { tabs.next(1); }
     else if (name == "prev_tab") { tabs.next(-1); }
-    else if (name == "new_window") {
-        wchar_t exe[MAX_PATH]{};
-        ::GetModuleFileNameW(nullptr, exe, MAX_PATH);
-        std::wstring cmd = L"\"" + std::wstring{exe} + L"\" \"" + core::text::widen(tab.path()) + L"\"";
-        STARTUPINFOW si{};
-        si.cb = sizeof si;
-        PROCESS_INFORMATION pi{};
-        if (::CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
-            ::CloseHandle(pi.hThread);
-            ::CloseHandle(pi.hProcess);
-        }
-    }
+    else if (name == "new_window") { spawn_window(tab.path()); }
     else if (name == "maximize") { env_.window.toggle_maximize(); }
     else if (name == "back") { (void)tab.back(); }
     else if (name == "forward") { (void)tab.forward(); }
@@ -845,8 +924,8 @@ void Shell::run_action(const std::string& name, context& ui)
         const std::vector<std::size_t> rows = L.selected_rows();
         // the link goes next to the original, or into the other pane's folder when two are shown
         const std::string folder = env_.other() != nullptr ? env_.other()->path() : tab.path();
-        if (rows.empty()) { toast("Select what to link to first", toast_kind::info); }
-        else if (folder.empty() || tab.searching()) { toast("Open a folder first", toast_kind::info); }
+        if (rows.empty()) { toast(tr("Select what to link to first"), toast_kind::info); }
+        else if (folder.empty() || tab.searching()) { toast(tr("Open a folder first"), toast_kind::info); }
         else {
             std::vector<std::pair<std::string, std::string>> made; // link, target
             std::vector<bool> dirs;
@@ -866,14 +945,14 @@ void Shell::run_action(const std::string& name, context& ui)
             }
             if (!error.empty()) { toast(error, toast_kind::error); }
             if (!made.empty()) {
-                const std::string label = made.size() == 1 ? "Link " + core::path::leaf(made.front().first) : std::format("{} links", made.size());
+                const std::string label = made.size() == 1 ? trf("Link {}", core::path::leaf(made.front().first)) : trf("{} links", made.size());
                 env_.history.push({label,
                                    [made] { for (const auto& m : made) { (void)core::remove_link(m.first); } return true; },
                                    [made, dirs, kind] {
                                        for (std::size_t i = 0; i < made.size(); ++i) { (void)core::make_link(kind, made[i].second, dirs[i], made[i].first); }
                                        return true;
                                    }});
-                if (error.empty()) { toast(made.size() == 1 ? "Link created" : std::format("{} links created", made.size()), toast_kind::success); }
+                if (error.empty()) { toast(made.size() == 1 ? std::string{tr("Link created")} : trf("{} links created", made.size()), toast_kind::success); }
                 refresh_all();
             }
         }
@@ -887,35 +966,35 @@ void Shell::run_action(const std::string& name, context& ui)
         for (const std::size_t r : L.selected_rows()) {
             if (!L.at(r).is_dir() && core::is_image_name(L.at(r).name)) { paths.push_back(core::path::join(tab.path(), L.at(r).name)); }
         }
-        if (paths.empty()) { toast("Select one or more pictures first", toast_kind::info); }
+        if (paths.empty()) { toast(tr("Select one or more pictures first"), toast_kind::info); }
         else {
             for (const auto& [n, op] : ops) {
-                if (n == name) { toast("Working on the pictures ...", toast_kind::info); image_jobs_.start(op, std::move(paths)); break; }
+                if (n == name) { toast(tr("Working on the pictures ..."), toast_kind::info); image_jobs_.start(op, std::move(paths)); break; }
             }
         }
     }
     else if (name == "empty_folders") {
-        if (tab.path().empty() || tab.searching()) { toast("Open a folder first", toast_kind::info); }
+        if (tab.path().empty() || tab.searching()) { toast(tr("Open a folder first"), toast_kind::info); }
         else { empty_folders_dialog_.open(tab.path()); }
     }
     else if (name == "search_everywhere") {
-        if (!settings_.index_drives) { toast("Turn on \"Index drives for instant search\" in Settings first", toast_kind::info); }
+        if (!settings_.index_drives) { toast(tr("Turn on \"Index drives for instant search\" in Settings first"), toast_kind::info); }
         else { search_dialog_.open(); }
     }
     else if (name == "compare_panes") {
-        if (!right_tab_) { toast("Show two panes first (F3), then compare them", toast_kind::info); }
-        else if (env_.tabs.active().path().empty() || right_tab_->path().empty() || env_.tabs.active().searching() || right_tab_->searching()) { toast("Open a folder in both panes first", toast_kind::info); }
+        if (!right_tab_) { toast(trf("Show two panes first ({}), then compare them", key_hint(env_.binds, "split")), toast_kind::info); }
+        else if (env_.tabs.active().path().empty() || right_tab_->path().empty() || env_.tabs.active().searching() || right_tab_->searching()) { toast(tr("Open a folder in both panes first"), toast_kind::info); }
         else { compare_dialog_.open(env_.tabs.active().path(), right_tab_->path()); }
     }
     else if (name == "disk_usage") {
-        if (tab.path().empty() || tab.searching()) { toast("Open a folder first", toast_kind::info); }
+        if (tab.path().empty() || tab.searching()) { toast(tr("Open a folder first"), toast_kind::info); }
         else { usage_dialog_.open(tab.path()); }
     }
     else if (name.starts_with("tag_")) {
         const model::Listing& L = tab.listing();
         std::vector<std::string> paths;
         for (const std::size_t r : L.selected_rows()) { paths.push_back(core::path::join(tab.path(), L.at(r).name)); }
-        if (paths.empty()) { toast("Select something to label first", toast_kind::info); }
+        if (paths.empty()) { toast(tr("Select something to label first"), toast_kind::info); }
         else if (name == "tag_clear") { clear_tags(paths); }
         else { toggle_tag(paths, name.back() - '1'); }
     }
@@ -924,7 +1003,7 @@ void Shell::run_action(const std::string& name, context& ui)
         for (int i = 0; i < 5; ++i) {
             if (name == names[i]) { settings_.group_by = i; settings_dirty_ = true; }
         }
-        if (settings_.grid_view && settings_.group_by != 0) { toast("Groups show in the details view", toast_kind::info); }
+        if (settings_.grid_view && settings_.group_by != 0) { toast(tr("Groups show in the details view"), toast_kind::info); }
     }
     else if (name == "settings") { open_settings(); }
     else if (name == "palette") { palette_.open(); }
@@ -933,16 +1012,16 @@ void Shell::run_action(const std::string& name, context& ui)
         const std::string text   = tab.searching() ? tab.search_query() : tab.listing().query().text();
         const std::string folder = tab.path();
         if (text.empty() || folder.empty()) {
-            toast("Type a search or filter first", toast_kind::info);
+            toast(tr("Type a search or filter first"), toast_kind::info);
         } else {
-            const bool saved = edit_sidebar("Save search", [&](model::SidebarLayout& l) { (void)l.pin_search(l.pin_section(), folder, text); });
-            toast(saved ? "Search saved to the sidebar" : "This search is already saved", toast_kind::info);
+            const bool saved = edit_sidebar(tr("Save search"), [&](model::SidebarLayout& l) { (void)l.pin_search(l.pin_section(), folder, text); });
+            toast(saved ? tr("Search saved to the sidebar") : tr("This search is already saved"), toast_kind::info);
         }
     }
     else if (name == "batch_rename") { open_batch_rename(); }
     else if (name == "extract_here" || name == "extract_folder" || name == "compress_zip") { archive_action(name); }
     else if (name == "find_duplicates") {
-        if (tab.path().empty()) { toast("Open a folder first", toast_kind::info); }
+        if (tab.path().empty()) { toast(tr("Open a folder first"), toast_kind::info); }
         else { duplicates_dialog_.open(tab.path()); }
     }
     else if (name == "goto_folder") { open_goto(); }
@@ -1004,6 +1083,7 @@ void Shell::frame(context& ui, const FrameInput& in)
         index_started_ = true;
         if (settings_.index_drives) { rebuild_index(); }
     }
+    for (const std::string& folder : env_.window.take_incoming()) { open_tab(folder, true); }
     env_.tabs.poll();
     if (right_tab_) { (void)right_tab_->poll(); }
     service_ops();
@@ -1095,7 +1175,14 @@ void Shell::frame(context& ui, const FrameInput& in)
         settings_dirty_ = true;
     }
     draw_drag_ghost(p);
-    for (const Toast& t : pending_toasts_) { ui.toast(t.text, t.kind); }
+    if (env_.window.drop_hint()) { // another window is dragging a tab over this one
+        auto fg = ui.layer(layer::foreground);
+        const rect all = rect::from_size({0.0f, 0.0f}, ui.display_size());
+        p.dl().rect_filled(all, p.pal().accent.scaled_alpha(0.10f));
+        p.dl().rect_outline(all.expanded(-2.0f), p.pal().accent, 8.0f, 4.0f);
+        ui.invalidate();
+    }
+    for (const Toast& t : pending_toasts_) { ui.toast(t.text, t.kind, t.kind == toast_kind::warning || t.kind == toast_kind::error ? 4.0f : 2.5f); }
     pending_toasts_.clear();
     {
         std::vector<std::string> actions;

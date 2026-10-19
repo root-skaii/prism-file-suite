@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <iterator>
+#include <unordered_set>
 
 namespace prism::model {
 
@@ -35,7 +36,7 @@ static_assert(std::size(k_kind_titles) == static_cast<std::size_t>(core::FileKin
 {
     switch (by) {
     case GroupBy::name: {
-        const std::string_view leaf = [&] { const std::size_t i = e.name.rfind('\\'); return std::string_view{e.name}.substr(i == std::string::npos ? 0 : i + 1); }();
+        const std::string_view leaf = [&] { const std::string_view n = e.display(); const std::size_t i = n.rfind('\\'); return n.substr(i == std::string_view::npos ? 0 : i + 1); }();
         const char c = leaf.empty() ? '\0' : leaf.front();
         if (c >= 'a' && c <= 'z') { return static_cast<std::uint8_t>(c - 'a'); }
         if (c >= 'A' && c <= 'Z') { return static_cast<std::uint8_t>(c - 'A'); }
@@ -104,7 +105,7 @@ void Listing::append(std::vector<FileEntry>&& more)
     sel_.resize(entries_.size(), 0);
     row_of_.resize(entries_.size(), npos);
     for (std::size_t i = first; i < entries_.size(); ++i) {
-        core::text::note_codepoints(entries_[i].name);
+        core::text::note_codepoints(entries_[i].display());
         if (!visible(entries_[i])) { continue; }
         row_of_[i] = static_cast<std::uint32_t>(order_.size());
         order_.push_back(static_cast<std::uint32_t>(i));
@@ -115,6 +116,30 @@ void Listing::append(std::vector<FileEntry>&& more)
 void Listing::finish()
 {
     finished_ = true;
+    rebuild();
+}
+
+void Listing::replace_entries(std::vector<FileEntry>&& fresh)
+{
+    std::unordered_set<std::string> chosen;
+    for (std::size_t i = 0; i < entries_.size(); ++i) {
+        if (sel_[i] != 0) { chosen.insert(entries_[i].name); }
+    }
+    const std::string focus_name  = focus_ != npos ? entries_[focus_].name : std::string{};
+    const std::string anchor_name = anchor_ != npos ? entries_[anchor_].name : std::string{};
+
+    entries_ = std::move(fresh);
+    sel_.assign(entries_.size(), 0);
+    focus_  = npos;
+    anchor_ = npos;
+    for (std::size_t i = 0; i < entries_.size(); ++i) {
+        core::text::note_codepoints(entries_[i].display());
+        if (chosen.count(entries_[i].name) != 0) { sel_[i] = 1; }
+        if (!focus_name.empty() && entries_[i].name == focus_name) { focus_ = static_cast<std::uint32_t>(i); }
+        if (!anchor_name.empty() && entries_[i].name == anchor_name) { anchor_ = static_cast<std::uint32_t>(i); }
+    }
+    tag_token_ = ~std::uint64_t{0};
+    finished_  = true;
     rebuild();
 }
 
@@ -183,7 +208,7 @@ bool Listing::less(std::uint32_t ia, std::uint32_t ib) const noexcept
 
     int c = 0;
     switch (sort_.key) {
-    case SortKey::name:     c = compare_names(a.name, b.name, sort_.natural); break;
+    case SortKey::name:     c = compare_names(a.display(), b.display(), sort_.natural); break;
     case SortKey::modified: c = a.modified < b.modified ? -1 : (a.modified > b.modified ? 1 : 0); break;
     case SortKey::size:     c = a.size < b.size ? -1 : (a.size > b.size ? 1 : 0); break;
     case SortKey::type:
@@ -194,7 +219,7 @@ bool Listing::less(std::uint32_t ia, std::uint32_t ib) const noexcept
         }
         break;
     }
-    if (c == 0 && sort_.key != SortKey::name) { c = compare_names(a.name, b.name, sort_.natural); return c < 0; } // ties by name, always ascending
+    if (c == 0 && sort_.key != SortKey::name) { c = compare_names(a.display(), b.display(), sort_.natural); return c < 0; } // ties by name, always ascending
     return sort_.ascending ? c < 0 : c > 0;
 }
 
@@ -278,7 +303,7 @@ std::optional<std::size_t> Listing::find_prefix(std::string_view prefix, std::si
     const std::string p = core::text::lower_ascii(prefix);
     for (std::size_t k = 0; k < n; ++k) {
         const std::size_t r = (from + k) % n;
-        const std::string_view name = entries_[order_[r]].name;
+        const std::string_view name = entries_[order_[r]].display();
         if (name.size() < p.size()) { continue; }
         std::size_t i = 0;
         for (; i < p.size(); ++i) {

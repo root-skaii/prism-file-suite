@@ -124,6 +124,83 @@ bool show_properties(const std::string& path)
     return ::ShellExecuteExW(&info) != FALSE;
 }
 
+bool is_elevated()
+{
+    static const bool elevated = [] {
+        HANDLE token = nullptr;
+        if (!::OpenProcessToken(::GetCurrentProcess(), TOKEN_QUERY, &token)) { return false; }
+        TOKEN_ELEVATION e{};
+        DWORD size = 0;
+        const bool ok = ::GetTokenInformation(token, TokenElevation, &e, sizeof e, &size) != FALSE && e.TokenIsElevated != 0;
+        ::CloseHandle(token);
+        return ok;
+    }();
+    return elevated;
+}
+
+namespace {
+
+[[nodiscard]] std::wstring folder_args(const std::vector<std::string>& folders)
+{
+    std::wstring args;
+    for (std::size_t i = 0; i < folders.size() && i < 2; ++i) {
+        if (!folders[i].empty()) { args += (args.empty() ? L"\"" : L" \"") + text::widen(folders[i]) + L"\""; }
+    }
+    return args;
+}
+
+} // namespace
+
+bool relaunch_unelevated(const std::vector<std::string>& folders)
+{
+    // (Explorer runs with the normal token of the logged-in user: borrow it for the new process)
+    DWORD pid = 0;
+    ::GetWindowThreadProcessId(::GetShellWindow(), &pid);
+    HANDLE proc = pid != 0 ? ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid) : nullptr;
+    if (proc == nullptr) { return false; }
+    HANDLE token = nullptr, primary = nullptr;
+    bool ok = ::OpenProcessToken(proc, TOKEN_DUPLICATE, &token) != FALSE &&
+              ::DuplicateTokenEx(token, TOKEN_ASSIGN_PRIMARY | TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ADJUST_DEFAULT | TOKEN_ADJUST_SESSIONID, nullptr, SecurityImpersonation, TokenPrimary, &primary) != FALSE;
+    if (ok) {
+        wchar_t exe[MAX_PATH]{};
+        ::GetModuleFileNameW(nullptr, exe, MAX_PATH);
+        std::wstring cmd = L"\"" + std::wstring{exe} + L"\" " + folder_args(folders);
+        STARTUPINFOW si{};
+        si.cb = sizeof si;
+        PROCESS_INFORMATION pi{};
+        ok = ::CreateProcessWithTokenW(primary, 0, nullptr, cmd.data(), 0, nullptr, nullptr, &si, &pi) != FALSE;
+        if (ok) {
+            ::CloseHandle(pi.hThread);
+            ::CloseHandle(pi.hProcess);
+        }
+    }
+    if (primary != nullptr) { ::CloseHandle(primary); }
+    if (token != nullptr) { ::CloseHandle(token); }
+    ::CloseHandle(proc);
+    return ok;
+}
+
+bool relaunch_elevated(const std::vector<std::string>& folders)
+{
+    wchar_t exe[MAX_PATH]{};
+    ::GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    const std::wstring args = folder_args(folders);
+    SHELLEXECUTEINFOW info{};
+    info.cbSize       = sizeof info;
+    info.fMask        = SEE_MASK_NOASYNC;
+    info.lpVerb       = L"runas";
+    info.lpFile       = exe;
+    info.lpParameters = args.empty() ? nullptr : args.c_str();
+    info.nShow        = SW_SHOWNORMAL;
+    return ::ShellExecuteExW(&info) != FALSE;
+}
+
+bool open_device(const std::string& parsing_name)
+{
+    const std::wstring args = L"\"" + text::widen(parsing_name) + L"\"";
+    return reinterpret_cast<INT_PTR>(::ShellExecuteW(nullptr, L"open", L"explorer.exe", args.c_str(), nullptr, SW_SHOWNORMAL)) > 32;
+}
+
 bool reveal_in_explorer(const std::string& path)
 {
     const std::wstring args = L"/select,\"" + text::widen(path) + L"\"";

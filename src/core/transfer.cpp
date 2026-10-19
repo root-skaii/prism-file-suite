@@ -1,6 +1,7 @@
 #include "core/transfer.hpp"
 
 #include "core/path.hpp"
+#include "core/recycle.hpp"
 #include "core/text.hpp"
 
 #include <windows.h>
@@ -65,6 +66,22 @@ struct Attr {
     a.size     = a.dir ? 0 : pack(d.nFileSizeHigh, d.nFileSizeLow);
     a.modified = pack(d.ftLastWriteTime.dwHighDateTime, d.ftLastWriteTime.dwLowDateTime);
     return a;
+}
+
+// an item dragged out of the Recycle Bin is the bin's own copy (`$R4ND0M.png`): the name it had is in the `$I` record beside it.
+// `info` is that record (deleted once the item has been moved out), both empty for anything else
+struct RecycledName {
+    std::string name;
+    std::string info;
+};
+
+[[nodiscard]] RecycledName recycled_name(const std::string& src)
+{
+    const std::optional<recycle::Record> rec = recycle::read(src);
+    if (!rec) { return {}; }
+    std::string name = path::leaf(rec->original);
+    if (name.empty()) { return {}; }
+    return {std::move(name), rec->info};
 }
 
 // "name (2).ext" in `dir`
@@ -364,6 +381,7 @@ void TransferQueue::work()
         } else {
             // 1. what is there to do: whole items that a rename can move at once, and the rest as a list of files
             std::vector<Item> items;
+            std::vector<std::pair<std::size_t, std::string>> recycle_records;
             for (std::size_t top = 0; top < job.sources.size() && !cancel_; ++top) {
                 const std::string& src = job.sources[top];
                 const Attr sa = attr_of(src);
@@ -375,7 +393,9 @@ void TransferQueue::work()
                     if (first_error.empty()) { first_error = "A folder cannot be put inside itself"; }
                     continue;
                 }
-                const std::string name = path::leaf(src);
+                RecycledName      recycled = recycled_name(src);
+                const std::string name     = recycled.name.empty() ? path::leaf(src) : recycled.name;
+                if (!recycled.info.empty()) { recycle_records.emplace_back(top, std::move(recycled.info)); }
                 const std::string target_name = !move && same_folder ? copy_name(job.dest, name, sa.dir) : name;
                 const std::string dst = path::join(job.dest, target_name);
 
@@ -532,6 +552,12 @@ void TransferQueue::work()
             if (move && !cancel_) {
                 for (std::size_t i = items.size(); i-- > 0;) {
                     if (items[i].dir && top_failed[items[i].top] == 0) { ::RemoveDirectoryW(lp(items[i].src).c_str()); }
+                }
+            }
+            // what left the Recycle Bin is no longer listed there: drop its record too
+            if (move) {
+                for (const auto& [top, info] : recycle_records) {
+                    if (!attr_of(job.sources[top]).exists) { ::DeleteFileW(lp(info).c_str()); }
                 }
             }
             res.aborted = cancel_.load();

@@ -8,12 +8,14 @@
 #include "core/duplicates.hpp"
 #include "core/empty_folders.hpp"
 #include "core/file_index.hpp"
+#include "core/i18n.hpp"
 #include "core/treemap.hpp"
 #include "core/folder_sizes.hpp"
 #include "core/image_tools.hpp"
 #include "core/links.hpp"
 #include "core/git_status.hpp"
 #include "core/process.hpp"
+#include "core/recycle.hpp"
 #include "core/transfer.hpp"
 #include "core/templates.hpp"
 #include "core/file_ops.hpp"
@@ -35,6 +37,7 @@
 
 #include <windows.h>
 #include <objbase.h>
+#include <shellapi.h>
 
 #include <atomic>
 #include <chrono>
@@ -961,6 +964,16 @@ static void test_shell_menu()
 }
 
 // switches the per-user folder verb on and off again (skipped when the user has it on: never touch their setup)
+static void test_recycle_bin_handler()
+{
+    const bool before = core::recycle_bin_handler_active();
+    CHECK(core::set_recycle_bin_handler(true));
+    CHECK(core::recycle_bin_handler_active());
+    CHECK(core::set_recycle_bin_handler(false));
+    CHECK(!core::recycle_bin_handler_active());
+    if (before) { (void)core::set_recycle_bin_handler(true); }
+}
+
 static void test_default_manager()
 {
     if (core::default_manager_active()) { return; }
@@ -968,6 +981,42 @@ static void test_default_manager()
     CHECK(core::default_manager_active());
     CHECK(core::set_default_manager(false));
     CHECK(!core::default_manager_active());
+}
+
+// a file sent to the real Recycle Bin comes back under its own name, and its `$I` record goes with it
+static void test_recycle_restore()
+{
+    const std::string dir = make_temp_dir();
+    ::CreateDirectoryW(core::text::widen(dir).c_str(), nullptr);
+    const std::string file = core::path::join(dir, "bin test \xC3\xBC.txt");
+    { std::ofstream(core::text::widen(file), std::ios::binary) << "x"; }
+
+    std::wstring from = core::text::widen(file);
+    from.push_back(L'\0');
+    SHFILEOPSTRUCTW op{};
+    op.wFunc  = FO_DELETE;
+    op.pFrom  = from.c_str();
+    op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT;
+    if (::SHFileOperationW(&op) != 0 || core::recycle::folder().empty()) { ::RemoveDirectoryW(core::text::widen(dir).c_str()); return; } // (no bin on this machine: nothing to test)
+
+    std::string item;
+    WIN32_FIND_DATAW fd{};
+    const std::string bin = core::recycle::folder();
+    HANDLE h = ::FindFirstFileW(core::text::widen(core::path::join(bin, "$R*")).c_str(), &fd);
+    for (BOOL more = h != INVALID_HANDLE_VALUE; more; more = ::FindNextFileW(h, &fd)) {
+        const std::string candidate = core::path::join(bin, core::text::narrow(fd.cFileName));
+        if (const auto rec = core::recycle::read(candidate); rec && core::text::lower_ascii(rec->original) == core::text::lower_ascii(file)) { item = candidate; break; }
+    }
+    if (h != INVALID_HANDLE_VALUE) { ::FindClose(h); }
+    CHECK(!item.empty());
+    if (item.empty()) { ::RemoveDirectoryW(core::text::widen(dir).c_str()); return; }
+
+    std::string error;
+    CHECK(core::recycle::restore(item, error));
+    CHECK(::GetFileAttributesW(core::text::widen(file).c_str()) != INVALID_FILE_ATTRIBUTES);
+    CHECK(!core::recycle::read(item).has_value()); // (the record was removed)
+    ::DeleteFileW(core::text::widen(file).c_str());
+    ::RemoveDirectoryW(core::text::widen(dir).c_str());
 }
 
 static void test_drive_watcher()
@@ -978,7 +1027,8 @@ static void test_drive_watcher()
     CHECK(!first.empty() && first.front().path.size() >= 2 && w.revision() >= 1); // (a machine with no drive would not run this)
     w.poke();
     std::this_thread::sleep_for(std::chrono::milliseconds{200});
-    CHECK(w.list().size() == first.size());
+    const auto drives_only = [](const std::vector<core::Place>& l) { return std::ranges::count_if(l, [](const core::Place& p) { return !p.device && !p.recycle; }); };
+    CHECK(drives_only(w.list()) == drives_only(first)); // (phones and the bin are only looked for on the worker: they may turn up after `first`)
 }
 
 static void test_path_probe()
@@ -1242,15 +1292,65 @@ static void test_saved_search()
     CHECK(searches == 2);
 }
 
+static void test_i18n()
+{
+    namespace i18n = prism::core::i18n;
+    CHECK(!i18n::languages().empty() && i18n::languages()[0].code == "en");
+    CHECK(i18n::set_language("xx") == "en"); // unknown: English
+    CHECK(i18n::tr("Compact density") == "Compact density");
+    CHECK(i18n::set_language("en") == "en");
+
+    // a language file in %TEMP%
+    char tmp[MAX_PATH]{};
+    ::GetTempPathA(MAX_PATH, tmp);
+    const std::string dir = std::string{tmp} + "prismfs_i18n_test";
+    ::CreateDirectoryA(dir.c_str(), nullptr);
+    {
+        std::ofstream f{dir + "\\xx.lang", std::ios::binary};
+        f << "# test\n@name = Xx Lang\n@plural = slavic\n\n"
+             "\"Compact density\" = \"Dense\"\n"
+             "\"Say \\\"hi\\\"\\nnow\" = \"A\\\\B\\n\"\n"
+             "\"Not done\" = \"\"\n"
+             "\"{} item|{} items\" = \"{} one|{} few|{} many\"\n"
+             "\"{} left\" = \"{1} bad\"\n"
+             "\"{} of {}\" = \"{1} von {0}\"\n"
+             "\"{} done\" = \"{ broken\"\n";
+    }
+    const std::string dirs[]{dir};
+    i18n::scan(dirs);
+    CHECK(i18n::languages().size() == 2 && i18n::languages()[1].code == "xx" && i18n::languages()[1].name == "Xx Lang");
+    CHECK(i18n::set_language("xx") == "xx");
+    CHECK(i18n::tr("Compact density") == "Dense");
+    CHECK(i18n::tr("Say \"hi\"\nnow") == "A\\B\n");
+    CHECK(i18n::tr("Not done") == "Not done");   // empty = untranslated
+    CHECK(i18n::tr("Unknown") == "Unknown");
+    CHECK(i18n::tr_n("{} item", "{} items", 1) == "{} one");
+    CHECK(i18n::tr_n("{} item", "{} items", 3) == "{} few");
+    CHECK(i18n::tr_n("{} item", "{} items", 11) == "{} many");
+    CHECK(i18n::tr_n("{} item", "{} items", 21) == "{} one");
+    CHECK(i18n::tr_n("{} file", "{} files", 2) == "{} files"); // no entry: english rule
+    CHECK(i18n::trf("{} of {}", 3, 9) == "9 von 3");
+    CHECK(i18n::trf("{} left", 5) == "5 left");   // index out of range: entry dropped
+    CHECK(i18n::trf("{} done", 5) == "5 done");   // malformed braces: entry dropped
+    CHECK(i18n::trf_n("{} item", "{} items", 22, 22) == "22 few");
+    CHECK(i18n::set_language("en") == "en" && i18n::tr("Compact density") == "Compact density");
+    ::DeleteFileA((dir + "\\xx.lang").c_str());
+    ::RemoveDirectoryA(dir.c_str());
+    i18n::scan({});
+}
+
 int main()
 {
     ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    test_i18n();
     test_sidebar_layout();
     test_sidebar_phase3();
     test_path_probe();
+    test_recycle_restore();
     test_drive_watcher();
     test_shell_menu();
     test_default_manager();
+    test_recycle_bin_handler();
     test_text();
     test_path();
     test_query();

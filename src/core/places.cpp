@@ -1,8 +1,11 @@
 #include "core/places.hpp"
+#include "core/i18n.hpp"
 
 #include "core/path.hpp"
+#include "core/recycle.hpp"
 #include "core/text.hpp"
 
+#include <algorithm>
 #include <windows.h>
 #include <knownfolders.h>
 #include <shlobj.h>
@@ -87,6 +90,8 @@ std::vector<Place> drives()
         Place p;
         p.path      = text::narrow(root);
         p.removable = type == DRIVE_REMOVABLE || type == DRIVE_CDROM;
+        p.optical   = type == DRIVE_CDROM;
+        if (type == DRIVE_FIXED || type == DRIVE_REMOVABLE) { p.bin = recycle::folder(text::narrow(root)); } // (not for shares: a slow lookup)
         // (removable media without a disk fail here: skipped instead of showing an empty slot)
         wchar_t label[MAX_PATH + 1]{};
         if (!::GetVolumeInformationW(root, label, MAX_PATH, nullptr, nullptr, nullptr, nullptr, 0)) { continue; }
@@ -96,10 +101,58 @@ std::vector<Place> drives()
             p.free  = free_bytes.QuadPart;
         }
         std::string name = text::narrow(label);
-        if (name.empty()) { name = type == DRIVE_REMOTE ? "Network drive" : (type == DRIVE_CDROM ? "Optical drive" : "Local Disk"); }
+        if (name.empty()) { name = std::string{type == DRIVE_REMOTE ? i18n::tr("Network drive") : (type == DRIVE_CDROM ? i18n::tr("Optical drive") : i18n::tr("Local Disk"))}; }
         p.name = name + " (" + static_cast<char>('A' + i) + ":)";
         out.push_back(std::move(p));
     }
+    return out;
+}
+
+std::vector<Place> portable_devices()
+{
+    std::vector<Place> out;
+    const HRESULT init = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    if (FAILED(init) && init != RPC_E_CHANGED_MODE) { return out; }
+
+    PIDLIST_ABSOLUTE this_pc  = nullptr;
+    IShellFolder*    desktop  = nullptr;
+    IShellFolder*    folder   = nullptr;
+    IEnumIDList*     children = nullptr;
+    if (SUCCEEDED(::SHGetKnownFolderIDList(FOLDERID_ComputerFolder, 0, nullptr, &this_pc)) && SUCCEEDED(::SHGetDesktopFolder(&desktop)) &&
+        SUCCEEDED(desktop->BindToObject(this_pc, nullptr, IID_PPV_ARGS(&folder))) && SUCCEEDED(folder->EnumObjects(nullptr, SHCONTF_FOLDERS, &children))) {
+        PITEMID_CHILD child = nullptr;
+        while (children->Next(1, &child, nullptr) == S_OK) {
+            PIDLIST_ABSOLUTE full = ::ILCombine(this_pc, child);
+            PWSTR parse = nullptr, shown = nullptr;
+            // (drives parse as "C:\"; only devices carry a "\\?\" interface path)
+            if (full != nullptr && SUCCEEDED(::SHGetNameFromIDList(full, SIGDN_DESKTOPABSOLUTEPARSING, &parse)) && std::wstring_view{parse}.contains(L"\\\\?\\") &&
+                SUCCEEDED(::SHGetNameFromIDList(full, SIGDN_NORMALDISPLAY, &shown))) {
+                Place p;
+                p.name   = text::narrow(shown);
+                p.path   = text::narrow(parse);
+                p.device = true;
+                out.push_back(std::move(p));
+            }
+            ::CoTaskMemFree(parse);
+            ::CoTaskMemFree(shown);
+            ::ILFree(full);
+            ::ILFree(child);
+        }
+    }
+    // (two identical phones: the shell gives both the same name; number them in the order it lists them)
+    std::vector<std::string> names;
+    for (const Place& p : out) { names.push_back(p.name); }
+    for (std::size_t i = 0; i < out.size(); ++i) {
+        const auto same_name = [&](const std::string& n) { return n == names[i]; };
+        if (std::ranges::count_if(names, same_name) > 1) {
+            out[i].name += " (" + std::to_string(std::ranges::count_if(names.begin(), names.begin() + static_cast<std::ptrdiff_t>(i) + 1, same_name)) + ")";
+        }
+    }
+    if (children != nullptr) { children->Release(); }
+    if (folder != nullptr) { folder->Release(); }
+    if (desktop != nullptr) { desktop->Release(); }
+    ::CoTaskMemFree(this_pc);
+    if (SUCCEEDED(init)) { ::CoUninitialize(); }
     return out;
 }
 

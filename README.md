@@ -7,7 +7,7 @@
 
 **Browse**
 - **Fast** – folders load in the background and only visible rows are drawn: a 200k-file folder opens instantly
-- **Tabs, two panes, sessions** – drag tabs, middle-click closes, `F3` splits; `Ctrl+Shift+O` saves the open tabs under a name
+- **Tabs, two panes, sessions** – drag tabs (out of the window: into another PrismFS window, or a new one), middle-click closes, `F3` splits; `Ctrl+Shift+O` saves the open tabs under a name
 - **Details or thumbnails**, preview pane, **Quick Look** (`Space`), **groups** (right click → Group by name / type / date / size)
 - **Sidebar you control** – pinned folders, saved searches, drives with free space, Recent / Frequent
 - **Path bar** – click a segment, or its arrow for sibling folders; type a program (`cmd`, `pwsh`, `code .`) and press Enter to run it in this folder; add `admin` (`cmd admin`) to run it elevated
@@ -38,24 +38,32 @@
 | | |
 | --- | --- |
 | `Ctrl+T` / `Ctrl+W` / `Ctrl+Tab` | new / close / next tab |
-| `Ctrl+L` · `Alt+←/→/↑` | path bar · back, forward, up |
-| `Ctrl+F` · `Ctrl+Enter` | filter · search subfolders |
+| `Ctrl+Shift+T` · `Ctrl+Shift+D` · `Ctrl+N` | reopen closed tab · duplicate tab · new window |
+| `Ctrl+L` · `Alt+←/→/↑` · `Alt+Home` | path bar · back, forward, up · home |
+| `Ctrl+F` · `Ctrl+Enter` | filter · search subfolders |''
 | `Ctrl+Shift+F` | search everywhere |
 | `Ctrl+G` | go to a pinned folder or drive |
 | `Space` | Quick Look |
 | `Alt+1`…`Alt+8` · `Alt+0` | toggle a colour label · clear labels |
 | `Ctrl+Shift+O` · `Ctrl+Shift+E` · `Ctrl+Shift+U` | sessions · compare panes · disk usage |
-| `Ctrl+Alt+T` | terminal here |
+| `Ctrl+D` · `Ctrl+Shift+S` | pin folder · pin current search |
+| `Ctrl+Shift+G` · `Alt+P` · `Ctrl+H` · `Ctrl+Shift+M` | thumbnails · preview pane · hidden files · compact |
+| `Tab` · `Ctrl+Alt+C` / `Ctrl+Alt+X` | switch pane · copy / move to the other pane |
+| `Ctrl+Shift+N` · `Ctrl+Shift+C` · `Alt+Enter` | new folder · copy path · properties |
+| `Ctrl+Alt+T` · `Ctrl+,` | terminal here · settings |
 | `Ctrl+Shift+P` | command palette (every action) |
-| `F2` · `F3` · `F5` | rename · two panes · refresh |
+| `F2` · `Shift+F2` · `F3` · `F5` · `F11` | rename · batch rename · two panes · refresh · maximize |
 
 ## Run
 
 ```
-prismfs.exe [folder [second folder]] [--light] [--compact]
+prismfs.exe [folder [second folder]] [--light] [--compact] [--grid] [--preview] [--split] [--settings] [--log]
 ```
 
-A second folder opens two panes. Settings are in `%APPDATA%\PrismFS\settings.ini`; put a `prismfs.ini` next to the exe for a
+Slow to start, or slow now and then? Turn on *Settings → Diagnostics → Write a log file* (or start with `--log`): `prismfs.log` beside the
+settings file lists every start-up step with its time, slow frames and slow folders.
+
+A second folder opens two panes. Flags persist like any setting; `--settings` opens the settings dialog. Settings are in `%APPDATA%\PrismFS\settings.ini`; put a `prismfs.ini` next to the exe for a
 portable install (labels, sessions and the sidebar are stored beside it too).
 
 ## Build

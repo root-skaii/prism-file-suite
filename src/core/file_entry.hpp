@@ -33,7 +33,9 @@ struct FileEntry {
     std::uint16_t ext_offset{};    // where the extension starts in `name` (== size: none)
     FileKind      kind{FileKind::other};
     std::uint16_t tags{};          // colour labels (core::tag bits); the listing fills it from the tag store, not the loader
+    std::string   shown;           // what to show instead of `name` (Recycle Bin items: the name they were deleted under); empty = `name`
 
+    [[nodiscard]] std::string_view display() const noexcept { return shown.empty() ? std::string_view{name} : std::string_view{shown}; }
     [[nodiscard]] bool is_dir() const noexcept { return (attributes & attr::directory) != 0; }
     [[nodiscard]] bool is_hidden() const noexcept { return (attributes & (attr::hidden | attr::system)) != 0; }
     [[nodiscard]] std::string_view ext() const noexcept { return std::string_view{name}.substr(ext_offset); }

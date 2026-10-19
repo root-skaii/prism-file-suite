@@ -1,6 +1,8 @@
 #include "ui/empty_folders_dialog.hpp"
+#include "ui/tr.hpp"
 
 #include "core/path.hpp"
+#include "ui/tr.hpp"
 
 #include <algorithm>
 #include <format>
@@ -33,7 +35,7 @@ void EmptyFoldersDialog::frame(Painter& p)
     const Palette&    pal = p.pal();
     const FontSet     f   = p.fonts();
     const DialogStyle style{ui, pal};
-    auto modal = ui.modal("Empty folders", {std::min(720.0f, ui.display_size().x - 40.0f), 0.0f}, modal_flags::esc_closes | modal_flags::backdrop_closes | modal_flags::no_title_bar);
+    auto modal = ui.modal("Empty folders", {std::min(720.0f, ui.display_size().x - 40.0f), 0.0f}, modal_flags::esc_closes | modal_flags::no_title_bar);
     if (!modal) {
         open_ = false;
         scan_.cancel();
@@ -50,24 +52,24 @@ void EmptyFoldersDialog::frame(Painter& p)
     kit.begin_frame();
     {
         const item_result r = ui.custom_item("##ef_head", {ui.content_width() - 36.0f, 48.0f});
-        p.text_left(rect{{r.bounds.min.x, r.bounds.min.y + 2.0f}, {r.bounds.max.x, r.bounds.min.y + 30.0f}}, "Empty folders", pal.text, f.title);
-        p.text_left(rect{{r.bounds.min.x, r.bounds.min.y + 28.0f}, {r.bounds.max.x, r.bounds.max.y}}, folder_ + "  (a folder with only empty folders in it counts)", pal.text_dim, f.body);
+        p.text_left(rect{{r.bounds.min.x, r.bounds.min.y + 2.0f}, {r.bounds.max.x, r.bounds.min.y + 30.0f}}, tr("Empty folders"), pal.text, f.title);
+        p.text_left(rect{{r.bounds.min.x, r.bounds.min.y + 28.0f}, {r.bounds.max.x, r.bounds.max.y}}, folder_ + "  " + std::string{tr("(a folder with only empty folders in it counts)")}, pal.text_dim, f.body);
         ui.same_line();
-        if (kit.icon_button("##ef_close", glyph::close, "Close  (Esc)", true, true, 32.0f)) { ui.close_modal(); }
+        if (kit.icon_button("##ef_close", glyph::close, tr("Close  (Esc)"), true, true, 32.0f)) { ui.close_modal(); }
     }
     kit.vgap(10.0f);
 
     if (!loaded_) {
         const item_result r = ui.custom_item("##ef_run", {ui.content_width(), 34.0f});
-        p.text_left(r.bounds, std::format("Looking ... {} folders so far", scan_.folders_seen()), pal.text_dim, f.body, 4.0f);
+        p.text_left(r.bounds, trf("Looking ... {} folders so far", scan_.folders_seen()), pal.text_dim, f.body, 4.0f);
         kit.bar("##ef_bar", 0.0f, Tone::accent, 6.0f, 4.0f);
         kit.vgap(14.0f);
-        if (kit.button({"##ef_cancel", "Cancel"})) { ui.close_modal(); }
+        if (kit.button({"##ef_cancel", tr("Cancel")})) { ui.close_modal(); }
         return;
     }
     if (found_.empty()) {
         const item_result r = ui.custom_item("##ef_none", {ui.content_width(), 64.0f});
-        p.text_center(r.bounds, "No empty folders here.", pal.text_dim, f.body);
+        p.text_center(r.bounds, tr("No empty folders here."), pal.text_dim, f.body);
         return;
     }
 
@@ -98,18 +100,18 @@ void EmptyFoldersDialog::frame(Painter& p)
     }
     kit.vgap(12.0f);
 
-    const float bw_cancel = kit.button_width("Cancel", false);
-    const float bw_ok     = kit.button_width("Recycle 0000 folders", false, Kit::ButtonKind::primary);
+    const float bw_cancel = kit.button_width(tr("Cancel"), false);
+    const float bw_ok     = kit.button_width(trf("Recycle {} folders", 1000), false, Kit::ButtonKind::primary);
     const item_result sr  = ui.custom_item("##ef_sum", {ui.content_width() - bw_cancel - bw_ok - 24.0f, kit.control_h()});
-    p.text_left(sr.bounds, std::format("{} empty folders found{}", found_.size(), found_.size() > shown ? " (the first 1000 are listed)" : ""), pal.text_dim, f.body, 4.0f);
+    p.text_left(sr.bounds, trf("{} empty folders found{}", found_.size(), found_.size() > shown ? tr(" (the first 1000 are listed)") : std::string_view{}), pal.text_dim, f.body, 4.0f);
     ui.same_line();
-    if (kit.button({"##ef_no", "Cancel"})) { ui.close_modal(); }
+    if (kit.button({"##ef_no", tr("Cancel")})) { ui.close_modal(); }
     ui.same_line();
     (void)ui.custom_item("##ef_gap", {8.0f, kit.control_h()});
     ui.same_line();
     std::size_t count = 0;
     for (std::size_t i = 0; i < shown; ++i) { count += marked_.contains(found_[i]) ? 1 : 0; }
-    const std::string label = std::format("Recycle {} {}", count, count == 1 ? "folder" : "folders");
+    const std::string label = trf_n("Recycle {} folder", "Recycle {} folders", static_cast<long long>(count), count);
     if (kit.button({"##ef_go", label, 0, Kit::ButtonKind::primary, count > 0, {}, bw_ok}) && count > 0) {
         std::vector<std::string> paths;
         for (std::size_t i = 0; i < shown; ++i) {

@@ -3,6 +3,7 @@
 // one browsing context: where it is, how it got there (back / forward), and the listing of the current folder
 
 #include "core/directory_loader.hpp"
+#include "core/folder_watcher.hpp"
 #include "model/listing.hpp"
 
 #include <functional>
@@ -65,6 +66,11 @@ private:
     std::size_t              index_{};
     Listing                  listing_;
     core::DirectoryLoader    loader_;
+    // background re-read after another program changed the folder: replaces the entries in place (no clear, scroll stays)
+    core::DirectoryLoader    quiet_loader_;
+    core::FolderWatcher      watcher_;
+    std::vector<core::FileEntry> quiet_;
+    bool                     quiet_dirty_{};
     std::uint32_t            error_{};
     core::Query              search_;
     bool                     searching_{};

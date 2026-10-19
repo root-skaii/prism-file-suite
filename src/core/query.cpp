@@ -1012,7 +1012,7 @@ Query Query::parse(std::string_view text, const QueryOptions& options)
 bool Query::matches(const FileEntry& e) const noexcept
 {
     if (groups_.empty()) { return true; }
-    const std::string_view leaf = last_component(e.name);
+    const std::string_view leaf = last_component(e.display());
     for (const auto& group : groups_) {
         bool all = true;
         for (const QueryTerm& t : group) {

@@ -14,6 +14,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace prism::ui {
 
@@ -95,6 +96,12 @@ public:
     void card_end(std::string_view id);
     // the summed height of the cards finished so far this frame (a dialog sizes its scrolling body to it)
     [[nodiscard]] float cards_height() const noexcept { return cards_h_; }
+    // a hint wrapped to `width` (small font), one entry per line, views into `hint`
+    [[nodiscard]] std::vector<std::string_view> hint_lines(std::string_view hint, float width) const;
+    // height a hint of `lines` lines needs beyond the one line a row has; the open card grows by it (from the next frame:
+    // the card box is drawn before its rows, so the amount is remembered per card)
+    [[nodiscard]] float hint_extra(std::size_t lines) const;
+    void add_extra(float h) noexcept { cur_extra_ += h; }
 
     struct KeyValue {
         std::string_view id;
@@ -139,6 +146,8 @@ private:
     int       counter_{};
     float     card_h_{};   // the open card's full flow height
     float     cards_h_{};
+    float     cur_extra_{};      // wrapped hint lines added inside the open card this frame
+    std::string cur_card_;
 };
 
 } // namespace prism::ui

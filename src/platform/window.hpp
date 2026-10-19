@@ -7,7 +7,10 @@
 
 #include <cstdint>
 #include <functional>
+#include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace prism::platform {
 
@@ -24,6 +27,14 @@ public:
         std::string_view title  = "PrismFS";
         int              width  = 1360; // client size, logical pixels
         int              height = 840;
+        bool             has_at = false; // where the window's top-left goes, screen pixels (kept on its monitor); else centred
+        int              at_x   = 0;
+        int              at_y   = 0;
+    };
+
+    // a whole window in physical screen pixels, for starting another one
+    struct Placement {
+        int x{}, y{}, w{}, h{};
     };
 
     Window() = default;
@@ -66,6 +77,25 @@ public:
     [[nodiscard]] bool maximize_hovered() const noexcept { return max_hover_; }
     [[nodiscard]] bool maximize_pressed() const noexcept { return max_down_; }
 
+    // moving a tab between windows: hands a folder to the PrismFS window under the screen point (false: none there)
+    [[nodiscard]] bool send_folder_to_window_at(int screen_x, int screen_y, std::string_view folder) const;
+    // folders other windows sent us since the last call
+    [[nodiscard]] std::vector<std::string> take_incoming() { return std::exchange(incoming_, {}); }
+    [[nodiscard]] bool contains_screen_point(int screen_x, int screen_y) const noexcept;
+    // where a new window of this one's size goes: down and right of this one, skipping spots other PrismFS windows already hold
+    [[nodiscard]] Placement cascaded_placement() const;
+    // this window's size with its tab strip under the point (a torn-off tab lands where it was dropped)
+    [[nodiscard]] Placement placement_at(int screen_x, int screen_y) const;
+    // client size in logical pixels, as `Config` takes it
+    [[nodiscard]] std::pair<int, int> logical_size() const;
+    // a small always-on-top card that follows the pointer while a tab is dragged outside the window (gone on hide)
+    void show_drag_ghost(std::string_view title, std::string_view action, int screen_x, int screen_y, std::uint32_t accent_rgb, bool accent) const;
+    void hide_drag_ghost() const;
+    // tells the PrismFS window under the point (and only that one) to outline itself as a drop target; false: none there
+    bool hint_window_at(int screen_x, int screen_y) const;
+    void clear_window_hint() const;
+    [[nodiscard]] bool drop_hint() const noexcept { return drop_hint_; }
+
     // set by the owner of the ui
     std::function<HitZone(strata::vec2 logical)> hit_test;
     std::function<bool()>                        on_close_request; // false keeps the window open
@@ -76,6 +106,8 @@ private:
     std::intptr_t handle_message(void* hwnd, std::uint32_t msg, std::uintptr_t wparam, std::intptr_t lparam);
     [[nodiscard]] std::intptr_t nc_hit_test(std::intptr_t lparam) const;
 
+    std::vector<std::string> incoming_;
+    bool                  drop_hint_{};
     void*                 hwnd_{};
     strata::win32_platform platform_;
     bool                  quit_{};

@@ -28,6 +28,8 @@
 #include "ui/usage_dialog.hpp"
 
 #include <memory>
+#include <atomic>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -62,6 +64,7 @@ public:
 
     // writes tabs and window size for the next start
     void save_session(int logical_w, int logical_h);
+    void show_palette() { palette_.open(); } // (--palette, for screenshots)
     void show_settings() { settings_dialog_.open(); }
     // the folder the second pane opens with when it appears (command line)
     void set_second_folder(std::string folder) { pending_right_ = std::move(folder); }
@@ -71,6 +74,10 @@ private:
     // Commands
     void open_tab(const std::string& path, bool activate) override;
     void close_tab(std::size_t index) override;
+    void move_tab_out(std::size_t index, int screen_x, int screen_y) override;
+    void restart_elevated() override;
+    void restart_unelevated() override;
+    void spawn_window(const std::string& folder, std::optional<std::pair<int, int>> pointer = {});
     void toggle_theme() override;
     void toggle_density() override;
     void toggle_hidden() override;
@@ -86,17 +93,19 @@ private:
     void begin_drag(std::vector<std::string> paths) override { drag_paths_ = std::move(paths); }
     void transfer(std::vector<std::string> paths, const std::string& dest, bool move) override;
     void request_delete(std::vector<std::string> paths, bool permanent) override;
+    void restore_from_bin(std::vector<std::string> items) override;
+    void empty_recycle_bin(std::string drive_root) override;
     void request_remove_section(std::size_t section) override;
     void toggle_pin(const std::string& path) override;
     void copy_sidebar() override;
     void paste_sidebar() override;
-    bool edit_sidebar(std::string label, const std::function<void(model::SidebarLayout&)>& edit) override;
+    bool edit_sidebar(std::string_view label, const std::function<void(model::SidebarLayout&)>& edit) override;
     void request_action(std::string name) override { pending_actions_.push_back(std::move(name)); }
     void toggle_tag(const std::vector<std::string>& paths, int index) override;
     void clear_tags(const std::vector<std::string>& paths) override;
     void open_archive(const std::string& path) override;
     void go_up(model::Tab& tab) override;
-    void toast(std::string text, strata::toast_kind kind) override;
+    void toast(std::string_view text, strata::toast_kind kind) override;
     void set_cursor(strata::cursor_kind kind) override { cursor_ = kind; }
 
     void shortcuts(strata::context& ui);
@@ -190,6 +199,7 @@ private:
     // record the request and service_delete() shows the dialog at the end of the frame
     std::vector<std::string> delete_paths_;
     bool                     delete_permanent_{};
+    std::shared_ptr<std::atomic<int>> bin_empty_{std::make_shared<std::atomic<int>>(0)}; // 0 idle, 3 running, 1 / 2 finished (ok / failed): the worker's answer
     bool                     delete_ask_{};
     // a sidebar section removal waiting for its answer (same reason); npos: none
     std::size_t              remove_section_{std::string::npos};

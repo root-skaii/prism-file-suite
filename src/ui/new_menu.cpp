@@ -1,7 +1,10 @@
 #include "ui/new_menu.hpp"
+#include "ui/tr.hpp"
 
 #include "core/templates.hpp"
+#include "ui/tr.hpp"
 #include "core/text.hpp"
+#include "ui/tr.hpp"
 
 #include <windows.h>
 #include <shellapi.h>
@@ -37,7 +40,7 @@ void new_template_items(strata::context& ui, Env& env)
     if (user.empty()) {
         strata::menu_item_options none;
         none.enabled = false;
-        (void)ui.menu_item("No templates yet", none);
+        (void)ui.menu_item(tr("No templates yet"), none);
     } else {
         if (!builtin.empty()) { ui.menu_separator(); }
         for (const core::Template& t : user) {
@@ -47,7 +50,7 @@ void new_template_items(strata::context& ui, Env& env)
         }
     }
     ui.menu_separator();
-    if (ui.menu_item("Open templates folder")) {
+    if (ui.menu_item(tr("Open templates folder"))) {
         const std::string dir = Settings::templates_path();
         ::CreateDirectoryW(core::text::widen(dir).c_str(), nullptr);
         (void)::ShellExecuteW(nullptr, L"open", core::text::widen(dir).c_str(), nullptr, nullptr, SW_SHOWNORMAL);

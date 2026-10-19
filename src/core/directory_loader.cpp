@@ -1,10 +1,14 @@
 #include "core/directory_loader.hpp"
 
+#include "core/log.hpp"
+#include "core/path.hpp"
+#include "core/recycle.hpp"
 #include "core/text.hpp"
 
 #include <windows.h>
 
 #include <chrono>
+#include <format>
 #include <cstdio>
 #include <thread>
 
@@ -121,17 +125,43 @@ void DirectoryLoader::work(std::shared_ptr<Job> job, std::wstring pattern, std::
         if (wake) { wake(); }
     };
 
+    const std::string bin_dir_raw = text::narrow(pattern);
+    const bool        in_bin      = recycle::inside(bin_dir_raw);
+    const std::string bin_dir     = in_bin && bin_dir_raw.size() > 1 ? bin_dir_raw.substr(0, bin_dir_raw.size() - 1) : std::string{}; // (the pattern ends in "\*")
     WIN32_FIND_DATAW fd;
+    const auto started = clock::now();
+    std::size_t listed = 0;
+    // a slow folder is the thing the log is for: how long the first entry took (network, antivirus, sleeping disk) and the whole listing
+    const auto note = [&](const char* how) {
+        const double total = std::chrono::duration<double, std::milli>(clock::now() - started).count();
+        if (log::enabled() && total >= 150.0) { log::write(std::format("folder {} {}: {} entries in {:.0f} ms", how, text::narrow(pattern), listed, total)); }
+    };
     // FindExInfoBasic skips the short (8.3) name; LARGE_FETCH asks the filesystem for bigger buffers
     HANDLE h = ::FindFirstFileExW(pattern.c_str(), FindExInfoBasic, &fd, FindExSearchNameMatch, nullptr, FIND_FIRST_EX_LARGE_FETCH);
     if (h == INVALID_HANDLE_VALUE) {
-        flush(true, ::GetLastError());
+        const DWORD e = ::GetLastError();
+        note("failed");
+        flush(true, e);
         return;
     }
+    if (log::enabled()) {
+        const double first = std::chrono::duration<double, std::milli>(clock::now() - started).count();
+        if (first >= 100.0) { log::write(std::format("folder {}: first entry took {:.0f} ms", text::narrow(pattern), first)); }
+    }
     do {
+        ++listed;
         const wchar_t* n = fd.cFileName;
         if (n[0] == L'.' && (n[1] == L'\0' || (n[1] == L'.' && n[2] == L'\0'))) { continue; }
+        if (in_bin && (n[0] == L'$') && (n[1] == L'I' || n[1] == L'i')) { continue; } // (a record, not an item)
         batch.push_back(make_entry(fd));
+        if (in_bin && n[0] == L'$' && (n[1] == L'R' || n[1] == L'r')) {
+            // the bin's own name is `$R4ND0M.ext`: show the name it was deleted under, and when
+            if (const auto rec = recycle::read(bin_dir + text::narrow(n))) {
+                FileEntry& e = batch.back();
+                e.shown    = path::leaf(rec->original);
+                e.modified = rec->deleted;
+            }
+        }
         // first rows quickly, then bigger and rarer batches
         const auto age = clock::now() - last_flush;
         if (batch.size() >= 4096 || (batch.size() >= 64 && age > std::chrono::milliseconds{40})) {
@@ -141,6 +171,7 @@ void DirectoryLoader::work(std::shared_ptr<Job> job, std::wstring pattern, std::
     } while (::FindNextFileW(h, &fd));
     const DWORD err = ::GetLastError();
     ::FindClose(h);
+    note("listed");
     flush(true, err == ERROR_NO_MORE_FILES ? 0 : err);
 }
 

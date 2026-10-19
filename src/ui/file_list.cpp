@@ -1,15 +1,27 @@
 #include "ui/file_list.hpp"
+#include "ui/tr.hpp"
 
 #include "core/path.hpp"
+#include "ui/tr.hpp"
 #include "core/archive.hpp"
+#include "ui/tr.hpp"
 #include "core/git_status.hpp"
+#include "ui/tr.hpp"
 #include "core/image_tools.hpp"
+#include "ui/tr.hpp"
 #include "core/templates.hpp"
+#include "ui/tr.hpp"
+#include "core/recycle.hpp"
 #include "core/shell_ops.hpp"
+#include "ui/tr.hpp"
 #include "core/text.hpp"
+#include "ui/tr.hpp"
 #include "ui/new_menu.hpp"
+#include "ui/tr.hpp"
 #include "ui/panel.hpp"
+#include "ui/tr.hpp"
 #include "ui/tag_colors.hpp"
+#include "ui/tr.hpp"
 
 #include <windows.h>
 
@@ -32,12 +44,12 @@ constexpr float k_min_name = 200.0f;
 {
     switch (code) {
     case 2:
-    case 3:  return "This folder no longer exists";
-    case 5:  return "Access is denied";
-    case 21: return "The device is not ready";
+    case 3:  return tr("This folder no longer exists");
+    case 5:  return tr("Access is denied");
+    case 21: return tr("The device is not ready");
     case 53:
-    case 67: return "The network location cannot be reached";
-    default: return "This folder cannot be opened";
+    case 67: return tr("The network location cannot be reached");
+    default: return tr("This folder cannot be opened");
     }
 }
 
@@ -223,7 +235,7 @@ void FileList::open_row(model::Tab& tab, std::size_t row)
     } else if (env_.settings.browse_archives && browsable_archive(e)) {
         env_.cmd.open_archive(full);
     } else if (!core::shell::open(full)) {
-        env_.cmd.toast("Could not open " + core::path::leaf(e.name), toast_kind::error);
+        env_.cmd.toast(trf("Could not open {}", core::path::leaf(e.name)), toast_kind::error);
     }
 }
 
@@ -264,7 +276,7 @@ void FileList::copy_selection(model::Tab& tab, bool cut)
     const std::vector<std::string> paths = selected_paths(tab);
     if (paths.empty()) { return; }
     if (!core::clipboard_set_files(paths, cut)) {
-        env_.cmd.toast("Could not use the clipboard", toast_kind::error);
+        env_.cmd.toast(tr("Could not use the clipboard"), toast_kind::error);
         return;
     }
     cut_names_.clear();
@@ -273,7 +285,7 @@ void FileList::copy_selection(model::Tab& tab, bool cut)
         cut_dir_ = tab.path();
         for (const std::size_t r : tab.listing().selected_rows()) { cut_names_.push_back(tab.listing().at(r).name); }
     }
-    env_.cmd.toast(plural(paths.size(), "item", "items") + (cut ? " cut" : " copied"), toast_kind::info);
+    env_.cmd.toast(cut ? trf_n("{} item cut", "{} items cut", static_cast<long long>(paths.size()), paths.size()) : trf_n("{} item copied", "{} items copied", static_cast<long long>(paths.size()), paths.size()), toast_kind::info);
 }
 
 void FileList::paste(model::Tab& tab)
@@ -305,8 +317,8 @@ bool FileList::perform(context& ui, model::Tab& tab, std::string_view action)
     if (action == "delete")         { env_.cmd.request_delete(selected_paths(tab), false); return true; }
     if (action == "delete_forever") { env_.cmd.request_delete(selected_paths(tab), true); return true; }
     if (action == "new_folder")     { new_folder(tab); return true; }
-    if (action == "new_file")       { new_file(tab, "New file", ""); return true; }
-    if (action == "new_text")       { new_file(tab, "New text document", ".txt"); return true; }
+    if (action == "new_file")       { new_file(tab, std::string{tr("New file")}, ""); return true; }
+    if (action == "new_text")       { new_file(tab, std::string{tr("New text document")}, ".txt"); return true; }
     if (action.starts_with("new_template:")) { new_from_template(tab, action.substr(13)); return true; }
     if (action == "copy_to_pane")   { to_other_pane(tab, false); return true; }
     if (action == "move_to_pane")   { to_other_pane(tab, true); return true; }
@@ -329,7 +341,7 @@ bool FileList::perform(context& ui, model::Tab& tab, std::string_view action)
         }
         if (all.empty()) { all = tab.path(); }
         (void)core::shell::set_clipboard_text(all);
-        env_.cmd.toast("Path copied", toast_kind::info);
+        env_.cmd.toast(tr("Path copied"), toast_kind::info);
         return true;
     }
     return false;
@@ -340,12 +352,12 @@ void FileList::new_folder(model::Tab& tab)
     if (tab.path().empty() || tab.searching()) { return; }
     const std::string name = core::FileOps::create_folder(tab.path());
     if (name.empty()) {
-        env_.cmd.toast("Could not create a folder here", toast_kind::error);
+        env_.cmd.toast(tr("Could not create a folder here"), toast_kind::error);
         return;
     }
     {
         const std::string made = core::path::join(tab.path(), name);
-        env_.history.push({"New folder " + name,
+        env_.history.push({trf("New folder {}", name),
                            [made] { return core::FileOps::remove_empty_folder(made); },
                            [made] { return ::CreateDirectoryW(core::text::widen(made).c_str(), nullptr) != FALSE; }});
     }
@@ -359,11 +371,11 @@ void FileList::new_file(model::Tab& tab, const std::string& stem, const std::str
     if (tab.path().empty() || tab.searching()) { return; }
     const std::string name = core::FileOps::create_file(tab.path(), stem, ext);
     if (name.empty()) {
-        env_.cmd.toast("Could not create a file here", toast_kind::error);
+        env_.cmd.toast(tr("Could not create a file here"), toast_kind::error);
         return;
     }
     const std::string made = core::path::join(tab.path(), name);
-    env_.history.push({"New file " + name,
+    env_.history.push({trf("New file {}", name),
                        [made] { return core::FileOps::remove_empty_file(made); },
                        [made] {
                            HANDLE h = ::CreateFileW(core::text::widen(made).c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -392,16 +404,16 @@ void FileList::new_from_template(model::Tab& tab, std::string_view key)
         for (core::Template& u : core::user_templates(Settings::templates_path())) {
             if (u.stem + u.ext == file) { t = std::move(u); found = true; break; }
         }
-        if (!found) { env_.cmd.toast("That template is gone", toast_kind::warning); return; }
+        if (!found) { env_.cmd.toast(tr("That template is gone"), toast_kind::warning); return; }
     }
     const std::string name = core::create_from_template(tab.path(), t);
     if (name.empty()) {
-        env_.cmd.toast("Could not create a file here", toast_kind::error);
+        env_.cmd.toast(tr("Could not create a file here"), toast_kind::error);
         return;
     }
     const std::string made = core::path::join(tab.path(), name);
     core::FileOps*    ops  = &env_.ops;
-    env_.history.push({"New " + name, [ops, made] { ops->start(core::OpKind::recycle, {made}, {}, true); return true; }, {}});
+    env_.history.push({trf("New {}", name), [ops, made] { ops->start(core::OpKind::recycle, {made}, {}, true); return true; }, {}});
     pending_rename_ = name;
     tab.reveal_name = name;
     tab.refresh();
@@ -410,6 +422,7 @@ void FileList::new_from_template(model::Tab& tab, std::string_view key)
 void FileList::begin_rename(context&, model::Tab& tab, std::size_t row)
 {
     const core::FileEntry& e = tab.listing().at(row);
+    if (!e.shown.empty()) { return; } // (a Recycle Bin item: its real name is the bin's own)
     rename_active_ = true;
     rename_path_   = core::path::join(tab.path(), e.name);
     rename_orig_   = e.name;
@@ -472,13 +485,13 @@ void FileList::draw_rename(Painter& p, model::Tab& tab, const Geo& g, vec2 origi
         if (core::FileOps::rename(rename_path_, rename_text_)) {
             const std::string from = rename_path_;
             const std::string to   = core::path::join(core::path::parent(rename_path_), rename_text_);
-            env_.history.push({"Rename " + core::path::leaf(from),
+            env_.history.push({trf("Rename {}", core::path::leaf(from)),
                                [from, to] { return core::FileOps::rename(to, core::path::leaf(from)); },
                                [from, to] { return core::FileOps::rename(from, core::path::leaf(to)); }});
             tab.reveal_name = rename_text_;
             tab.refresh();
         } else {
-            env_.cmd.toast("Could not rename: the name is invalid or already used", toast_kind::error);
+            env_.cmd.toast(tr("Could not rename: the name is invalid or already used"), toast_kind::error);
         }
     }
 }
@@ -628,10 +641,10 @@ void FileList::draw_header(Painter& p, model::Listing& L, const std::string& fol
 
     struct Cell { SortKey key; std::string_view label; float x0, x1; bool right; };
     const Cell cells[] = {
-        {SortKey::name,     "Name",          box.min.x + k_pad,    box.min.x + c.mod_x,  false},
-        {SortKey::modified, "Date modified", box.min.x + c.mod_x,  box.min.x + c.type_x, false},
-        {SortKey::type,     "Type",          box.min.x + c.type_x, box.min.x + c.size_x, false},
-        {SortKey::size,     "Size",          box.min.x + c.size_x, box.max.x - k_pad,    true},
+        {SortKey::name,     tr("Name"),          box.min.x + k_pad,    box.min.x + c.mod_x,  false},
+        {SortKey::modified, tr("Date modified"), box.min.x + c.mod_x,  box.min.x + c.type_x, false},
+        {SortKey::type,     tr("Type"),          box.min.x + c.type_x, box.min.x + c.size_x, false},
+        {SortKey::size,     tr("Size"),          box.min.x + c.size_x, box.max.x - k_pad,    true},
     };
 
     // resize handles sit on the left edge of the three right columns
@@ -708,15 +721,15 @@ void FileList::draw_empty_state(Painter& p, model::Tab& tab, const rect& vp)
             col  = pal.danger;
             g    = glyph::lock;
         } else if (tab.listing().total() > 0) {
-            line = tab.searching() ? "No results" : "No matching items";
+            line = tab.searching() ? tr("No results") : tr("No matching items");
             g    = glyph::search;
-            if (!tab.searching()) { hint = "Ctrl+Enter in the box searches the subfolders too"; }
+            if (!tab.searching()) { hint = tr("Ctrl+Enter in the box searches the subfolders too"); }
         } else {
-            line = tab.searching() ? "No results" : "This folder is empty";
+            line = tab.searching() ? tr("No results") : tr("This folder is empty");
             if (tab.searching()) { g = glyph::search; }
         }
     } else {
-        line = tab.searching() ? "Searching..." : "Loading...";
+        line = tab.searching() ? tr("Searching...") : tr("Loading...");
     }
     const float cy = vp.min.y + vp.height() * 0.34f;
     const rect  icon = rect::from_size({vp.center().x - 28.0f, cy - 40.0f}, {56.0f, 56.0f});
@@ -797,16 +810,17 @@ void FileList::draw_details(Painter& p, model::Tab& tab, const Geo& g, vec2 orig
         const color name_col = e.is_hidden() ? pal.text_dim : pal.text;
         // search results carry a relative path: the name stands out, the folder it lives in follows dimmed
         const rect name_cell{{tx, y}, {x0 + c.mod_x - 8.0f - (git ? 26.0f : 0.0f), y + rh}};
-        const std::size_t slash = e.name.rfind('\\');
+        const std::string_view shown_name = e.display();
+        const std::size_t slash = shown_name.rfind('\\');
         float name_w = 0.0f;
         if (slash == std::string::npos) {
-            name_w = p.text_left(name_cell, e.name, name_col, f.body);
+            name_w = p.text_left(name_cell, shown_name, name_col, f.body);
         } else {
-            const float w  = p.text_left(name_cell, std::string_view{e.name}.substr(slash + 1), name_col, f.body);
+            const float w  = p.text_left(name_cell, shown_name.substr(slash + 1), name_col, f.body);
             name_w = w;
             const float dx = tx + w + 12.0f;
             if (dx < name_cell.max.x - 40.0f) {
-                p.text_left(rect{{dx, y}, name_cell.max}, std::string_view{e.name}.substr(0, slash), pal.text_dim, f.small);
+                p.text_left(rect{{dx, y}, name_cell.max}, shown_name.substr(0, slash), pal.text_dim, f.small);
             }
         }
         if (e.tags != 0) {
@@ -900,7 +914,7 @@ void FileList::draw_grid(Painter& p, model::Tab& tab, const Geo& g, vec2 origin,
             p.kind_icon(rect::from_size(thumb.center() - vec2{s * 0.5f, s * 0.5f}, {s, s}), e.kind);
         }
         const rect label{{cell.min.x + 4.0f, cell.max.y - 28.0f}, {cell.max.x - 4.0f, cell.max.y - 4.0f}};
-        p.text_center(label, core::path::leaf(e.name), e.is_hidden() ? pal.text_dim : pal.text, f.body);
+        p.text_center(label, core::path::leaf(e.display()), e.is_hidden() ? pal.text_dim : pal.text, f.body);
         if (e.tags != 0) {
             float dot_x = cell.min.x + 10.0f;
             for (int t = 0; t < core::tag::count; ++t) {
@@ -926,23 +940,38 @@ void FileList::context_menu(Painter& p, model::Tab& tab, const rect& area)
     const bool can_paste = core::clipboard_has_files();
     const bool two_panes = env_.other() != nullptr;
 
+    // the Recycle Bin: its items are the bin's own `$R...` files, so only what makes sense for them is offered
+    if (!tab.searching() && core::recycle::inside(tab.path())) {
+        if (picked.empty()) {
+            if (ui.menu_item(tr("Empty Recycle Bin"))) { env_.cmd.empty_recycle_bin(core::recycle::drive_of(tab.path())); }
+            ui.menu_separator();
+            if (ui.menu_item(tr("Refresh"), env_.binds.text("refresh"))) { tab.refresh(); }
+        } else {
+            if (ui.menu_item(tr("Restore"))) { env_.cmd.restore_from_bin(selected_paths(tab)); }
+            if (ui.menu_item(tr("Delete permanently"), "Del")) { env_.cmd.request_delete(selected_paths(tab), true); }
+            ui.menu_separator();
+            if (ui.menu_item(tr("Copy"), env_.binds.text("copy"))) { copy_selection(tab, false); }
+        }
+        return;
+    }
+
     // sort submenu
     const auto sort_menu = [&] {
-        if (auto sub = ui.menu("Sort by")) {
+        if (auto sub = ui.menu(tr("Sort by"))) {
             model::SortSpec s = L.sort();
-            const struct { const char* label; SortKey key; } keys[] = {{"Name", SortKey::name}, {"Date modified", SortKey::modified}, {"Type", SortKey::type}, {"Size", SortKey::size}};
+            const struct { std::string_view label; SortKey key; } keys[] = {{tr("Name"), SortKey::name}, {tr("Date modified"), SortKey::modified}, {tr("Type"), SortKey::type}, {tr("Size"), SortKey::size}};
             for (const auto& k : keys) {
                 if (ui.menu_item(k.label, "", s.key == k.key)) { env_.cmd.set_sort(tab.path(), k.key, s.ascending); }
             }
             ui.menu_separator();
-            if (ui.menu_item("Ascending", "", s.ascending)) { env_.cmd.set_sort(tab.path(), s.key, true); }
-            if (ui.menu_item("Descending", "", !s.ascending)) { env_.cmd.set_sort(tab.path(), s.key, false); }
+            if (ui.menu_item(tr("Ascending"), "", s.ascending)) { env_.cmd.set_sort(tab.path(), s.key, true); }
+            if (ui.menu_item(tr("Descending"), "", !s.ascending)) { env_.cmd.set_sort(tab.path(), s.key, false); }
         }
     };
 
     const auto group_menu = [&] {
-        if (auto sub = ui.menu("Group by")) {
-            const struct { const char* label; const char* action; } kinds[] = {{"None", "group_none"}, {"Name", "group_name"}, {"Type", "group_type"}, {"Date modified", "group_modified"}, {"Size", "group_size"}};
+        if (auto sub = ui.menu(tr("Group by"))) {
+            const struct { std::string_view label; const char* action; } kinds[] = {{tr("None"), "group_none"}, {tr("Name"), "group_name"}, {tr("Type"), "group_type"}, {tr("Date modified"), "group_modified"}, {tr("Size"), "group_size"}};
             for (int i = 0; i < 5; ++i) {
                 if (ui.menu_item(kinds[i].label, "", env_.settings.group_by == i)) { env_.cmd.request_action(kinds[i].action); }
             }
@@ -963,10 +992,10 @@ void FileList::context_menu(Painter& p, model::Tab& tab, const rect& area)
     if (picked.empty()) {
         // Windows' "New" submenu (Word document, shortcut ...) joins ours instead of showing a second "New"
         const auto windows_new = std::ranges::find_if(shell_items, [](const core::ShellMenuItem& i) { return i.label == "New" && !i.children.empty(); });
-        if (auto sub = ui.menu("New", !tab.path().empty() && !tab.searching())) {
-            if (ui.menu_item("Folder", "Ctrl+Shift+N")) { new_folder(tab); }
-            if (ui.menu_item("Empty file")) { new_file(tab, "New file", ""); }
-            if (ui.menu_item("Text document")) { new_file(tab, "New text document", ".txt"); }
+        if (auto sub = ui.menu(tr("New"), !tab.path().empty() && !tab.searching())) {
+            if (ui.menu_item(tr("Folder"), env_.binds.text("new_folder"))) { new_folder(tab); }
+            if (ui.menu_item(tr("Empty file"))) { new_file(tab, std::string{tr("New file")}, ""); }
+            if (ui.menu_item(tr("Text document"))) { new_file(tab, std::string{tr("New text document")}, ".txt"); }
             ui.menu_separator();
             new_template_items(ui, env_);
             if (windows_new != shell_items.end()) {
@@ -981,24 +1010,24 @@ void FileList::context_menu(Painter& p, model::Tab& tab, const rect& area)
             }
         }
         if (windows_new != shell_items.end()) { shell_items.erase(windows_new); }
-        if (ui.menu_item("Paste", "Ctrl+V", false, can_paste)) { paste(tab); }
+        if (ui.menu_item(tr("Paste"), env_.binds.text("paste"), false, can_paste)) { paste(tab); }
         ui.menu_separator();
         sort_menu();
         group_menu();
         //if (ui.menu_item(env_.settings.grid_view ? "View as list" : "View as thumbnails")) { env_.cmd.toggle_view(); }
         ui.menu_separator();
-        if (ui.menu_item("Refresh", "F5")) { tab.refresh(); }
-        if (ui.menu_item("Copy folder path")) { (void)core::shell::set_clipboard_text(tab.path()); }
-        if (ui.menu_item("Open in new tab")) { env_.cmd.open_tab(tab.path(), true); }
-        if (!tab.path().empty() && ui.menu_item(env_.layout.find(tab.path()) ? "Unpin from sidebar" : "Pin to sidebar", "Ctrl+D")) { env_.cmd.toggle_pin(tab.path()); }
-        if (ui.menu_item("Properties", "Alt+Enter")) { env_.cmd.open_properties({tab.path()}); }
+        if (ui.menu_item(tr("Refresh"), env_.binds.text("refresh"))) { tab.refresh(); }
+        if (ui.menu_item(tr("Copy folder path"))) { (void)core::shell::set_clipboard_text(tab.path()); }
+        if (ui.menu_item(tr("Open in new tab"))) { env_.cmd.open_tab(tab.path(), true); }
+        if (!tab.path().empty() && ui.menu_item(env_.layout.find(tab.path()) ? tr("Unpin from sidebar") : tr("Pin to sidebar"), env_.binds.text("pin_folder"))) { env_.cmd.toggle_pin(tab.path()); }
+        if (ui.menu_item(tr("Properties"), env_.binds.text("properties"))) { env_.cmd.open_properties({tab.path()}); }
         // (one submenu: installed tools add a dozen rows, more than the window is tall)
         if (!shell_items.empty()) {
-            if (auto more = ui.menu("More options")) { draw_shell_page(ui, shell_items); }
+            if (auto more = ui.menu(tr("More options"))) { draw_shell_page(ui, shell_items); }
         }
         if (!tab.path().empty() && !tab.searching()) {
             ui.menu_separator();
-            if (ui.menu_item("Windows options")) { (void)core::shell::show_native_menu({tab.path()}, env_.window.handle()); }
+            if (ui.menu_item(tr("Windows options"))) { (void)core::shell::show_native_menu({tab.path()}, env_.window.handle()); }
         }
         return;
     }
@@ -1006,51 +1035,51 @@ void FileList::context_menu(Painter& p, model::Tab& tab, const rect& area)
     const core::FileEntry& e = L.at(row);
     const std::string full = core::path::join(tab.path(), e.name);
 
-    if (ui.menu_item("Open", "Enter")) { open_row(tab, row); }
-    if (e.is_dir() && ui.menu_item("Open in new tab")) { env_.cmd.open_tab(full, false); }
-    if (picked.size() == 1 && !env_.settings.browse_archives && browsable_archive(e) && ui.menu_item("Browse inside")) { env_.cmd.open_archive(full); }
-    if (e.is_dir() && picked.size() == 1 && ui.menu_item(env_.layout.find(full) ? "Unpin from sidebar" : "Pin to sidebar")) { env_.cmd.toggle_pin(full); }
+    if (ui.menu_item(tr("Open"), "Enter")) { open_row(tab, row); }
+    if (e.is_dir() && ui.menu_item(tr("Open in new tab"))) { env_.cmd.open_tab(full, false); }
+    if (picked.size() == 1 && !env_.settings.browse_archives && browsable_archive(e) && ui.menu_item(tr("Browse inside"))) { env_.cmd.open_archive(full); }
+    if (e.is_dir() && picked.size() == 1 && ui.menu_item(env_.layout.find(full) ? tr("Unpin from sidebar") : tr("Pin to sidebar"))) { env_.cmd.toggle_pin(full); }
     ui.menu_separator();
-    if (ui.menu_item("Cut", "Ctrl+X")) { copy_selection(tab, true); }
-    if (ui.menu_item("Copy", "Ctrl+C")) { copy_selection(tab, false); }
-    if (e.is_dir() && ui.menu_item("Paste into folder", "", false, can_paste)) {
+    if (ui.menu_item(tr("Cut"), env_.binds.text("cut"))) { copy_selection(tab, true); }
+    if (ui.menu_item(tr("Copy"), env_.binds.text("copy"))) { copy_selection(tab, false); }
+    if (e.is_dir() && ui.menu_item(tr("Paste into folder"), "", false, can_paste)) {
         std::vector<std::string> paths;
         bool cut = false;
         if (core::clipboard_get_files(paths, cut)) { env_.ops.start(cut ? core::OpKind::move : core::OpKind::copy, std::move(paths), full); }
     }
     if (two_panes) {
-        if (ui.menu_item("Copy to other pane", "Ctrl+Shift+C")) { to_other_pane(tab, false); }
-        if (ui.menu_item("Move to other pane", "Ctrl+Shift+X")) { to_other_pane(tab, true); }
+        if (ui.menu_item(tr("Copy to other pane"), env_.binds.text("copy_to_pane"))) { to_other_pane(tab, false); }
+        if (ui.menu_item(tr("Move to other pane"), env_.binds.text("move_to_pane"))) { to_other_pane(tab, true); }
     }
     if (picked.size() == 1 && !e.is_dir() && core::is_archive_name(e.name)) {
-        if (ui.menu_item("Extract to folder")) { env_.cmd.request_action("extract_folder"); }
-        if (ui.menu_item("Extract here")) { env_.cmd.request_action("extract_here"); }
+        if (ui.menu_item(tr("Extract to folder"))) { env_.cmd.request_action("extract_folder"); }
+        if (ui.menu_item(tr("Extract here"))) { env_.cmd.request_action("extract_here"); }
     }
-    if (!tab.searching() && ui.menu_item("Compress to zip")) { env_.cmd.request_action("compress_zip"); }
-    if (picked.size() == 1 && ui.menu_item("Rename", "F2")) { begin_rename(ui, tab, row); }
-    if (ui.menu_item("Delete", "Del")) { env_.cmd.request_delete(selected_paths(tab), false); }
+    if (!tab.searching() && ui.menu_item(tr("Compress to zip"))) { env_.cmd.request_action("compress_zip"); }
+    if (picked.size() == 1 && ui.menu_item(tr("Rename"), env_.binds.text("rename"))) { begin_rename(ui, tab, row); }
+    if (ui.menu_item(tr("Delete"), "Del")) { env_.cmd.request_delete(selected_paths(tab), false); }
     const bool all_images = std::ranges::all_of(picked, [&](std::size_t r) { return !L.at(r).is_dir() && core::is_image_name(L.at(r).name); });
     if (all_images) {
-        if (auto sub = ui.menu("Picture tools")) {
-            if (ui.menu_item("Rotate left")) { env_.cmd.request_action("img_left"); }
-            if (ui.menu_item("Rotate right")) { env_.cmd.request_action("img_right"); }
+        if (auto sub = ui.menu(tr("Picture tools"))) {
+            if (ui.menu_item(tr("Rotate left"))) { env_.cmd.request_action("img_left"); }
+            if (ui.menu_item(tr("Rotate right"))) { env_.cmd.request_action("img_right"); }
             ui.menu_separator();
-            if (ui.menu_item("Half size")) { env_.cmd.request_action("img_50"); }
-            if (ui.menu_item("Quarter size")) { env_.cmd.request_action("img_25"); }
-            if (ui.menu_item("Fit 1920 pixels")) { env_.cmd.request_action("img_1920"); }
+            if (ui.menu_item(tr("Half size"))) { env_.cmd.request_action("img_50"); }
+            if (ui.menu_item(tr("Quarter size"))) { env_.cmd.request_action("img_25"); }
+            if (ui.menu_item(tr("Fit 1920 pixels"))) { env_.cmd.request_action("img_1920"); }
             ui.menu_separator();
-            if (ui.menu_item("Save as JPEG")) { env_.cmd.request_action("img_jpg"); }
-            if (ui.menu_item("Save as PNG")) { env_.cmd.request_action("img_png"); }
+            if (ui.menu_item(tr("Save as JPEG"))) { env_.cmd.request_action("img_jpg"); }
+            if (ui.menu_item(tr("Save as PNG"))) { env_.cmd.request_action("img_png"); }
         }
     }
     if (!tab.searching()) {
-        if (auto sub = ui.menu("Create link")) {
-            if (ui.menu_item("Symbolic link")) { env_.cmd.request_action("link_symbolic"); }
-            if (ui.menu_item("Hard link (files)")) { env_.cmd.request_action("link_hard"); }
-            if (ui.menu_item("Junction (folders)")) { env_.cmd.request_action("link_junction"); }
+        if (auto sub = ui.menu(tr("Create link"))) {
+            if (ui.menu_item(tr("Symbolic link"))) { env_.cmd.request_action("link_symbolic"); }
+            if (ui.menu_item(tr("Hard link (files)"))) { env_.cmd.request_action("link_hard"); }
+            if (ui.menu_item(tr("Junction (folders)"))) { env_.cmd.request_action("link_junction"); }
         }
     }
-    if (auto sub = ui.menu("Label")) {
+    if (auto sub = ui.menu(tr("Label"))) {
         std::uint16_t every = core::tag::all; // the labels all selected items have
         std::uint16_t some  = 0;
         for (const std::size_t r : picked) {
@@ -1058,20 +1087,20 @@ void FileList::context_menu(Painter& p, model::Tab& tab, const rect& area)
             some  |= L.at(r).tags;
         }
         for (int t = 0; t < core::tag::count; ++t) {
-            std::string name{core::tag::names[t]};
-            name[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(name[0])));
-            static const std::string keys[] = {"Alt+1", "Alt+2", "Alt+3", "Alt+4", "Alt+5", "Alt+6", "Alt+7", "Alt+8"};
+            std::string name{tag_label(t)};
+            if (std::wstring w = core::text::widen(name); !w.empty()) { ::CharUpperBuffW(w.data(), 1); name = core::text::narrow(w); }
+            const std::string key = env_.binds.text("tag_" + std::to_string(t + 1));
             menu_item_options o;
-            o.shortcut = keys[t];
+            o.shortcut = key;
             o.selected = (every & (1u << t)) != 0;
             o.image    = tag_dot(env_.images, t).id;
             if (ui.menu_item(name + "##tag" + std::to_string(t), o)) { env_.cmd.toggle_tag(selected_paths(tab), t); }
         }
         ui.menu_separator();
-        if (ui.menu_item("Clear labels", "Alt+0", false, some != 0)) { env_.cmd.clear_tags(selected_paths(tab)); }
+        if (ui.menu_item(tr("Clear labels"), env_.binds.text("tag_clear"), false, some != 0)) { env_.cmd.clear_tags(selected_paths(tab)); }
     }
     ui.menu_separator();
-    if (ui.menu_item(picked.size() > 1 ? "Copy paths" : "Copy path")) {
+    if (ui.menu_item(picked.size() > 1 ? tr("Copy paths") : tr("Copy path"))) {
         std::string all;
         for (const std::string& s : selected_paths(tab)) {
             if (!all.empty()) { all += "\r\n"; }
@@ -1079,14 +1108,14 @@ void FileList::context_menu(Painter& p, model::Tab& tab, const rect& area)
         }
         (void)core::shell::set_clipboard_text(all);
     }
-    if (ui.menu_item("Show in File Explorer")) { (void)core::shell::reveal_in_explorer(full); }
-    if (ui.menu_item("Properties", "Alt+Enter")) { env_.cmd.open_properties(selected_paths(tab)); }
+    if (ui.menu_item(tr("Show in File Explorer"))) { (void)core::shell::reveal_in_explorer(full); }
+    if (ui.menu_item(tr("Properties"), env_.binds.text("properties"))) { env_.cmd.open_properties(selected_paths(tab)); }
     if (!shell_items.empty()) {
-        if (auto more = ui.menu("More options")) { draw_shell_page(ui, shell_items); }
+        if (auto more = ui.menu(tr("More options"))) { draw_shell_page(ui, shell_items); }
     }
     ui.menu_separator();
-    if (ui.menu_item("Windows properties")) { (void)core::shell::show_properties(full); }
-    if (ui.menu_item("Windows options")) { (void)core::shell::show_native_menu(selected_paths(tab), env_.window.handle()); }
+    if (ui.menu_item(tr("Windows properties"))) { (void)core::shell::show_properties(full); }
+    if (ui.menu_item(tr("Windows options"))) { (void)core::shell::show_native_menu(selected_paths(tab), env_.window.handle()); }
 }
 
 // the "More options" submenu. strata menus cannot leave the window, scroll, or nest well (a third level flips back over its
