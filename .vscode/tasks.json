@@ -1,0 +1,13 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    { "label": "PrismFS: build release", "type": "process", "command": "cmd", "args": ["/c", "build_vs.cmd", "release"],
+      "group": { "kind": "build", "isDefault": true }, "problemMatcher": [] },
+    { "label": "PrismFS: build dev (fast relink)", "type": "process", "command": "cmd", "args": ["/c", "build_vs.cmd", "dev"],
+      "group": "build", "problemMatcher": [] },
+    { "label": "PrismFS: build debug", "type": "process", "command": "cmd", "args": ["/c", "build_vs.cmd", "debug"],
+      "group": "build", "problemMatcher": [] },
+    { "label": "PrismFS: run self-test", "type": "process", "command": "build/release/bin/prismfs_selftest.exe",
+      "group": "test", "problemMatcher": [] }
+  ]
+}

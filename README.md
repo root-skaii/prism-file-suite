@@ -1,75 +1,86 @@
-# PrismFS
+<h1 align="center">PrismFS</h1>
+<p align="center">A fast, modern file explorer for Windows 10 / 11.<br>Tabs, two panes, instant search, huge folders without lag.</p>
 
-A fast, modern file explorer for Windows, built on [strata](../DxStrataFramework) (Direct3D 11, immediate mode).
+<p align="center"><img src="docs/dark-details.png" alt="PrismFS, details view" width="860"></p>
 
-- Tabs in a custom title bar (drag to reorder, middle click closes), snap-layout friendly borderless window
-- Async directory listing: a 200k-file folder shows its first rows immediately and never blocks the ui
-- Only visible rows are drawn, so huge folders scroll like small ones
-- Dark (default) and light theme, comfortable and compact density, colour-coded icons
-- Keyboard first: arrows / Home / End / PageUp / PageDown, type to find, `Ctrl+T/W/Tab`, `Ctrl+L`, `Alt+←/→/↑`, `F5`
+## Features
+
+**Browse**
+- **Fast** – folders load in the background and only visible rows are drawn: a 200k-file folder opens instantly
+- **Tabs, two panes, sessions** – drag tabs, middle-click closes, `F3` splits; `Ctrl+Shift+O` saves the open tabs under a name
+- **Details or thumbnails**, preview pane, **Quick Look** (`Space`), **groups** (right click → Group by name / type / date / size)
+- **Sidebar you control** – pinned folders, saved searches, drives with free space, Recent / Frequent
+- **Path bar** – click a segment, or its arrow for sibling folders; type a program (`cmd`, `pwsh`, `code .`) and press Enter to run it in this folder; add `admin` (`cmd admin`) to run it elevated
+- **Archives open like folders** – Enter on a zip / 7z / tar shows what is inside (a temporary copy)
+- **Colour labels** – `Alt+1`…`Alt+8` toggle, `Alt+0` clears; filter with `tag:red`
+- **Git badges** – `M` `A` `D` `?` `R` `!` on changed files, branch in the status bar (needs git)
+
+**Search**
+- **Filter and subfolder search** – `*.cpp size:>10kb modified:month`, regex, saved searches ([syntax](docs/SEARCH.md))
+- **Search everywhere** – `Ctrl+Shift+F` finds names on every fixed drive in a fraction of a second (a low-priority background index built at start)
+
+**Files**
+- **Copy / move queue** – progress card (speed, time left, pause, cancel), replace / skip / keep both prompt; Settings can switch back to Windows' copy window
+- Delete to Recycle Bin, drag and drop, undo / redo, Windows context menu, **New** menu with your own templates
+- **Batch rename** (`F2` on several files), links (symbolic, hard, junction), picture tools (rotate, resize, JPEG / PNG), zip / extract
+
+**Tools**
+- **Disk usage** (`Ctrl+Shift+U`) – sortable folder tree beside a treemap, one selection; double click looks inside
+- **Folder compare and sync** (`Ctrl+Shift+E`, two panes) – see what differs, pick a direction per row, copy; nothing is deleted
+- **Duplicate finder**, **empty-folder cleaner**, folder sizes in the size column (View options)
+
+**Look and feel** – dark / light themes, accent colours, compact density, every shortcut rebindable, command palette (`Ctrl+Shift+P`)
+
+<p align="center"><img src="docs/dark-grid.png" alt="PrismFS, thumbnail view" width="860"></p>
+
+## Shortcuts
+
+| | |
+| --- | --- |
+| `Ctrl+T` / `Ctrl+W` / `Ctrl+Tab` | new / close / next tab |
+| `Ctrl+L` · `Alt+←/→/↑` | path bar · back, forward, up |
+| `Ctrl+F` · `Ctrl+Enter` | filter · search subfolders |
+| `Ctrl+Shift+F` | search everywhere |
+| `Ctrl+G` | go to a pinned folder or drive |
+| `Space` | Quick Look |
+| `Alt+1`…`Alt+8` · `Alt+0` | toggle a colour label · clear labels |
+| `Ctrl+Shift+O` · `Ctrl+Shift+E` · `Ctrl+Shift+U` | sessions · compare panes · disk usage |
+| `Ctrl+Alt+T` | terminal here |
+| `Ctrl+Shift+P` | command palette (every action) |
+| `F2` · `F3` · `F5` | rename · two panes · refresh |
+
+## Run
 
 ```
-prismfs.exe [folder] [--light] [--compact]
+prismfs.exe [folder [second folder]] [--light] [--compact]
 ```
 
-## Search and filter
-
-The box in the toolbar (`Ctrl+F` focuses it, `Esc` clears it) has two scopes, chosen with the two icon buttons to its
-left (hover for the tooltip):
-
-| Scope | What it does |
-| --- | --- |
-| **This folder** (folder icon) | filters the list you are looking at, as you type |
-| **Subfolders** (tree icon) | searches everything below the current folder: press `Enter`; results stream in with the folder they live in shown dimmed after the name. The status bar shows `Searching ... N found` with **Cancel search**, and **Back to folder** afterwards |
-
-`Ctrl+Enter` always searches the subfolders, whichever scope is selected. Open, rename, delete, drag and properties work
-on results like on any file. `Aa` matches case, `.*` reads plain words as regular expressions, `?` opens the syntax help
-(click an example to try it). A query that cannot be understood turns the box red and says why in the status bar; it never
-hides everything silently.
-
-The same query language is used by both scopes. Words are combined with AND; everything is case-insensitive unless `Aa` is on.
-
-| You type | Matches |
-| --- | --- |
-| `report 2026` | names containing both words |
-| `"annual report"` | the exact phrase (inside quotes `*` and `?` are ordinary characters) |
-| `*.cpp`, `report?.txt`, `ma*` | wildcards: `*` any run of characters, `?` one character. A wildcard pattern must match the **whole** name; use `*draft*` for "contains" |
-| `.cpp`, `.tar.gz` | names that end with it |
-| `src\*.h`, `src/util` | contains a path separator: matched against the relative path (useful in Subfolders) |
-| `a \| b`, `a OR b` | either side (`a b \| c` means `(a and b) or c`) |
-| `-draft`, `-ext:obj` | not (put a `-` in front of any term; quote it, `"-x"`, to search for a real leading dash) |
-| `ext:cpp,h` | extension is one of the list |
-| `type:image` | `image video audio archive doc text pdf sheet slides code config exe lib font disk shortcut folder` (several: `type:image,video`; `doc` = documents, sheets, slides, pdf and text) |
-| `kind:folder`, `kind:file` | folders only / files only |
-| `size:>10mb`, `size:<=500kb`, `size:1kb..1mb`, `size:..1gb` | file size; units `b kb mb gb tb` (1024-based, decimals allowed). Folders never match a size |
-| `modified:today`, `yesterday` | calendar day (local time) |
-| `modified:week`, `month`, `year`, `3d`, `12h`, `2w` | within the last 7 / 30 / 365 days, or the last N days / hours / weeks |
-| `modified:2026`, `2026-10`, `2026-10-19` | that year / month / day |
-| `modified:>2026-01-01`, `<=2026-03`, `2026-01-01..2026-03-31` | after / before / between (`>` and `<` exclude the date's own period; `>=` and `<=` include it) |
-| `hidden:yes` | hidden and system items; they are shown for this query even when hidden files are off |
-| `re:^IMG_\d+\.(jpg\|png)$` | a regular expression on the file name (see below) |
-
-Examples: `*.cpp size:>10kb modified:month` · `type:image -ext:gif` · `report* | invoice* kind:file` · `-hidden:yes ext:log`.
-
-Regular expressions (`re:` or the `.*` switch) support literals, `.`, `[a-z]`, `[^x]`, `^`, `$`, `|`, `(...)`, `(?:...)`,
-`* + ?`, `{n}`, `{n,m}`, lazy forms (`*?`), `\d \w \s \D \W \S` and escapes. There are no back-references or look-around.
-Matching cannot blow up on nasty patterns. With `.*` on, a plain word is a regular expression (so `*.cpp` is an error:
-write `\.cpp$`), `|` belongs to the pattern, and a quoted phrase stays literal. Case and Unicode: letter case is folded for
-ASCII only, other characters must match exactly.
-
-## Keyboard shortcuts
-
-`Ctrl+Shift+P` opens the command palette: every action with its shortcut, searchable. All shortcuts can be rebound in
-**Settings** (they are stored in `settings.ini`).
+A second folder opens two panes. Settings are in `%APPDATA%\PrismFS\settings.ini`; put a `prismfs.ini` next to the exe for a
+portable install (labels, sessions and the sidebar are stored beside it too).
 
 ## Build
 
-Needs CMake 4.3+, Visual Studio 2022 with the C++ workload and the LLVM/clang-cl component, and a strata checkout next
-to this folder (`../DxStrataFramework`, or `-DPRISM_STRATA_DIR=...`).
+Needs CMake 4.3+, Visual Studio 2022 (C++ workload and the LLVM / clang-cl component) and a checkout of the
+[strata UI framework](https://github.com/root-skaii/strata-ui-framework) next to this folder
+(`../DxStrataFramework`, or `-DPRISM_STRATA_DIR=...`).
+
+**Visual Studio Code:** open the folder and press `Ctrl+Shift+B` → *PrismFS: build release*.
+
+**PowerShell:**
 
 ```
-cmd /c ".\build_vs.cmd release"       # also: debug, dev (no LTO), relwithdebinfo
+cmd /c ".\build_vs.cmd release"       # also: debug, dev (no LTO, fast relinks), relwithdebinfo
 build\release\bin\prismfs.exe
+build\release\bin\prismfs_selftest.exe    # logic tests
 ```
 
-See [CLAUDE.md](CLAUDE.md) for the architecture and the things that are not obvious from the code.
+Architecture notes are in [CLAUDE.md](CLAUDE.md). `tools\make_screenshots.ps1` regenerates the images from a made-up demo folder.
+
+## License
+
+Released under the [MIT License](LICENSE) © 2026 skaii.
+
+## Acknowledgements
+
+Built with the help of [Claude](https://www.anthropic.com/claude) by Anthropic, using the
+[strata UI framework](https://github.com/root-skaii/strata-ui-framework).

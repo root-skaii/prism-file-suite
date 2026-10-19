@@ -7,6 +7,7 @@
 #include "core/query.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -15,12 +16,20 @@
 namespace prism::model {
 
 enum class SortKey : std::uint8_t { name, modified, type, size };
+// where folders go: above the files (the explorer way), among them, or below
+enum class FolderPlacement : std::uint8_t { first, mixed, last };
 
 struct SortSpec {
     SortKey key{SortKey::name};
     bool    ascending{true};
+    FolderPlacement folders{FolderPlacement::first};
+    bool    natural{true};       // "file2" before "file10"
+    bool    hidden_last{false};  // hidden and dot files after the others (inside their group)
     friend bool operator==(const SortSpec&, const SortSpec&) = default;
 };
+
+// the details view can cut the list into titled groups; they come before the sort (which orders inside each group)
+enum class GroupBy : std::uint8_t { none, name, type, modified, size };
 
 class Listing {
 public:
@@ -35,6 +44,15 @@ public:
 
     void set_sort(SortSpec s);
     void set_show_hidden(bool on);
+    // colour labels: copies each entry's labels from `lookup` into FileEntry::tags, when `token` (what the labels depend on:
+    // the store's revision, the folder, how many entries are loaded) differs from the last call. a `tag:` filter is re-applied
+    void sync_tags(std::uint64_t token, const std::function<std::uint16_t(const core::FileEntry&)>& lookup);
+    [[nodiscard]] std::uint64_t epoch() const noexcept { return epoch_; } // changes with every clear(): a folder (re)load
+    void set_group(GroupBy g);
+    [[nodiscard]] GroupBy group() const noexcept { return group_; }
+    // rows that begin a group, ascending (empty when not grouped or still loading); group_title(row) names the group of a row
+    [[nodiscard]] const std::vector<std::uint32_t>& group_starts() const noexcept { return group_starts_; }
+    [[nodiscard]] std::string group_title(std::size_t row) const;
     // the live filter: only entries the query matches are shown (an empty or invalid query shows everything)
     void set_query(core::Query q);
     [[nodiscard]] const SortSpec& sort() const noexcept { return sort_; }
@@ -79,6 +97,12 @@ private:
     std::vector<std::uint8_t>    sel_;      // per entry
     std::vector<std::uint32_t>   order_;    // visible entries, in display order
     std::vector<std::uint32_t>   row_of_;   // per entry: its row, npos when hidden
+    std::vector<std::uint8_t>    rank_;     // per entry: its group's place (only while grouped)
+    std::vector<std::uint32_t>   group_starts_;
+    std::uint64_t                epoch_{};
+    std::uint64_t                tag_token_{~std::uint64_t{0}};
+    GroupBy                      group_{GroupBy::none};
+    bool                         group_flip_{}; // groups run in the opposite order (sorted descending by the key they are made of)
     SortSpec                     sort_{};
     core::Query                  query_;
     bool                         show_hidden_{false};

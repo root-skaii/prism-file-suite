@@ -35,7 +35,8 @@ constexpr int k_max_items    = 512;
 
 std::string SidebarItem::label() const
 {
-    return name.empty() ? core::path::leaf(path) : name;
+    if (!name.empty()) { return name; }
+    return query.empty() ? core::path::leaf(path) : query;
 }
 
 SidebarLayout SidebarLayout::defaults()
@@ -64,7 +65,7 @@ std::optional<ItemPos> SidebarLayout::find(std::string_view path) const
 {
     for (std::size_t s = 0; s < sections_.size(); ++s) {
         for (std::size_t i = 0; i < sections_[s].items.size(); ++i) {
-            if (same_path(sections_[s].items[i].path, path)) { return ItemPos{s, i}; }
+            if (sections_[s].items[i].query.empty() && same_path(sections_[s].items[i].path, path)) { return ItemPos{s, i}; }
         }
     }
     return std::nullopt;
@@ -95,6 +96,25 @@ bool SidebarLayout::pin(std::size_t section, std::size_t slot, std::string path,
     it.name = std::move(name);
     sec.items.insert(sec.items.begin() + static_cast<std::ptrdiff_t>(clamp_slot(slot, sec.items.size())), std::move(it));
     sec.collapsed = false; // (what was just pinned should be visible)
+    ++revision_;
+    return true;
+}
+
+bool SidebarLayout::pin_search(std::size_t section, std::string folder, std::string query, std::string name)
+{
+    folder = core::path::normalize(folder);
+    if (folder.empty() || query.empty() || section >= sections_.size() || sections_[section].dynamic()) { return false; }
+    for (const SidebarSection& s : sections_) {
+        for (const SidebarItem& x : s.items) {
+            if (x.query == query && same_path(x.path, folder)) { return false; }
+        }
+    }
+    SidebarItem it;
+    it.path  = std::move(folder);
+    it.query = std::move(query);
+    it.name  = std::move(name);
+    sections_[section].items.push_back(std::move(it));
+    sections_[section].collapsed = false;
     ++revision_;
     return true;
 }
@@ -165,12 +185,20 @@ std::size_t SidebarLayout::add_section(std::size_t slot, std::string title)
     return slot;
 }
 
-bool SidebarLayout::remove_section(std::size_t section)
+bool SidebarLayout::has_neighbour(std::size_t section) const
+{
+    for (std::size_t s = 0; s < sections_.size(); ++s) {
+        if (s != section && !sections_[s].dynamic()) { return true; }
+    }
+    return false;
+}
+
+bool SidebarLayout::remove_section(std::size_t section, bool keep_items)
 {
     if (section >= sections_.size()) { return false; }
     std::vector<SidebarItem> orphans = std::move(sections_[section].items);
     sections_.erase(sections_.begin() + static_cast<std::ptrdiff_t>(section));
-    if (!orphans.empty()) {
+    if (keep_items && !orphans.empty()) {
         // the nearest folder section above, else below
         std::size_t target = sections_.size();
         for (std::size_t s = std::min(section, sections_.size()); s-- > 0;) {
@@ -317,6 +345,7 @@ void SidebarLayout::store(strata::config& c) const
             c.set(id, std::format("i{}.path", i), it.path);
             if (!it.name.empty())  { c.set(id, std::format("i{}.name", i), it.name); }
             if (!it.known.empty()) { c.set(id, std::format("i{}.known", i), it.known); }
+            if (!it.query.empty()) { c.set(id, std::format("i{}.query", i), it.query); }
             if (it.glyph != 0)     { c.set_int(id, std::format("i{}.glyph", i), static_cast<int>(it.glyph)); }
             if (it.color != 0)     { c.set_int(id, std::format("i{}.color", i), static_cast<int>(it.color)); }
         }
@@ -342,15 +371,16 @@ bool SidebarLayout::load(const strata::config& c)
             it.path  = core::path::normalize(c.get(id, std::format("i{}.path", i)));
             it.name  = std::string{c.get(id, std::format("i{}.name", i))};
             it.known = std::string{c.get(id, std::format("i{}.known", i))};
+            it.query = std::string{c.get(id, std::format("i{}.query", i))};
             it.glyph = static_cast<char32_t>(c.get_int(id, std::format("i{}.glyph", i), 0));
             it.color = static_cast<std::uint32_t>(c.get_int(id, std::format("i{}.color", i), 0));
             if (!it.known.empty()) {
                 if (const std::string p = core::known_path(it.known); !p.empty()) { it.path = core::path::normalize(p); }
             }
             if (it.path.empty()) { continue; }
-            const bool dup = std::ranges::any_of(out, [&](const SidebarSection& o) {
-                return std::ranges::any_of(o.items, [&](const SidebarItem& x) { return same_path(x.path, it.path); });
-            }) || std::ranges::any_of(sec.items, [&](const SidebarItem& x) { return same_path(x.path, it.path); });
+            const auto same = [&](const SidebarItem& x) { return x.query == it.query && same_path(x.path, it.path); };
+            const bool dup = std::ranges::any_of(out, [&](const SidebarSection& o) { return std::ranges::any_of(o.items, same); })
+                          || std::ranges::any_of(sec.items, same);
             if (!dup) { sec.items.push_back(std::move(it)); }
         }
         out.push_back(std::move(sec));

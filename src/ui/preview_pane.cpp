@@ -21,32 +21,31 @@ namespace {
     return k == FileKind::text || k == FileKind::code || k == FileKind::config;
 }
 
-// the first few KB as lines; empty if it does not look like text (a NUL byte)
-std::vector<std::string> read_head(const std::string& path)
+} // namespace
+
+std::vector<std::string> read_text_head(const std::string& path, std::size_t max_bytes, std::size_t max_lines)
 {
     std::vector<std::string> lines;
     HANDLE f = ::CreateFileW(core::text::widen(path).c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
     if (f == INVALID_HANDLE_VALUE) { return lines; }
-    char buf[6144];
+    std::string buf(max_bytes, '\0');
     DWORD n = 0;
-    const BOOL ok = ::ReadFile(f, buf, sizeof buf, &n, nullptr);
+    const BOOL ok = ::ReadFile(f, buf.data(), static_cast<DWORD>(buf.size()), &n, nullptr);
     ::CloseHandle(f);
     if (!ok || n == 0) { return lines; }
     for (DWORD i = 0; i < n; ++i) {
         if (buf[i] == '\0') { return {}; }
     }
     std::string cur;
-    for (DWORD i = 0; i < n && lines.size() < 60; ++i) {
+    for (DWORD i = 0; i < n && lines.size() < max_lines; ++i) {
         const char c = buf[i];
         if (c == '\n') { lines.push_back(std::move(cur)); cur.clear(); }
         else if (c == '\t') { cur += "    "; }
         else if (c != '\r') { cur.push_back(c); }
     }
-    if (!cur.empty() && lines.size() < 60) { lines.push_back(std::move(cur)); }
+    if (!cur.empty() && lines.size() < max_lines) { lines.push_back(std::move(cur)); }
     return lines;
 }
-
-} // namespace
 
 void PreviewPane::load(const std::string& path)
 {
@@ -64,7 +63,7 @@ void PreviewPane::load(const std::string& path)
     const std::size_t dot = info_.name.rfind('.');
     const std::string ext = dot == std::string::npos || dot == 0 ? std::string{} : core::text::lower_ascii(std::string_view{info_.name}.substr(dot + 1));
     kind_ = core::classify_extension(ext);
-    if (is_text_kind(kind_) && info_.size < (16u << 20)) { lines_ = read_head(path); }
+    if (is_text_kind(kind_) && info_.size < (16u << 20)) { lines_ = read_text_head(path, 6144, 60); }
 }
 
 void PreviewPane::frame(Painter& p, const rect& area)

@@ -40,12 +40,14 @@ FileOps::~FileOps()
 
 bool FileOps::busy() const
 {
+    if (transfers_.busy()) { return true; }
     std::lock_guard g{lock_};
     return running_ > 0;
 }
 
 bool FileOps::poll(OpResult& out)
 {
+    if (transfers_.poll(out)) { return true; }
     std::lock_guard g{lock_};
     if (results_.empty()) { return false; }
     out = std::move(results_.front());
@@ -56,6 +58,10 @@ bool FileOps::poll(OpResult& out)
 void FileOps::start(OpKind kind, std::vector<std::string> sources, std::string dest_dir, bool silent)
 {
     if (sources.empty()) { return; }
+    if (builtin_ && (kind == OpKind::copy || kind == OpKind::move) && !dest_dir.empty()) {
+        transfers_.add(kind, std::move(sources), std::move(dest_dir), silent);
+        return;
+    }
     {
         std::lock_guard g{lock_};
         ++running_;
@@ -121,7 +127,9 @@ bool FileOps::rename(const std::string& path, const std::string& new_name)
     if (new_name.empty() || new_name.find_first_of("\\/:*?\"<>|") != std::string::npos) { return false; }
     const std::string target = path::join(path::parent(path), new_name);
     // (case-only renames are allowed: MoveFileEx treats them as a rename of the same file)
-    return ::MoveFileExW(text::widen(path).c_str(), text::widen(target).c_str(), 0) != FALSE;
+    const bool ok = ::MoveFileExW(text::widen(path).c_str(), text::widen(target).c_str(), 0) != FALSE;
+    if (ok && on_renamed) { on_renamed(path, target); }
+    return ok;
 }
 
 std::string FileOps::create_folder(const std::string& dir)

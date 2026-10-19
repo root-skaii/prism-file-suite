@@ -47,6 +47,34 @@ std::string Settings::visits_path()
     return p.substr(0, cut) + (p.substr(cut) == "prismfs-sidebar.ini" ? "prismfs-visits.ini" : "visits.ini");
 }
 
+std::string Settings::folder_sorts_path()
+{
+    const std::string p   = sidebar_path();
+    const std::size_t cut = p.find_last_of('\\') == std::string::npos ? 0 : p.find_last_of('\\') + 1;
+    return p.substr(0, cut) + (p.substr(cut) == "prismfs-sidebar.ini" ? "prismfs-foldersort.ini" : "foldersort.ini");
+}
+
+std::string Settings::tags_path()
+{
+    const std::string p   = sidebar_path();
+    const std::size_t cut = p.find_last_of('\\') == std::string::npos ? 0 : p.find_last_of('\\') + 1;
+    return p.substr(0, cut) + (p.substr(cut) == "prismfs-sidebar.ini" ? "prismfs-tags.ini" : "tags.ini");
+}
+
+std::string Settings::sessions_path()
+{
+    const std::string p   = sidebar_path();
+    const std::size_t cut = p.find_last_of('\\') == std::string::npos ? 0 : p.find_last_of('\\') + 1;
+    return p.substr(0, cut) + (p.substr(cut) == "prismfs-sidebar.ini" ? "prismfs-sessions.ini" : "sessions.ini");
+}
+
+std::string Settings::templates_path()
+{
+    const std::string p   = file_path();
+    const std::size_t cut = p.find_last_of('\\') == std::string::npos ? 0 : p.find_last_of('\\') + 1;
+    return p.substr(0, cut) + "Templates";
+}
+
 void Settings::load()
 {
     strata::config c;
@@ -62,12 +90,24 @@ void Settings::load()
     restore_tabs   = c.get_bool("behavior", "restore_tabs", restore_tabs);
     shell_menu     = c.get_bool("behavior", "shell_menu", shell_menu);
     track_history  = c.get_bool("behavior", "track_history", track_history);
+    browse_archives = c.get_bool("behavior", "browse_archives", browse_archives);
+    builtin_copy    = c.get_bool("behavior", "builtin_copy", builtin_copy);
+    index_drives    = c.get_bool("behavior", "index_drives", index_drives);
     search_subfolders = c.get_bool("search", "subfolders", search_subfolders);
     search_case    = c.get_bool("search", "match_case", search_case);
     search_regex   = c.get_bool("search", "regex", search_regex);
     grid_view     = c.get_bool("layout", "grid_view", grid_view);
     preview        = c.get_bool("layout", "preview", preview);
     split          = c.get_bool("layout", "split", split);
+    folder_sizes   = c.get_bool("layout", "folder_sizes", folder_sizes);
+    git_badges     = c.get_bool("layout", "git_badges", git_badges);
+    sort_key         = std::clamp(c.get_int("sorting", "key", sort_key), 0, 3);
+    sort_ascending   = c.get_bool("sorting", "ascending", sort_ascending);
+    sort_folders     = std::clamp(c.get_int("sorting", "folders", sort_folders), 0, 2);
+    sort_natural     = c.get_bool("sorting", "natural", sort_natural);
+    sort_hidden_last = c.get_bool("sorting", "hidden_last", sort_hidden_last);
+    sort_per_folder  = c.get_bool("sorting", "per_folder", sort_per_folder);
+    group_by         = std::clamp(c.get_int("sorting", "group_by", group_by), 0, 4);
     sidebar_width  = c.get_float("layout", "sidebar_width", sidebar_width);
     window_w       = c.get_int("layout", "window_w", window_w);
     window_h       = c.get_int("layout", "window_h", window_h);
@@ -93,12 +133,24 @@ void Settings::save() const
     c.set_bool("behavior", "restore_tabs", restore_tabs);
     c.set_bool("behavior", "shell_menu", shell_menu);
     c.set_bool("behavior", "track_history", track_history);
+    c.set_bool("behavior", "browse_archives", browse_archives);
+    c.set_bool("behavior", "builtin_copy", builtin_copy);
+    c.set_bool("behavior", "index_drives", index_drives);
     c.set_bool("search", "subfolders", search_subfolders);
     c.set_bool("search", "match_case", search_case);
     c.set_bool("search", "regex", search_regex);
     c.set_bool("layout", "grid_view", grid_view);
     c.set_bool("layout", "preview", preview);
     c.set_bool("layout", "split", split);
+    c.set_bool("layout", "folder_sizes", folder_sizes);
+    c.set_bool("layout", "git_badges", git_badges);
+    c.set_int("sorting", "key", sort_key);
+    c.set_bool("sorting", "ascending", sort_ascending);
+    c.set_int("sorting", "folders", sort_folders);
+    c.set_bool("sorting", "natural", sort_natural);
+    c.set_bool("sorting", "hidden_last", sort_hidden_last);
+    c.set_bool("sorting", "per_folder", sort_per_folder);
+    c.set_int("sorting", "group_by", group_by);
     c.set_float("layout", "sidebar_width", sidebar_width);
     c.set_int("layout", "window_w", window_w);
     c.set_int("layout", "window_h", window_h);

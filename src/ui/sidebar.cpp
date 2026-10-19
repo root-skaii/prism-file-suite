@@ -184,6 +184,7 @@ void Sidebar::look(const model::SidebarItem& it, char32_t& g, color& c, const Pa
     else if (k == "pictures")  { g = glyph::picture;  c = pal.tint[static_cast<std::size_t>(core::FileKind::image)]; }
     else if (k == "music")     { g = glyph::music;    c = pal.tint[static_cast<std::size_t>(core::FileKind::audio)]; }
     else if (k == "videos")    { g = glyph::video;    c = pal.tint[static_cast<std::size_t>(core::FileKind::video)]; }
+    if (!it.query.empty()) { g = glyph::search; c = pal.accent; }
     if (it.glyph != 0) { g = it.glyph; }
     if (it.color != 0) { c = from_argb(it.color); }
 }
@@ -255,14 +256,17 @@ void Sidebar::item_row(Painter& p, std::size_t si, std::size_t ii)
     const std::string label = it.label();
     core::text::note_codepoints(label);
 
-    const item_result r   = ui.custom_item(it.path, {ui.content_width(), m.side_row + 4.0f});
+    const std::string key = it.query.empty() ? it.path : it.path + "?" + it.query; // (a folder and a search in it are two rows)
+    const item_result r   = ui.custom_item(key, {ui.content_width(), m.side_row + 4.0f});
     const rect        row = inset(r.bounds);
     const float       tx  = row.min.x + 12.0f + 24.0f + 12.0f;
     rows_.push_back({r.bounds, rect{{tx - 8.0f, row.min.y + 1.0f}, {row.max.x - 4.0f, row.max.y - 1.0f}}, Kind::item, si, ii, it.path});
 
     const bool missing = probe_.missing(it.path);
-    const bool active  = core::path::normalize(env_.tab().path()) == it.path;
-    row_background(p, it.path, r, row, active);
+    const model::Tab& cur = env_.tab();
+    const bool active  = core::path::normalize(cur.path()) == it.path
+                      && (it.query.empty() ? !cur.searching() : cur.searching() && cur.search_query() == it.query);
+    row_background(p, key, r, row, active);
     if (hint_.type == Spot::Type::into && hint_.path == it.path) {
         p.dl().rect_outline(row, pal.accent, 8.0f, 2.0f);
     }
@@ -272,7 +276,7 @@ void Sidebar::item_row(Painter& p, std::size_t si, std::size_t ii)
     look(it, g, tint, pal);
     if (missing) { p.dl().push_alpha(0.45f); }
     const rect ibox = rect::from_size({row.min.x + 12.0f, row.center().y - 12.0f}, {24.0f, 24.0f});
-    if (it.glyph == 0 && it.color == 0 && it.known.empty()) { p.folder_icon(ibox); } // (a plain folder looks like one everywhere)
+    if (it.glyph == 0 && it.color == 0 && it.known.empty() && it.query.empty()) { p.folder_icon(ibox); } // (a plain folder looks like one everywhere)
     else { p.glyph_center(ibox, g, tint); }
     const bool renaming = rename_.active && rename_.target.kind == Kind::item && rename_.target.section == si && rename_.target.index == ii;
     if (!renaming) { p.text_left(rect{{tx, row.min.y}, {row.max.x - 12.0f, row.max.y}}, label, pal.text, f.body); }
@@ -283,7 +287,7 @@ void Sidebar::item_row(Painter& p, std::size_t si, std::size_t ii)
         if (ui.mouse_clicked(mouse_button::left) && !rename_.active) { press_ = Press{true, false, t, ui.mouse_pos()}; }
         if (ui.mouse_clicked(mouse_button::right)) { menu_ = t; }
         if (ui.mouse_clicked(mouse_button::middle) && !missing) { env_.cmd.open_tab(it.path, false); }
-        ui.tooltip(missing ? it.path + "\nFolder not found" : it.path);
+        ui.tooltip(missing ? it.path + "\nFolder not found" : (it.query.empty() ? it.path : "Search \"" + it.query + "\" in " + it.path));
     }
 }
 
@@ -510,6 +514,16 @@ void Sidebar::click(const Target& t)
         if (probe_.missing(t.path)) {
             env_.cmd.toast("This folder is gone: " + t.path, toast_kind::warning);
             probe_.poke();
+        } else if (const std::string& q = env_.layout.sections()[t.section].items[t.index].query; !q.empty()) {
+            // a saved search: the folder, then the query below it (the filter box follows the tab)
+            env_.settings.search_subfolders = true;
+            env_.cmd.settings_changed();
+            model::Tab& tab = env_.tab();
+            tab.navigate(t.path);
+            core::QueryOptions qo;
+            qo.case_sensitive = env_.settings.search_case;
+            qo.regex          = env_.settings.search_regex;
+            tab.search(core::Query::parse(q, qo));
         } else {
             env_.tab().navigate(t.path);
         }
@@ -886,7 +900,7 @@ void Sidebar::context_menu(Painter& p)
         if (ui.menu_item("Move down", "", false, s + 1 < secs.size())) { edit("Move " + sec.title, [=](model::SidebarLayout& l) { (void)l.move_section(s, s + 2); }); }
         ui.menu_separator();
         if (sec.auto_kind != model::SidebarSection::Auto::none && ui.menu_item("Clear history")) { env_.visits.clear(); }
-        if (ui.menu_item("Remove section")) { edit("Remove " + sec.title, [=](model::SidebarLayout& l) { (void)l.remove_section(s); }); }
+        if (ui.menu_item("Remove section")) { env_.cmd.request_remove_section(s); }
         return;
     }
 

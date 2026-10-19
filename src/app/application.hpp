@@ -25,6 +25,7 @@ public:
 
     struct Options {
         std::string path;   // where the first tab opens (empty: the home folder)
+        std::string second; // a folder for the right pane: opens two panes
         bool        light{};
         bool        compact{};
         bool        settings{};

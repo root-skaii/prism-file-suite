@@ -24,6 +24,10 @@ struct Segment {
 // "C:\a\b" -> [C:\ , a, b]
 [[nodiscard]] std::vector<Segment> segments(std::string_view p);
 
+// names of the visible subfolders of `dir`, naturally sorted, at most `limit` (breadcrumb dropdowns; local folders only
+// in practice: it is a synchronous listing)
+[[nodiscard]] std::vector<std::string> subfolders(const std::string& dir, std::size_t limit);
+
 [[nodiscard]] bool is_directory(const std::string& p);
 [[nodiscard]] bool exists(const std::string& p);
 

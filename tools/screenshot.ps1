@@ -25,6 +25,8 @@ $g = [System.Drawing.Graphics]::FromImage($bmp)
 $dc = $g.GetHdc()
 $ok = [W]::PrintWindow($p.MainWindowHandle, $dc, 2)   # PW_RENDERFULLCONTENT
 $g.ReleaseHdc($dc)
-$bmp.Save($Out, [System.Drawing.Imaging.ImageFormat]::Png)
+# (GDI+ resolves relative paths against the process directory, not PowerShell's current location)
+if (-not [IO.Path]::IsPathRooted($Out)) { $Out = Join-Path (Get-Location).Path $Out }
+$bmp.Save($Out,[System.Drawing.Imaging.ImageFormat]::Png)
 "captured ${w}x${h} (PrintWindow=$ok)"
 Stop-Process -Id $p.Id -Force

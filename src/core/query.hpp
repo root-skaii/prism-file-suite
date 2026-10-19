@@ -5,7 +5,7 @@
 //
 //   words are ANDed:   report 2026        "exact phrase"       -draft (not)       a | b  or  a OR b (either)
 //   wildcards:         *.cpp  report?.txt (match the whole name)       .cpp  (name ends with)       sub\name (path)
-//   filters:           ext:cpp,h  type:image  kind:folder  size:>10mb  size:1kb..1mb  modified:today  hidden:yes  re:^IMG_\d+
+//   filters:           ext:cpp,h  type:image  kind:folder  size:>10mb  size:1kb..1mb  modified:today  hidden:yes  tag:red,blue  tag:any  tag:none  re:^IMG_\d+
 //
 // a query never fails to build: an invalid one reports error() and matches everything (the ui shows the error)
 
@@ -31,15 +31,15 @@ struct QueryRegex; // (query.cpp: a small backtracking-free matcher, std::regex 
 
 // one compiled condition; the fields in use depend on `kind`
 struct QueryTerm {
-    enum class Kind : std::uint8_t { substring, glob, suffix, extension, type, folder, size, modified, hidden, regex };
+    enum class Kind : std::uint8_t { substring, glob, suffix, extension, type, folder, size, modified, hidden, tag, regex };
     Kind          kind{Kind::substring};
     bool          negate{};
     bool          on_path{};   // test the whole relative path, not the last component
     bool          fold{true};  // ascii case-insensitive; `text` and `list` are already folded
-    bool          flag{};      // folder: wants a folder; hidden: wants hidden
+    bool          flag{};      // folder: wants a folder; hidden: wants hidden; tag: wants no label at all
     std::string   text;        // substring / glob / suffix
     std::vector<std::string> list; // extensions
-    std::uint32_t mask{};      // FileKind bits
+    std::uint32_t mask{};      // FileKind bits; tag: label bits (any of them)
     std::uint64_t lo{};        // size or FILETIME range, inclusive
     std::uint64_t hi{~std::uint64_t{0}};
     std::shared_ptr<const QueryRegex> re;
@@ -58,6 +58,10 @@ public:
     [[nodiscard]] const std::string& text() const noexcept { return text_; }
     // `hidden:yes` asks for hidden entries: the listing must not hide them first
     [[nodiscard]] bool includes_hidden() const noexcept { return wants_hidden_; }
+    // `tag:red` reads FileEntry::tags: the listing must refresh them before it filters
+    [[nodiscard]] bool uses_tags() const noexcept { return uses_tags_; }
+    // a word with a backslash tests the whole path, so the caller must put the full path in FileEntry::name
+    [[nodiscard]] bool uses_path() const noexcept { return uses_path_; }
 
     // `name` of a recursive result is a relative path; wildcards and words test the last component
     [[nodiscard]] bool matches(const FileEntry& e) const noexcept;
@@ -67,6 +71,8 @@ private:
     std::string                          error_;
     std::vector<std::vector<QueryTerm>>  groups_; // OR of ANDs
     bool                                 wants_hidden_{};
+    bool                                 uses_tags_{};
+    bool                                 uses_path_{};
 };
 
 } // namespace prism::core

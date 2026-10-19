@@ -61,6 +61,8 @@ inline constexpr char32_t lock       = 0xe72e;
 inline constexpr char32_t delete_    = 0xe74d;
 inline constexpr char32_t view       = 0xe8a9;   // the view options button
 inline constexpr char32_t rows       = 0xe700;   // compact rows
+inline constexpr char32_t play       = 0xe768;
+inline constexpr char32_t pause      = 0xe769;
 } // namespace glyph
 
 class Painter {

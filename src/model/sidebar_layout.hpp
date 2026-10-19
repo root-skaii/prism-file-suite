@@ -20,6 +20,7 @@ struct SidebarItem {
     std::string   known;     // "downloads": the path is looked up again on every start, so it follows a moved folder
     char32_t      glyph{};   // icon font code point, 0: automatic
     std::uint32_t color{};   // 0xAARRGGBB, 0: automatic
+    std::string   query;     // a saved search: the query text, run below `path` (empty: a plain pinned folder)
 
     [[nodiscard]] std::string label() const;
 };
@@ -57,6 +58,8 @@ public:
 
     // false: not a folder section, or the folder is already pinned somewhere
     bool pin(std::size_t section, std::size_t slot, std::string path, std::string name = {});
+    // pins a search: clicking it opens `folder` and runs `query` below it. false: not a folder section / already saved
+    bool pin_search(std::size_t section, std::string folder, std::string query, std::string name = {});
     bool unpin(std::string_view path);
     bool remove_item(ItemPos at);
     // false: nothing changed (same place, or the target is the drive list)
@@ -65,8 +68,11 @@ public:
     bool set_item_style(ItemPos at, char32_t glyph, std::uint32_t color);
 
     std::size_t add_section(std::size_t slot, std::string title);
-    // the pins of a removed folder section move to its neighbour (they are dropped when it was the only one)
-    bool remove_section(std::size_t section);
+    // the pins of a removed folder section move to its neighbour (they are dropped when it was the only one, or when
+    // `keep_items` is false)
+    bool remove_section(std::size_t section, bool keep_items = true);
+    // whether another folder section could take the pins of `section` when it is removed
+    [[nodiscard]] bool has_neighbour(std::size_t section) const;
     bool rename_section(std::size_t section, std::string title);
     bool set_collapsed(std::size_t section, bool collapsed);
     bool move_section(std::size_t from, std::size_t slot);

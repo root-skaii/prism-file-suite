@@ -13,6 +13,8 @@ namespace prism::core::text {
 
 // case-insensitive, digit runs compared as numbers ("file2" < "file10"): the order explorer shows
 [[nodiscard]] int compare_natural(std::string_view a, std::string_view b) noexcept;
+// case-insensitive, digits are ordinary characters ("file10" < "file2"): the plain alphabetical order
+[[nodiscard]] int compare_plain(std::string_view a, std::string_view b) noexcept;
 
 // the characters names use that the ui fonts do not bake at start (latin, greek, cyrillic, common symbols). the file
 // listing reports every such character here (ui thread); the host rebuilds the fonts with exactly these glyphs, so

@@ -17,6 +17,13 @@ inline constexpr std::uint32_t directory = 0x10;
 inline constexpr std::uint32_t reparse  = 0x400; // symlink / junction / cloud placeholder
 } // namespace attr
 
+// colour labels: a file can carry any of these (bit i of FileEntry::tags / model::Tags masks)
+namespace tag {
+inline constexpr int count = 8;
+inline constexpr std::string_view names[count] = {"red", "orange", "yellow", "green", "teal", "blue", "purple", "pink"};
+inline constexpr std::uint16_t all = (1u << count) - 1u;
+} // namespace tag
+
 // one directory entry. a few dozen bytes + the name: a 200k-file folder stays under ~20 MB
 struct FileEntry {
     std::string   name;            // utf-8
@@ -25,6 +32,7 @@ struct FileEntry {
     std::uint32_t attributes{};
     std::uint16_t ext_offset{};    // where the extension starts in `name` (== size: none)
     FileKind      kind{FileKind::other};
+    std::uint16_t tags{};          // colour labels (core::tag bits); the listing fills it from the tag store, not the loader
 
     [[nodiscard]] bool is_dir() const noexcept { return (attributes & attr::directory) != 0; }
     [[nodiscard]] bool is_hidden() const noexcept { return (attributes & (attr::hidden | attr::system)) != 0; }

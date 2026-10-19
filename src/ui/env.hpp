@@ -2,9 +2,13 @@
 
 // what every panel can reach: the window, the look, the tabs, file operations, settings and the app-level commands
 
+#include "core/archive.hpp"
 #include "core/file_ops.hpp"
+#include "core/folder_sizes.hpp"
+#include "core/git_status.hpp"
 #include "model/sidebar_layout.hpp"
 #include "model/tab_set.hpp"
+#include "model/tags.hpp"
 #include "model/undo_stack.hpp"
 #include "model/visit_log.hpp"
 #include "strata/keybinds.hpp"
@@ -38,12 +42,16 @@ public:
     virtual void toggle_view() = 0;       // details <-> thumbnails
     virtual void toggle_preview() = 0;
     virtual void toggle_split() = 0;
+    // sets the order of the folder shown in a pane: remembered for that folder when Settings::sort_per_folder, else the default
+    virtual void set_sort(const std::string& folder, model::SortKey key, bool ascending) = 0;
     // starts an OS drag of these paths (runs after the frame: the drag has its own message loop)
     virtual void begin_drag(std::vector<std::string> paths) = 0;
     // copy / move paths into a folder (drops and "copy to other pane")
     virtual void transfer(std::vector<std::string> paths, const std::string& dest, bool move) = 0;
     // delete these paths (asks first when the setting says so, or when permanent); the shell shows the dialog
     virtual void request_delete(std::vector<std::string> paths, bool permanent) = 0;
+    // removes a sidebar section; when it holds folders the shell asks whether they go too or move to a neighbour section
+    virtual void request_remove_section(std::size_t section) = 0;
     // pins the folder to the sidebar, or unpins it when it is there (says so in a toast)
     virtual void toggle_pin(const std::string& path) = 0;
     // the sidebar layout as text on the clipboard / a layout from the clipboard text (share it, back it up)
@@ -53,6 +61,13 @@ public:
     virtual bool edit_sidebar(std::string label, const std::function<void(model::SidebarLayout&)>& edit) = 0;
     // runs a named action (ui/actions.cpp) at the end of the frame, on the pane that has the keyboard
     virtual void request_action(std::string name) = 0;
+    // colour labels on these paths: label `index` (core::tag::names) goes on, or off when all of them already have it
+    virtual void toggle_tag(const std::vector<std::string>& paths, int index) = 0;
+    virtual void clear_tags(const std::vector<std::string>& paths) = 0;
+    // opens an archive as a folder in the active pane (it is unpacked into a temporary folder first)
+    virtual void open_archive(const std::string& path) = 0;
+    // one step up: out of a folder, or out of an archive to the folder that holds it
+    virtual void go_up(model::Tab& tab) = 0;
     virtual void toast(std::string text, strata::toast_kind kind) = 0;
     // pointer shape for this frame (strata only knows its own widgets)
     virtual void set_cursor(strata::cursor_kind kind) = 0;
@@ -77,6 +92,10 @@ struct Env {
     model::UndoStack&     history;
     model::SidebarLayout& layout;
     model::VisitLog&      visits;
+    core::FolderSizes&    sizes;
+    core::GitStatus&      git;
+    model::Tags&          tags;
+    core::ArchiveViews&   views;   // archives shown as folders (unpacked temporary copies)
     // the other half of a split view (null when not split) and which half has the keyboard
     model::Tab*           right{};
     bool                  right_active{};

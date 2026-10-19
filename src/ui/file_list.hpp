@@ -25,6 +25,8 @@ public:
     void new_folder(model::Tab& tab);
     // an empty file "<stem><ext>" in the folder, scrolled into view and open for renaming like a new folder
     void new_file(model::Tab& tab, const std::string& stem, const std::string& ext);
+    // a document from the "New" menu's templates (see ui/new_menu.hpp for the key)
+    void new_from_template(model::Tab& tab, std::string_view key);
     // runs a file action by its registry name (see ui/actions.cpp); false if it is not one of the list's
     bool perform(strata::context& ui, model::Tab& tab, std::string_view action);
 
@@ -42,14 +44,23 @@ private:
         float body_w{};
         float cell_w{}, cell_h{};   // details: cell_w = body_w, cell_h = row height
         int   per_row{1};
+        // details view with groups: a header of `group_h` sits above each row listed in `starts` (live view of the listing's)
+        const std::vector<std::uint32_t>* starts{};
+        float group_h{};
+
+        [[nodiscard]] float top_of(std::size_t i) const noexcept;                   // y of a row / cell line, relative to the canvas
+        [[nodiscard]] float total_height(std::size_t rows) const noexcept;
+        [[nodiscard]] std::size_t first_at(float y, std::size_t rows) const noexcept; // the row on screen at (or just above) y
+        [[nodiscard]] int   row_at(float y, std::size_t rows) const noexcept;         // -1 over a header or past the end
+        [[nodiscard]] std::size_t group_index(std::size_t i) const noexcept;          // headers at or above row i (count)
     };
-    [[nodiscard]] Geo make_geo(float body_w) const;
+    [[nodiscard]] Geo make_geo(float body_w, const model::Listing& listing) const;
     [[nodiscard]] strata::rect cell_rect(const Geo& g, std::size_t i, strata::vec2 origin) const;
     [[nodiscard]] int index_at(const Geo& g, strata::vec2 origin, strata::vec2 p, std::size_t rows) const;
 
     void open_row(model::Tab& tab, std::size_t row);
     void handle_keys(strata::context& ui, model::Tab& tab, const FrameInput& in, const Geo& g, float viewport_h);
-    void draw_header(Painter& p, model::Listing& listing, float width, float height, float body_w);
+    void draw_header(Painter& p, model::Listing& listing, const std::string& folder, float width, float height, float body_w);
     void draw_details(Painter& p, model::Tab& tab, const Geo& g, strata::vec2 origin, float viewport_top, float viewport_bottom, int hover, float enter);
     void draw_grid(Painter& p, model::Tab& tab, const Geo& g, strata::vec2 origin, float viewport_top, float viewport_bottom, int hover, float enter);
     void draw_empty_state(Painter& p, model::Tab& tab, const strata::rect& viewport);

@@ -1,6 +1,10 @@
 #include "ui/toolbar.hpp"
 
 #include "core/path.hpp"
+#include "core/text.hpp"
+#include "core/shell_menu.hpp"
+#include "core/shell_ops.hpp"
+#include "ui/new_menu.hpp"
 #include "ui/panel.hpp"
 
 #include <algorithm>
@@ -126,7 +130,7 @@ bool Toolbar::scope_control(Painter& p, float half, float height)
         p.dl().rect_filled(rect{{m.x - 4.0f, m.y + 4.0f}, {m.x + 8.0f, m.y + 5.5f}}, c, 0.75f);
     }
     if (over >= 0) {
-        ui.tooltip(over == 0 ? "This folder: filter what is shown, as you type" : "Subfolders: search everything below this folder  (Enter)");
+        ui.tooltip(over == 0 ? "This folder: filter what is shown, as you type" : "Subfolders: search everything below this folder");
         env_.cmd.set_cursor(cursor_kind::hand);
     }
     if (over >= 0 && ui.mouse_released(mouse_button::left) && (over == 1) != sub) {
@@ -172,6 +176,16 @@ void Toolbar::help_popup(Painter& p, model::Tab& tab)
             ui.close_popup();
         }
     }
+    {
+        // keep what you typed: it becomes a sidebar entry that reopens this folder and runs the search
+        const item_result r = ui.custom_item("##help_save", {540.0f, row_h});
+        if (r.hovered) { p.dl().rect_filled(r.bounds, pal.hover, 6.0f); env_.cmd.set_cursor(cursor_kind::hand); }
+        p.text_left(r.bounds, "Save this search to the sidebar  (Ctrl+Shift+S)", pal.accent, f.bold, 8.0f);
+        if (r.hovered && ui.mouse_released(mouse_button::left)) {
+            env_.cmd.request_action("save_search");
+            ui.close_popup();
+        }
+    }
     const rect foot = ui.custom_item("##help_foot", {540.0f, 56.0f}).bounds;
     p.text_left(rect{foot.min, {foot.max.x, foot.min.y + 18.0f}}, "This folder filters the list as you type.", pal.text_dim, f.small, 8.0f);
     p.text_left(rect{{foot.min.x, foot.min.y + 18.0f}, {foot.max.x, foot.min.y + 36.0f}}, "Subfolders searches everything below it: press Enter  (Ctrl+Enter from This folder).", pal.text_dim, f.small, 8.0f);
@@ -208,6 +222,13 @@ void Toolbar::address(Painter& p, float area_x, float area_y, float width, float
             if (core::path::is_directory(target)) {
                 tab.navigate(target);
                 editing_ = false;
+            } else if (!tab.path().empty() && !core::path::exists(target)) {
+                // not a place: treat it as a command to run here ("cmd", "code .", "pwsh")
+                if (core::shell::run_command(edit_text_, tab.path())) {
+                    editing_ = false;
+                } else {
+                    env_.cmd.toast("Not a folder or a command: " + edit_text_, toast_kind::error);
+                }
             }
         } else if (ui.key_pressed(key::escape) || (edit_age_ >= 3 && !ui.field_focused("##address"))) {
             editing_ = false;
@@ -226,9 +247,28 @@ void Toolbar::address(Painter& p, float area_x, float area_y, float width, float
 
     struct Seg { std::string name; std::string path; float w; };
     std::vector<Seg> segs;
-    for (auto& s : core::path::segments(tab.path())) {
-        const float w = p.measure(f.body, s.name).x + 16.0f;
-        segs.push_back({std::move(s.name), std::move(s.path), w});
+    const auto add_seg = [&](std::string name, std::string path) {
+        const float w = p.measure(f.body, name).x + 16.0f;
+        segs.push_back({std::move(name), std::move(path), w});
+    };
+    const auto view = env_.views.find(tab.path());
+    const auto root = view ? env_.views.root_for(view->archive) : std::nullopt;
+    if (view && root) {
+        // inside an archive: "C:\ > folder > photos.zip > sub" instead of the temporary folder it was unpacked into
+        for (auto& s : core::path::segments(core::path::parent(view->archive))) { add_seg(std::move(s.name), std::move(s.path)); }
+        add_seg(core::path::leaf(view->archive), *root);
+        std::string at = *root;
+        std::size_t from = 0;
+        while (from < view->inner.size()) {
+            std::size_t to = view->inner.find('\\', from);
+            if (to == std::string::npos) { to = view->inner.size(); }
+            const std::string part = view->inner.substr(from, to - from);
+            at = core::path::join(at, part);
+            add_seg(part, at);
+            from = to + 1;
+        }
+    } else {
+        for (auto& s : core::path::segments(tab.path())) { add_seg(std::move(s.name), std::move(s.path)); }
     }
     const float chev = 16.0f;
     const float avail = width - 16.0f;
@@ -257,17 +297,101 @@ void Toolbar::address(Painter& p, float area_x, float area_y, float width, float
             p.dl().rect_filled(cell, r.held ? pal.pressed : pal.hover, 6.0f);
             if (ui.mouse_clicked(mouse_button::left)) { tab.navigate(segs[i].path); }
             if (ui.mouse_clicked(mouse_button::middle)) { env_.cmd.open_tab(segs[i].path, false); }
+            if (ui.mouse_clicked(mouse_button::right)) {
+                crumb_ctx_path_  = segs[i].path;
+                crumb_ctx_paste_ = core::clipboard_has_files();
+                ui.open_popup_menu("##crumb_ctx", ui.mouse_pos());
+            }
         }
         p.text_center(cell, segs[i].name, i + 1 == segs.size() ? pal.text : pal.text_dim, f.body);
         x += segs[i].w;
         if (i + 1 < segs.size()) {
-            p.glyph_center(rect{{x, box.min.y}, {x + chev, box.max.y}}, glyph::chevron_r, pal.text_faint, f.tile);
+            // the chevron opens the folders next to the next segment (siblings of where the path goes on)
+            const rect cc{{x, box.min.y + 4.0f}, {x + chev, box.max.y - 4.0f}};
+            const bool chev_hot = r.hovered && cc.contains(mp);
+            if (chev_hot) {
+                over_segment = true;
+                p.dl().rect_filled(cc, r.held ? pal.pressed : pal.hover, 6.0f);
+                env_.cmd.set_cursor(cursor_kind::hand);
+                if (ui.mouse_clicked(mouse_button::left)) {
+                    crumb_parent_ = segs[i].path;
+                    crumb_next_   = segs[i + 1].name;
+                    crumb_dirs_   = core::path::subfolders(crumb_parent_, 400);
+                    ui.open_popup_menu("##crumb_menu", {cc.min.x, box.max.y + 4.0f});
+                }
+            }
+            p.glyph_center(cc, glyph::chevron_r, chev_hot ? pal.text : pal.text_faint, f.tile);
             x += chev;
         }
     }
     p.dl().pop_clip();
 
     if (r.hovered && !over_segment && ui.mouse_clicked(mouse_button::left)) { want_edit_ = true; }
+    crumb_menu(p);
+    crumb_context_menu(p);
+}
+
+// right click on a segment of the path: the same things the folder's row would offer, so there is no need to find it in
+// the list (or an empty spot in it)
+void Toolbar::crumb_context_menu(Painter& p)
+{
+    context& ui = p.ui();
+    const MenuDensity density{ui, env_.settings.compact};
+    auto menu = ui.popup_menu("##crumb_ctx");
+    if (!menu) { return; }
+    const std::string& dir = crumb_ctx_path_;
+    model::Tab&        tab = env_.tab();
+
+    if (ui.menu_item("Open")) { tab.navigate(dir); }
+    if (ui.menu_item("Open in new tab")) { env_.cmd.open_tab(dir, true); }
+    ui.menu_separator();
+    if (ui.menu_item("New folder here")) {
+        const std::string name = core::FileOps::create_folder(dir);
+        if (name.empty()) {
+            env_.cmd.toast("Could not create a folder there", toast_kind::error);
+        } else {
+            const std::string made = core::path::join(dir, name);
+            env_.history.push({"New folder " + name, [made] { return core::FileOps::remove_empty_folder(made); }, {}});
+            env_.cmd.toast("Created " + name, toast_kind::success);
+            if (core::path::normalize(tab.path()) == core::path::normalize(dir)) { tab.reveal_name = name; }
+            tab.refresh();
+        }
+    }
+    if (ui.menu_item("Paste into folder", "", false, crumb_ctx_paste_)) {
+        std::vector<std::string> paths;
+        bool cut = false;
+        if (core::clipboard_get_files(paths, cut)) { env_.ops.start(cut ? core::OpKind::move : core::OpKind::copy, std::move(paths), dir); }
+    }
+    ui.menu_separator();
+    if (ui.menu_item(env_.layout.find(dir) ? "Unpin from sidebar" : "Pin to sidebar")) { env_.cmd.toggle_pin(dir); }
+    if (ui.menu_item("Copy path")) {
+        (void)core::shell::set_clipboard_text(dir);
+        env_.cmd.toast("Path copied", toast_kind::info);
+    }
+    if (ui.menu_item("Show in File Explorer")) { (void)core::shell::reveal_in_explorer(dir); }
+    if (ui.menu_item("Properties", "Alt+Enter")) { env_.cmd.open_properties({dir}); }
+    ui.menu_separator();
+    if (ui.menu_item("Windows options")) { (void)core::shell::show_native_menu({dir}, env_.window.handle()); }
+}
+
+void Toolbar::crumb_menu(Painter& p)
+{
+    context& ui = p.ui();
+    const MenuDensity density{ui, env_.settings.compact};
+    auto menu = ui.popup_menu("##crumb_menu");
+    if (!menu) { return; }
+    if (crumb_dirs_.empty()) {
+        (void)ui.menu_item("No subfolders", menu_item_options{.enabled = false});
+        return;
+    }
+    char icon[5];
+    for (const std::string& name : crumb_dirs_) {
+        menu_item_options o;
+        o.icon      = glyph_utf8(glyph::folder, icon);
+        o.icon_font = env_.fonts.icons;
+        o.selected  = name == crumb_next_;
+        if (ui.menu_item(name, o)) { env_.tab().navigate(core::path::join(crumb_parent_, name)); }
+    }
 }
 
 void Toolbar::frame(Painter& p, const rect& area, bool show_hidden)
@@ -309,7 +433,7 @@ void Toolbar::frame(Painter& p, const rect& area, bool show_hidden)
     sp("##sp1");
     if (icon_button(p, "##nav_fwd", glyph::forward, tab.can_forward(), false, "Forward  (Alt+Right)", rh)) { (void)tab.forward(); }
     sp("##sp2");
-    if (icon_button(p, "##nav_up", glyph::up, tab.can_up(), false, "Up  (Alt+Up)", rh)) { (void)tab.up(); }
+    if (icon_button(p, "##nav_up", glyph::up, tab.can_up(), false, "Up  (Alt+Up)", rh)) { env_.cmd.go_up(tab); }
     sp("##sp3");
     if (icon_button(p, "##nav_refresh", glyph::refresh, true, false, "Refresh  (F5)", rh)) { tab.refresh(); }
     ui.same_line();
@@ -342,7 +466,7 @@ void Toolbar::frame(Painter& p, const rect& area, bool show_hidden)
         want_filter_focus_ = false;
         ui.request_text_focus("##filter");
     }
-    const bool typed_in_filter = ui.input_text("##filter", filter_text_, st.search_subfolders ? "Search subfolders  (Enter)" : "Filter this folder");
+    const bool typed_in_filter = ui.input_text("##filter", filter_text_, st.search_subfolders ? "Search subfolders" : "Filter this folder");
     const bool filter_focus = ui.field_focused("##filter");
     ui.pop_color();
     ui.pop_var();
@@ -398,7 +522,7 @@ void Toolbar::frame(Painter& p, const rect& area, bool show_hidden)
     if (icon_button(p, "##tb_settings", glyph::settings, true, false, "Settings  (Ctrl+,)", rh)) { env_.cmd.open_settings(); }
 }
 
-void Toolbar::new_menu(Painter& p, const model::Tab&)
+void Toolbar::new_menu(Painter& p, const model::Tab& tab)
 {
     context& ui = p.ui();
     const MenuDensity density{ui, env_.settings.compact};
@@ -417,6 +541,33 @@ void Toolbar::new_menu(Painter& p, const model::Tab&)
     if (item(glyph::folder, "Folder", "Ctrl+Shift+N")) { env_.cmd.request_action("new_folder"); }
     if (item(glyph::document, "Empty file", "")) { env_.cmd.request_action("new_file"); }
     if (item(glyph::document, "Text document", "")) { env_.cmd.request_action("new_text"); }
+
+    // what Windows' own "New" menu has (Shortcut, Bitmap image, Word document ...): the same entries, run by the shell
+    if (env_.settings.shell_menu && !tab.path().empty() && !tab.searching()) {
+        shell_menu_.query({tab.path()}, true);
+        const std::vector<core::ShellMenuItem> all = shell_menu_.items();
+        const auto windows_new = std::ranges::find_if(all, [](const core::ShellMenuItem& i) { return i.label == "New" && !i.children.empty(); });
+        if (windows_new != all.end()) {
+            bool first = true;
+            for (const core::ShellMenuItem& c : windows_new->children) {
+                if (c.separator) { continue; }
+                if (c.label == "Folder" || c.label == "Text Document") { continue; } // (ours are above)
+                if (first) { ui.menu_separator(); first = false; }
+                std::string label; // ('&' marks a mnemonic in strata menus)
+                for (const char ch : c.label) {
+                    label.push_back(ch);
+                    if (ch == '&') { label.push_back('&'); }
+                }
+                core::text::note_codepoints(c.label);
+                menu_item_options o;
+                o.enabled = c.enabled;
+                if (c.icon != nullptr) { o.image = env_.images.raw(c.icon->key, c.icon->w, c.icon->h, c.icon->bgra).id; }
+                if (ui.menu_item(label + "##w" + std::to_string(c.id), o)) { shell_menu_.invoke(c.id, env_.window.handle()); }
+            }
+        }
+    }
+    ui.menu_separator();
+    new_template_items(ui, env_);
 }
 
 void Toolbar::view_menu(Painter& p, bool show_hidden)
@@ -426,7 +577,7 @@ void Toolbar::view_menu(Painter& p, bool show_hidden)
     auto menu = ui.popup_menu("##view_menu");
     if (!menu) { return; }
 
-    char icons[8][5];
+    char icons[16][5];
     int  n = 0;
     // (the menu stays open on a click: switching a few things in a row is the common case)
     const auto item = [&](char32_t g, std::string_view label, std::string_view shortcut, bool on) {
@@ -447,6 +598,56 @@ void Toolbar::view_menu(Painter& p, bool show_hidden)
     if (item(glyph::preview, "Preview pane", "Alt+P", st.preview)) { env_.cmd.toggle_preview(); }
     ui.menu_separator();
     if (item(glyph::eye, "Show hidden files", "Ctrl+H", show_hidden)) { env_.cmd.toggle_hidden(); }
+    if (item(glyph::drive, "Folder sizes", "", st.folder_sizes)) {
+        env_.settings.folder_sizes = !env_.settings.folder_sizes;
+        env_.cmd.settings_changed();
+    }
+    if (item(glyph::code, "Git status", "", st.git_badges)) {
+        env_.settings.git_badges = !env_.settings.git_badges;
+        env_.cmd.settings_changed();
+    }
+    ui.menu_separator();
+    {
+        menu_item_options o;
+        o.icon      = glyph_utf8(glyph::copy, icons[n++]);
+        o.icon_font = env_.fonts.icons;
+        if (ui.menu_item("Find duplicate files", o)) { env_.cmd.request_action("find_duplicates"); }
+    }
+    {
+        menu_item_options o;
+        o.icon      = glyph_utf8(glyph::folder, icons[n++]);
+        o.icon_font = env_.fonts.icons;
+        if (ui.menu_item("Find empty folders", o)) { env_.cmd.request_action("empty_folders"); }
+    }
+    {
+        menu_item_options o;
+        o.shortcut  = "Ctrl+Shift+F";
+        o.icon      = glyph_utf8(glyph::search, icons[n++]);
+        o.icon_font = env_.fonts.icons;
+        if (ui.menu_item("Search everywhere", o)) { env_.cmd.request_action("search_everywhere"); }
+    }
+    {
+        menu_item_options o;
+        o.shortcut  = "Ctrl+Shift+U";
+        o.icon      = glyph_utf8(glyph::grid, icons[n++]);
+        o.icon_font = env_.fonts.icons;
+        if (ui.menu_item("Disk usage", o)) { env_.cmd.request_action("disk_usage"); }
+    }
+    {
+        menu_item_options o;
+        o.shortcut  = "Ctrl+Shift+O";
+        o.icon      = glyph_utf8(glyph::folder_open, icons[n++]);
+        o.icon_font = env_.fonts.icons;
+        if (ui.menu_item("Sessions", o)) { env_.cmd.request_action("sessions"); }
+    }
+    {
+        menu_item_options o;
+        o.shortcut  = "Ctrl+Shift+E";
+        o.icon      = glyph_utf8(glyph::split, icons[n++]);
+        o.icon_font = env_.fonts.icons;
+        o.enabled   = st.split;
+        if (ui.menu_item("Compare panes", o)) { env_.cmd.request_action("compare_panes"); }
+    }
 }
 
 } // namespace prism::ui

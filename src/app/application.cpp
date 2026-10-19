@@ -64,6 +64,13 @@ bool Application::init(const Options& opts)
 
     images_ = std::make_unique<platform::ImageCache>(window_.waker());
     shell_ = std::make_unique<ui::Shell>(window_, theme_, ui::FontSet{}, *tabs_, *ops_, settings_, *images_, binds_, history_);
+    if (!opts.second.empty()) {
+        const std::string right = core::path::normalize(opts.second);
+        if (core::path::is_directory(right)) {
+            settings_.split = true;
+            shell_->set_second_folder(right);
+        }
+    }
     window_.set_logical_scale(ui_->scale());
     window_.hit_test       = [this](strata::vec2 p) { return shell_->hit_test(p); };
     platform::DropCallbacks drop;
@@ -158,10 +165,19 @@ bool Application::step(bool force_draw)
     // an OS drag of files starts after the frame: it runs its own message loop until the button is released
     if (std::vector<std::string> drag = shell_->take_drag(); !drag.empty()) {
         shell_->set_dragging(drag);
-        (void)platform::run_drag(drag);
+        const bool dropped = platform::run_drag(drag);
+        // DoDragDrop swallows the button release, so strata still thinks the left button is held: the next click
+        // would then not register as a press. Feed it the release it missed.
+        {
+            const auto wnd = static_cast<HWND>(window_.handle());
+            POINT pt{};
+            ::GetCursorPos(&pt);
+            ::ScreenToClient(wnd, &pt);
+            ::SendMessageW(wnd, WM_LBUTTONUP, 0, MAKELPARAM(pt.x, pt.y));
+        }
         shell_->set_dragging({});
         shell_->set_drop_point(std::nullopt);
-        shell_->refresh_all();
+        if (dropped) { shell_->refresh_all(); } // a cancelled drag changed nothing: no reload flash
         ui_->invalidate();
     }
     return presented;

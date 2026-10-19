@@ -29,7 +29,6 @@ private:
     void general(Kit& kit);
     void details(Kit& kit);
     void hashes(Kit& kit);
-    void footer(Kit& kit);
     void note(Kit& kit, std::string_view id, std::string_view text);
 
     Env&                    env_;

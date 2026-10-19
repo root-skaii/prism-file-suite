@@ -3,15 +3,29 @@
 // the whole window content: title bar with tabs, toolbar, sidebar, one or two file views, preview pane, status bar.
 // built every frame. also the app's command handler, keyboard shortcuts and the owner of the settings state the ui follows.
 
+#include "core/archive.hpp"
+#include "core/file_index.hpp"
+#include "core/image_tools.hpp"
+#include "model/folder_sorts.hpp"
+#include "model/sessions.hpp"
+#include "ui/batch_rename_dialog.hpp"
+#include "ui/compare_dialog.hpp"
+#include "ui/duplicates_dialog.hpp"
+#include "ui/empty_folders_dialog.hpp"
 #include "ui/env.hpp"
 #include "ui/file_list.hpp"
 #include "ui/preview_pane.hpp"
+#include "ui/quick_look.hpp"
 #include "ui/properties_dialog.hpp"
+#include "ui/search_dialog.hpp"
+#include "ui/sessions_dialog.hpp"
 #include "ui/settings_dialog.hpp"
 #include "ui/sidebar.hpp"
 #include "ui/status_bar.hpp"
 #include "ui/title_bar.hpp"
 #include "ui/toolbar.hpp"
+#include "ui/transfers_ui.hpp"
+#include "ui/usage_dialog.hpp"
 
 #include <memory>
 #include <optional>
@@ -24,6 +38,7 @@ class Shell final : private Commands {
 public:
     Shell(platform::Window& window, Theme& theme, FontSet fonts, model::TabSet& tabs, core::FileOps& ops, Settings& settings,
           platform::ImageCache& images, strata::keybinds& binds, model::UndoStack& history);
+    ~Shell();
 
     void frame(strata::context& ui, const FrameInput& in);
     [[nodiscard]] platform::HitZone hit_test(strata::vec2 logical) const { return title_bar_.hit_test(logical); }
@@ -48,6 +63,8 @@ public:
     // writes tabs and window size for the next start
     void save_session(int logical_w, int logical_h);
     void show_settings() { settings_dialog_.open(); }
+    // the folder the second pane opens with when it appears (command line)
+    void set_second_folder(std::string folder) { pending_right_ = std::move(folder); }
     void show_properties(std::vector<std::string> paths, int tab = 0) { properties_dialog_.open(std::move(paths), tab); }
 
 private:
@@ -65,14 +82,20 @@ private:
     void toggle_view() override;
     void toggle_preview() override;
     void toggle_split() override;
+    void set_sort(const std::string& folder, model::SortKey key, bool ascending) override;
     void begin_drag(std::vector<std::string> paths) override { drag_paths_ = std::move(paths); }
     void transfer(std::vector<std::string> paths, const std::string& dest, bool move) override;
     void request_delete(std::vector<std::string> paths, bool permanent) override;
+    void request_remove_section(std::size_t section) override;
     void toggle_pin(const std::string& path) override;
     void copy_sidebar() override;
     void paste_sidebar() override;
     bool edit_sidebar(std::string label, const std::function<void(model::SidebarLayout&)>& edit) override;
     void request_action(std::string name) override { pending_actions_.push_back(std::move(name)); }
+    void toggle_tag(const std::vector<std::string>& paths, int index) override;
+    void clear_tags(const std::vector<std::string>& paths) override;
+    void open_archive(const std::string& path) override;
+    void go_up(model::Tab& tab) override;
     void toast(std::string text, strata::toast_kind kind) override;
     void set_cursor(strata::cursor_kind kind) override { cursor_ = kind; }
 
@@ -82,16 +105,43 @@ private:
     void do_undo();
     void do_redo();
     void open_goto();
+    void open_batch_rename();
     void sync_settings();
     void service_ops();
+    void service_archives();
+    void service_images();
+    [[nodiscard]] model::SortSpec sort_for(const std::string& folder) const;
+    bool apply_sorts(); // true: a pane's order changed
+    void archive_action(const std::string& name);
     void service_delete(strata::context& ui);
+    void service_remove_section(strata::context& ui);
     [[nodiscard]] bool dialog_has_keyboard(strata::context& ui) const;
     void splitter(Painter& p, const strata::rect& area);
     void apply_deferred();
     void draw_drag_ghost(Painter& p);
+    void apply_tags();
+    void rebuild_index();
+    void set_tag_masks(const std::vector<std::pair<std::string, std::uint16_t>>& masks);
+    [[nodiscard]] model::Session capture_session(std::string name) const;
+    void restore_session(const model::Session& s) { pending_session_ = s; }
 
+    core::FolderSizes    sizes_;  // (before env_)
+    core::GitStatus      git_;
+    core::ArchiveOps     archives_;
+    core::ArchiveViews   views_;   // (before env_)
+    core::FileIndex      index_;
+    bool                 index_started_{};
+    core::ImageJobs      image_jobs_;
     model::SidebarLayout layout_; // (before env_, which refers to it)
     std::size_t          saved_layout_{};
+    model::FolderSorts   folder_sorts_;
+    std::size_t          saved_sorts_{};
+    model::Sessions      sessions_;
+    std::size_t          saved_sessions_{};
+    model::Tags          tags_;  // (before env_, which refers to it)
+    std::size_t          saved_tags_{};
+    std::optional<model::Session> pending_session_; // a session to switch to at the end of the frame
+    std::string          pending_right_;            // the second pane's folder once the pane exists
     model::VisitLog      visits_;
     std::size_t          saved_visits_{};
     const model::Tab*    visit_tab_{};      // the tab and folder last seen: a change inside the same tab is a visit
@@ -105,9 +155,18 @@ private:
     FileList       file_list_;
     FileList       file_list_r_;
     PreviewPane    preview_;
+    QuickLook      quick_look_;
     StatusBar      status_bar_;
     SettingsDialog settings_dialog_;
     PropertiesDialog properties_dialog_;
+    BatchRenameDialog batch_rename_dialog_;
+    DuplicatesDialog  duplicates_dialog_;
+    SessionsDialog    sessions_dialog_;
+    UsageDialog       usage_dialog_;
+    CompareDialog     compare_dialog_;
+    TransfersUi       transfers_ui_;
+    SearchDialog      search_dialog_;
+    EmptyFoldersDialog empty_folders_dialog_;
 
     strata::command_palette palette_;
     strata::command_palette goto_palette_;    // "Jump to a folder": the pinned folders and drives, by name
@@ -132,6 +191,9 @@ private:
     std::vector<std::string> delete_paths_;
     bool                     delete_permanent_{};
     bool                     delete_ask_{};
+    // a sidebar section removal waiting for its answer (same reason); npos: none
+    std::size_t              remove_section_{std::string::npos};
+    bool                     remove_ask_{};
 
     // tab changes asked for mid-frame run at its end, when no panel still holds a reference into the tab list
     struct Open { std::string path; bool activate; };

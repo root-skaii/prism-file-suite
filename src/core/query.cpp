@@ -788,6 +788,7 @@ template <class Scalar>
     case Kind::size:     return !e.is_dir() && e.size >= t.lo && e.size <= t.hi;
     case Kind::modified: return e.modified >= t.lo && e.modified <= t.hi;
     case Kind::hidden:   return e.is_hidden() == t.flag;
+    case Kind::tag:      return t.flag ? e.tags == 0 : (e.tags & t.mask) != 0;
     case Kind::regex:    return t.re != nullptr && QueryRegexSearch(*t.re, leaf);
     }
     return false;
@@ -803,7 +804,7 @@ template <class Scalar>
 
 [[nodiscard]] bool is_key(std::string_view k) noexcept
 {
-    return k == "ext" || k == "type" || k == "kind" || k == "size" || k == "modified" || k == "date" || k == "hidden" || k == "re";
+    return k == "ext" || k == "type" || k == "kind" || k == "size" || k == "modified" || k == "date" || k == "hidden" || k == "tag" || k == "label" || k == "re";
 }
 
 } // namespace
@@ -884,6 +885,26 @@ struct QueryBuilder {
             if (v == "yes" || v == "true" || v == "1" || v == "on") { t.flag = true; return true; }
             if (v == "no" || v == "false" || v == "0" || v == "off") { t.flag = false; return true; }
             return fail("hidden: is yes or no");
+        }
+        if (key == "tag" || key == "label") {
+            t.kind = Kind::tag;
+            std::size_t from = 0;
+            while (from <= value.size()) {
+                std::size_t to = value.find_first_of(",;", from);
+                if (to == std::string_view::npos) { to = value.size(); }
+                const std::string one = lower(value.substr(from, to - from));
+                from = to + 1;
+                if (one.empty()) { continue; }
+                if (one == "any") { t.mask |= tag::all; continue; }
+                if (one == "none") { t.flag = true; continue; }
+                bool known = false;
+                for (int i = 0; i < tag::count; ++i) {
+                    if (tag::names[i] == one) { t.mask |= 1u << i; known = true; }
+                }
+                if (!known) { return fail("unknown label '" + one + "' (red orange yellow green teal blue purple pink any none)"); }
+            }
+            if (t.flag && t.mask != 0) { return fail("tag: none cannot be mixed with colours"); }
+            return t.flag || t.mask != 0 || fail("tag: needs a colour");
         }
         return regex_term(value, t);
     }
@@ -981,6 +1002,8 @@ Query Query::parse(std::string_view text, const QueryOptions& options)
     for (const auto& g : q.groups_) {
         for (const QueryTerm& t : g) {
             if (t.kind == QueryTerm::Kind::hidden && t.flag != t.negate) { q.wants_hidden_ = true; }
+            if (t.kind == QueryTerm::Kind::tag) { q.uses_tags_ = true; }
+            if (t.on_path) { q.uses_path_ = true; }
         }
     }
     return q;

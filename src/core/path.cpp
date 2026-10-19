@@ -4,6 +4,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <cstdio>
 
 namespace prism::core::path {
@@ -106,6 +107,23 @@ std::string format_time(unsigned long long filetime)
     char buf[32];
     std::snprintf(buf, sizeof buf, "%04d-%02d-%02d %02d:%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute);
     return buf;
+}
+
+std::vector<std::string> subfolders(const std::string& dir, std::size_t limit)
+{
+    std::vector<std::string> out;
+    WIN32_FIND_DATAW         fd{};
+    const std::wstring       pattern = text::widen(join(dir, "*"));
+    const HANDLE h = ::FindFirstFileExW(pattern.c_str(), FindExInfoBasic, &fd, FindExSearchLimitToDirectories, nullptr, FIND_FIRST_EX_LARGE_FETCH);
+    if (h == INVALID_HANDLE_VALUE) { return out; }
+    do {
+        if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0 || (fd.dwFileAttributes & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM)) != 0) { continue; }
+        if (fd.cFileName[0] == L'.' && (fd.cFileName[1] == 0 || (fd.cFileName[1] == L'.' && fd.cFileName[2] == 0))) { continue; }
+        out.push_back(text::narrow(fd.cFileName));
+    } while (out.size() < limit && ::FindNextFileW(h, &fd));
+    ::FindClose(h);
+    std::ranges::sort(out, [](const std::string& a, const std::string& b) { return text::compare_natural(a, b) < 0; });
+    return out;
 }
 
 } // namespace prism::core::path

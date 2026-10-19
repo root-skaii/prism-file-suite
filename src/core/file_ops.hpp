@@ -3,6 +3,9 @@
 // copy / move / delete through the shell's IFileOperation: undo records, the recycle bin, conflict prompts and the
 // system progress dialog all come for free. each job runs on its own thread (COM apartment), the ui polls results.
 
+#include "core/op_types.hpp"
+#include "core/transfer.hpp"
+
 #include <functional>
 #include <mutex>
 #include <string>
@@ -11,32 +14,26 @@
 
 namespace prism::core {
 
-enum class OpKind { copy, move, recycle, erase };
-
-struct OpResult {
-    OpKind      kind{};
-    bool        ok{};
-    bool        aborted{}; // the user cancelled in the shell dialog
-    bool        silent{};  // started by undo / redo: no toast, not recorded again
-    std::size_t count{};
-    std::string dest;      // destination folder (copy / move), the source folder otherwise: what to refresh
-    std::vector<std::string> sources; // what the job was given (undo needs it)
-};
-
 class FileOps {
 public:
     // `wake` runs on the worker when a job finishes; `owner` is the HWND the shell dialogs attach to
-    FileOps(std::function<void()> wake, void* owner) : wake_{std::move(wake)}, owner_{owner} {}
+    FileOps(std::function<void()> wake, void* owner) : wake_{wake}, owner_{owner}, transfers_{std::move(wake)} {}
     ~FileOps();
     FileOps(const FileOps&)            = delete;
     FileOps& operator=(const FileOps&) = delete;
 
+    // copy and move go through the built-in queue (one at a time, with progress and its own conflict prompt) unless
+    // `use_builtin(false)`: then the shell's IFileOperation does them, with Windows' own progress window
     void start(OpKind kind, std::vector<std::string> sources, std::string dest_dir, bool silent = false);
+    void use_builtin(bool on) noexcept { builtin_ = on; }
+    [[nodiscard]] TransferQueue& transfers() noexcept { return transfers_; }
     [[nodiscard]] bool poll(OpResult& out);
     [[nodiscard]] bool busy() const;
 
     // quick, synchronous
     [[nodiscard]] static bool rename(const std::string& path, const std::string& new_name);
+    // called (on the calling thread) after a rename succeeded, with the old and new full paths: things keyed by path follow
+    static inline std::function<void(const std::string& from, const std::string& to)> on_renamed;
     // creates "New folder", "New folder (2)" ... returns its name, empty on failure
     [[nodiscard]] static std::string create_folder(const std::string& dir);
     // creates an empty file "<stem><ext>", "<stem> (2)<ext>" ... returns its name, empty on failure
@@ -54,6 +51,8 @@ private:
 
     std::function<void()>    wake_;
     void*                    owner_{};
+    TransferQueue            transfers_;
+    bool                     builtin_{true};
     mutable std::mutex       lock_;
     std::vector<std::thread> threads_;
     std::vector<OpResult>    results_;

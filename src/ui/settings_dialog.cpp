@@ -79,7 +79,8 @@ bool SettingsDialog::frame(Painter& p)
     const float max_h  = std::clamp(ui.display_size().y - 250.0f, 260.0f, 640.0f);
     const float body_h = std::min(max_h, content_h_ + 2.0f);
     {
-        auto body = ui.child("##set_body", {ui.content_width(), body_h}, child_flags::no_padding);
+        // (the scrollbar sits in the dialog's right padding, so the cards keep the same margin on both sides)
+        auto body = ui.child("##set_body", {ui.content_width() + (content_h_ + 2.0f > max_h ? 16.0f : 0.0f), body_h}, child_flags::no_padding);
         if (body) {
             const float rh = kit.row_h() + 12.0f;
 
@@ -141,12 +142,43 @@ bool SettingsDialog::frame(Painter& p)
             kit.card_end("##card_look");
 
             // behaviour
-            kit.card_begin("##card_beh", "Behavior", (kit.row_h() + 16.0f) * 4.0f);
+            kit.card_begin("##card_beh", "Behavior", (kit.row_h() + 16.0f) * 7.0f);
             if (kit.switch_row("##sw_hidden", "Show hidden files", "Hidden and system items appear in every folder", s.show_hidden, true)) { changed = true; }
             if (kit.switch_row("##sw_confirm", "Ask before moving to the Recycle Bin", "Deleting for good always asks", s.confirm_delete, true)) { changed = true; }
             if (kit.switch_row("##sw_tabs", "Reopen tabs on start", "Pick up where you left off", s.restore_tabs, true)) { changed = true; }
+            if (kit.switch_row("##sw_index", "Index drives for instant search", "Makes Search everywhere (Ctrl+Shift+F) instant", s.index_drives, true)) { changed = true; }
+            if (kit.switch_row("##sw_copyengine","Copy and move in PrismFS", "Progress card, pause, cancel. Off: Windows' copy window", s.builtin_copy, true)) { changed = true; }
+            if (kit.switch_row("##sw_archives","Open archives like folders", "Enter on a zip, 7z or tar shows what is inside", s.browse_archives, true)) { changed = true; }
             if (kit.switch_row("##sw_shellmenu", "Windows context menu entries", "Open with Code, 7-Zip, New and the other entries Explorer shows", s.shell_menu, false)) { changed = true; }
             kit.card_end("##card_beh");
+
+            // sorting: how a folder is ordered when it opens. clicking a column header changes it for the folder (or for all)
+            {
+                const float sw_h = kit.row_h() + 16.0f;
+                kit.card_begin("##card_sort", "Sorting", rh * 3.0f + sw_h * 3.0f);
+                int folders = s.sort_folders;
+                static constexpr std::array<std::string_view, 3> placements{"On top", "With files", "At the bottom"};
+                if (setting_row(kit, "##r_sfolders", "Folders", {}, 330.0f, true, [&](float h) { return kit.pill_tabs("##t_sfolders", placements, folders, 330.0f, h); })) {
+                    s.sort_folders = folders;
+                    changed = true;
+                }
+                int key = s.sort_key;
+                static constexpr std::array<std::string_view, 4> keys{"Name", "Date", "Type", "Size"};
+                if (setting_row(kit, "##r_skey", "Sort by", "What every folder starts with", 300.0f, true, [&](float h) { return kit.pill_tabs("##t_skey", keys, key, 300.0f, h); })) {
+                    s.sort_key = key;
+                    changed = true;
+                }
+                int dir = s.sort_ascending ? 0 : 1;
+                static constexpr std::array<std::string_view, 2> dirs{"Ascending", "Descending"};
+                if (setting_row(kit, "##r_sdir", "Direction", {}, 230.0f, true, [&](float h) { return kit.pill_tabs("##t_sdir", dirs, dir, 230.0f, h); })) {
+                    s.sort_ascending = dir == 0;
+                    changed = true;
+                }
+                if (kit.switch_row("##sw_natural", "Numbers in order", "file2 comes before file10 (off: strictly alphabetical)", s.sort_natural, true)) { changed = true; }
+                if (kit.switch_row("##sw_hiddenlast", "Hidden files last", "Dot files and hidden items go after the rest of their group", s.sort_hidden_last, true)) { changed = true; }
+                if (kit.switch_row("##sw_perfolder", "Remember the order per folder", "A column you click stays for that folder; off: it becomes the order for all", s.sort_per_folder, false)) { changed = true; }
+                kit.card_end("##card_sort");
+            }
 
             // Windows: who opens folders for other programs. per user, nothing needs admin rights, and off puts Explorer back
             kit.card_begin("##card_sys", "Windows", kit.row_h() + 16.0f);
@@ -251,11 +283,6 @@ bool SettingsDialog::frame(Painter& p)
             content_h_ = kit.cards_height();
         }
     }
-    kit.vgap(12.0f);
-    const float close_w = 96.0f;
-    (void)ui.custom_item("##set_foot", {ui.content_width() - close_w, kit.control_h()});
-    ui.same_line();
-    if (kit.button({"##set_done", "Close", 0, Kit::ButtonKind::primary, true, {}, close_w})) { ui.close_modal(); }
     return changed;
 }
 

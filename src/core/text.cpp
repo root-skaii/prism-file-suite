@@ -79,6 +79,17 @@ int compare_natural(std::string_view a, std::string_view b) noexcept
     return a.empty() ? -1 : 1;
 }
 
+int compare_plain(std::string_view a, std::string_view b) noexcept
+{
+    while (!a.empty() && !b.empty()) {
+        const char32_t ca = fold(strata::decode_utf8(a));
+        const char32_t cb = fold(strata::decode_utf8(b));
+        if (ca != cb) { return ca < cb ? -1 : 1; }
+    }
+    if (a.empty() && b.empty()) { return 0; }
+    return a.empty() ? -1 : 1;
+}
+
 namespace {
 
 std::vector<char32_t> g_demand;

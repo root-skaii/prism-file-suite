@@ -12,6 +12,9 @@
 
 namespace prism::ui {
 
+// the first `max_bytes` of a file as lines (tabs expanded); empty if it does not look like text (a NUL byte)
+[[nodiscard]] std::vector<std::string> read_text_head(const std::string& path, std::size_t max_bytes, std::size_t max_lines);
+
 class PreviewPane {
 public:
     explicit PreviewPane(Env& env) : env_{env} {}

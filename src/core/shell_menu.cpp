@@ -81,8 +81,35 @@ void release(Built& b)
 [[nodiscard]] bool ours(const std::wstring& verb)
 {
     static constexpr const wchar_t* skip[] = {L"open", L"cut", L"copy", L"paste", L"delete", L"rename", L"properties", L"copyaspath",
-                                              L"opennewwindow", L"opennewprocess", L"opennewtab", L"pintohome", L"unpinfromhome", L"find"};
+                                              L"opennewwindow", L"opennewprocess", L"opennewtab", L"pintohome", L"unpinfromhome", L"find",
+                                              L"sendto", L"sharing", L"previousversions"};
     return std::ranges::any_of(skip, [&](const wchar_t* s) { return _wcsicmp(verb.c_str(), s) == 0; });
+}
+
+// rarely wanted shell entries (Send to, Share, Give access to, Restore previous versions). Submenus have no verb, so they
+// are recognised by their label; the label is read from the same system resource the shell loads it from, which makes
+// this match in every display language.
+[[nodiscard]] bool noise_label(const std::string& label)
+{
+    struct Res { const wchar_t* dll; UINT id; };
+    static const std::vector<std::string> labels = [] {
+        static constexpr Res res[] = {{L"shell32.dll", 30312}, {L"shell32.dll", 33011}, {L"shell32.dll", 33016},
+                                      {L"ntshrui.dll", 103},   {L"ntshrui.dll", 107},   {L"ntshrui.dll", 5151},
+                                      {L"twext.dll", 1037}};
+        std::vector<std::string> v;
+        for (const Res& r : res) {
+            HMODULE mod = ::LoadLibraryExW(r.dll, nullptr, LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_SEARCH_SYSTEM32);
+            if (mod == nullptr) { continue; }
+            wchar_t buf[256]{};
+            if (::LoadStringW(mod, r.id, buf, 255) > 0) {
+                const std::string s = clean_label(buf);
+                if (!s.empty()) { v.push_back(s); }
+            }
+            ::FreeLibrary(mod);
+        }
+        return v;
+    }();
+    return std::ranges::any_of(labels, [&](const std::string& s) { return _stricmp(s.c_str(), label.c_str()) == 0; });
 }
 
 void tidy(std::vector<ShellMenuItem>& v)
@@ -114,7 +141,7 @@ void collect(HMENU menu, IContextMenu* cm, IContextMenu2* cm2, std::vector<Shell
         }
         if ((mi.fType & (MFT_OWNERDRAW | MFT_BITMAP)) != 0) { continue; } // (nothing we could draw)
         item.label = clean_label(label);
-        if (item.label.empty()) { continue; }
+        if (item.label.empty() || (depth == 0 && noise_label(item.label))) { continue; }
         item.enabled = (mi.fState & (MFS_DISABLED | MFS_GRAYED)) == 0;
         // (values up to HBMMENU_POPUP_MAXIMIZE are the system's own marks, not bitmaps)
         if (reinterpret_cast<std::uintptr_t>(mi.hbmpItem) > 16) {

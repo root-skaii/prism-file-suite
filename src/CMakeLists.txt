@@ -6,13 +6,13 @@ set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/prismfs.rc" PROPERTIES 
 target_include_directories(prismfs PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(prismfs PRIVATE
     strata::strata prism_options
-    d3d11.lib dxgi.lib dwmapi.lib shell32.lib ole32.lib user32.lib gdi32.lib shlwapi.lib propsys.lib uuid.lib shcore.lib version.lib bcrypt.lib advapi32.lib
+    d3d11.lib dxgi.lib dwmapi.lib shell32.lib ole32.lib user32.lib gdi32.lib shlwapi.lib propsys.lib uuid.lib shcore.lib version.lib bcrypt.lib advapi32.lib windowscodecs.lib
 )
 
 # logic tests for core/ and model/ (no window, no gpu): build/<preset>/bin/prismfs_selftest.exe
 add_executable(prismfs_selftest
     "${CMAKE_CURRENT_SOURCE_DIR}/../tests/selftest.cpp"
     core/text.cpp core/path.cpp core/file_kind.cpp core/query.cpp core/directory_loader.cpp core/file_ops.cpp core/file_info.cpp
-    model/listing.cpp model/tab.cpp model/sidebar_layout.cpp model/visit_log.cpp core/places.cpp core/path_probe.cpp core/drive_watcher.cpp core/shell_menu.cpp core/bitmap.cpp core/default_manager.cpp)
+    model/listing.cpp model/folder_sorts.cpp model/sessions.cpp model/tags.cpp model/tab.cpp model/sidebar_layout.cpp model/visit_log.cpp core/places.cpp core/path_probe.cpp core/drive_watcher.cpp core/shell_menu.cpp core/bitmap.cpp core/default_manager.cpp core/batch_rename.cpp core/folder_sizes.cpp core/duplicates.cpp core/process.cpp core/disk_usage.cpp core/treemap.cpp core/compare.cpp core/transfer.cpp core/file_index.cpp core/links.cpp core/empty_folders.cpp core/image_tools.cpp core/templates.cpp core/archive.cpp core/git_status.cpp)
 target_include_directories(prismfs_selftest PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-target_link_libraries(prismfs_selftest PRIVATE strata::strata prism_options shell32.lib ole32.lib user32.lib uuid.lib version.lib bcrypt.lib advapi32.lib shlwapi.lib)
+target_link_libraries(prismfs_selftest PRIVATE strata::strata prism_options shell32.lib ole32.lib user32.lib uuid.lib version.lib bcrypt.lib advapi32.lib shlwapi.lib windowscodecs.lib)

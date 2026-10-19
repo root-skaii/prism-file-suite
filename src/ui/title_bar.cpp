@@ -1,5 +1,6 @@
 #include "ui/title_bar.hpp"
 
+#include "core/path.hpp"
 #include "ui/panel.hpp"
 
 #include <algorithm>
@@ -162,7 +163,12 @@ void TitleBar::frame(Painter& p, const rect& area)
         const bool close_visible = active || hover || tw > 90.0f;
         const float text_right = close_visible ? 30.0f : 10.0f;
         const rect  text_box{{x + 34.0f, y0}, {x + tw - 2.0f - text_right, y1}};
-        p.text_left(text_box, tab.title(), active ? pal.text : pal.text_dim, env_.fonts.body);
+        std::string title = tab.title();
+        if (const auto view = env_.views.find(tab.path())) { // (an archive's unpacked copy: name the archive, not the temp folder)
+            title = core::path::leaf(view->archive);
+            if (!view->inner.empty()) { title = core::path::leaf(view->inner) + " - " + title; }
+        }
+        p.text_left(text_box, title, active ? pal.text : pal.text_dim, env_.fonts.body);
 
         if (close_visible) {
             const rect cr = close_rect_of(x);

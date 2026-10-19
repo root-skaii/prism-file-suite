@@ -108,7 +108,7 @@ void PropertiesDialog::header(Kit& kit)
         if (infos_[i].is_dir) { ++folders; } else { ++files; size += infos_[i].size; }
     }
 
-    const float close_w = 36.0f;
+    const float close_w = 4.0f * 32.0f + 3.0f * 4.0f + 14.0f + 36.0f + 8.0f;
     const item_result r = ui.custom_item("##prop_head", {ui.content_width() - close_w, 64.0f});
     const rect tile = rect::from_size({r.bounds.min.x, r.bounds.min.y + 4.0f}, {56.0f, 56.0f});
     shape_style ts;
@@ -145,7 +145,24 @@ void PropertiesDialog::header(Kit& kit)
     }
     p.text_left(rect{{tx, r.bounds.min.y + 36.0f}, {r.bounds.max.x, r.bounds.min.y + 58.0f}}, sub, pal.text_dim, f.body);
 
+    // actions sit beside the close button (no footer: the dialog stays compact)
+    const std::string& path = first.path;
     ui.same_line();
+    if (kit.icon_button("##prop_winprops", glyph::info, "Windows properties", true, false, 32.0f)) { (void)core::shell::show_properties(path); }
+    kit.hgap(4.0f);
+    if (kit.icon_button("##prop_winopts", glyph::list, "Windows options", true, false, 32.0f)) {
+        std::vector<std::string> all;
+        for (const core::FileInfo& i : infos_) { all.push_back(i.path); }
+        (void)core::shell::show_native_menu(all, env_.window.handle());
+    }
+    kit.hgap(4.0f);
+    if (kit.icon_button("##prop_show", glyph::open_new, "Show in Explorer", true, false, 32.0f)) { (void)core::shell::reveal_in_explorer(path); }
+    kit.hgap(4.0f);
+    if (kit.icon_button("##prop_copy", glyph::copy, "Copy path", true, false, 32.0f)) {
+        (void)core::shell::set_clipboard_text(path);
+        env_.cmd.toast("Path copied", toast_kind::info);
+    }
+    kit.hgap(14.0f);
     if (kit.icon_button("##prop_close", glyph::close, "Close  (Esc)", true, true, 32.0f)) {
         ui.close_modal();
     }
@@ -377,30 +394,6 @@ void PropertiesDialog::hashes(Kit& kit)
     kit.card_end("##card_cmp");
 }
 
-// --- footer -----------------------------------------------------------------------------------------------------
-
-void PropertiesDialog::footer(Kit& kit)
-{
-    context& ui = kit.painter().ui();
-    const std::string& path = infos_.front().path;
-    using BK = Kit::ButtonKind;
-    const float w_props = kit.button_width("Windows properties", true);
-    const float w_show  = kit.button_width("Show in Explorer", true);
-    const float w_copy  = kit.button_width("Copy path", true);
-    const float w_close = std::max(96.0f, kit.button_width("Close", false, BK::primary));
-    if (kit.button({"##f_props", "Windows properties", glyph::info, BK::secondary, true, "Open the system's Properties window"})) { (void)core::shell::show_properties(path); }
-    kit.hgap(8.0f);
-    if (kit.button({"##f_show", "Show in Explorer", glyph::open_new, BK::secondary, true, "Select it in Windows Explorer"})) { (void)core::shell::reveal_in_explorer(path); }
-    kit.hgap(8.0f);
-    if (kit.button({"##f_copy", "Copy path", glyph::copy, BK::secondary, true, "Copy the full path"})) {
-        (void)core::shell::set_clipboard_text(path);
-        env_.cmd.toast("Path copied", toast_kind::info);
-    }
-    const float used = w_props + w_show + w_copy + 16.0f + w_close;
-    kit.hgap(std::max(8.0f, ui.content_width() - used));
-    if (kit.button({"##f_close", "Close", 0, BK::primary, true, {}, w_close})) { ui.close_modal(); }
-}
-
 // --- frame ------------------------------------------------------------------------------------------------------
 
 void PropertiesDialog::frame(Painter& p)
@@ -444,7 +437,7 @@ void PropertiesDialog::frame(Painter& p)
     const float fade = ui.animate(fade_key, fade_frames_ == 0 ? 0.0f : 1.0f, 16.0f);
     if (fade_frames_ < 2) { ++fade_frames_; }
     {
-        auto body = ui.child("##prop_body", {ui.content_width(), body_h}, child_flags::no_padding);
+        auto body = ui.child("##prop_body", {ui.content_width() + (content_h_ + 2.0f > max_h ? 16.0f : 0.0f), body_h}, child_flags::no_padding);
         if (body) {
             p.dl().push_alpha(0.15f + 0.85f * fade);
             const float slide = (1.0f - fade) * 10.0f;
@@ -459,8 +452,6 @@ void PropertiesDialog::frame(Painter& p)
             content_h_ = kit.cards_height() + (slide > 0.5f ? 10.0f : 0.0f);
         }
     }
-    kit.vgap(12.0f);
-    footer(kit);
 
     // an attribute switch was flipped: apply it now that nothing is half drawn
     if (attr_flag_ != 0) {

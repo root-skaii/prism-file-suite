@@ -7,7 +7,7 @@
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
 {
-    // prismfs.exe [folder]
+    // prismfs.exe [folder [second folder]]
     prism::app::Application::Options opts;
     int argc = 0;
     if (LPWSTR* argv = ::CommandLineToArgvW(::GetCommandLineW(), &argc)) {
@@ -26,7 +26,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
                 std::wstring p{a};
                 while (!p.empty() && p.back() == L'"') { p.pop_back(); }
                 if (p.size() == 2 && p[1] == L':') { p.push_back(L'\\'); }
-                opts.path = prism::core::text::narrow(p);
+                // the first folder opens in the left pane, a second one opens two panes with it on the right
+                (opts.path.empty() ? opts.path : opts.second) = prism::core::text::narrow(p);
             }
         }
         ::LocalFree(argv);

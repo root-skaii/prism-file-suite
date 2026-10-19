@@ -18,13 +18,26 @@ struct Settings {
     bool  confirm_delete{false}; // ask before moving to the recycle bin (deleting for good always asks)
     bool  restore_tabs{true};
     bool  shell_menu{true};      // the right-click menu also lists Explorer's own entries (Open with Code, 7-Zip, New ...)
-    bool  track_history{true};   // remember visited folders (Recent / Frequent in the sidebar); off: nothing is recorded or kept
+    bool  browse_archives{true}; // Enter on a zip / 7z / tar opens it as a folder (a temporary unpacked copy) instead of the default app
+    bool  index_drives{true};    // a background index of the fixed drives' file names, for "Search everywhere" (Ctrl+Shift+F)
+    bool  builtin_copy{true};   // copy and move run in the app's own queue (progress panel, conflict prompt); off: Windows' copy window
+    bool  track_history{true};  // remember visited folders (Recent / Frequent in the sidebar); off: nothing is recorded or kept
     bool  search_subfolders{false}; // the filter box searches below the folder (Enter) instead of filtering what is shown
     bool  search_case{false};       // match case
     bool  search_regex{false};      // plain words are regular expressions
     bool  grid_view{false};     // thumbnails instead of the details list
     bool  preview{false};       // the preview pane on the right
     bool  split{false};         // two folders side by side
+    bool  folder_sizes{false};  // the size column also shows folder sizes (counted in the background)
+    bool  git_badges{true};     // changed files in a git repository carry a status letter (needs git installed)
+    // sorting (see model::SortSpec): the order every folder starts with, and the options of the order itself
+    int   sort_key{0};          // model::SortKey
+    bool  sort_ascending{true};
+    int   sort_folders{0};      // model::FolderPlacement: 0 first, 1 mixed, 2 last
+    bool  sort_natural{true};   // file2 before file10
+    bool  sort_hidden_last{false};
+    bool  sort_per_folder{false}; // remember the order of each folder separately
+    int   group_by{0};          // model::GroupBy: titled groups in the details view
     int   ui_scale{100};        // percent on top of the monitor's dpi
     float sidebar_width{0.0f};  // 0: the theme's default
     int   window_w{0};          // logical client size of the last session (0: default)
@@ -41,6 +54,14 @@ struct Settings {
     // the sidebar layout lives beside the settings (sidebar.ini, or prismfs-sidebar.ini in portable mode)
     [[nodiscard]] static std::string sidebar_path();
     [[nodiscard]] static std::string visits_path(); // the folders you visited (Recent / Frequent)
+    // documents offered in the "New" menu: a Templates folder beside the settings file
+    [[nodiscard]] static std::string templates_path();
+    // the order remembered per folder (when sort_per_folder is on)
+    [[nodiscard]] static std::string folder_sorts_path();
+    // named sessions (tabs + second pane)
+    [[nodiscard]] static std::string sessions_path();
+    // colour labels on files
+    [[nodiscard]] static std::string tags_path();
 };
 
 } // namespace prism::ui

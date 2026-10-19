@@ -1,6 +1,7 @@
 #include "ui/status_bar.hpp"
 
 #include "core/path.hpp"
+#include "core/git_status.hpp"
 #include "ui/panel.hpp"
 
 #include <format>
@@ -49,6 +50,16 @@ void StatusBar::frame(Painter& p, const rect& area)
         if (over && ui.mouse_released(mouse_button::left)) { tab.clear_search(); }
     } else if (tab.loading()) {
         p.text_right(area, "Loading...", pal.accent, env_.fonts.small, 16.0f);
+    } else if (env_.settings.git_badges) {
+        // the branch of the repository this folder is in, with how far it is from its upstream and how much is changed
+        if (const auto repo = env_.git.lookup(tab.path()); repo && !repo->branch.empty()) {
+            std::string g = "git " + repo->branch;
+            if (repo->ahead > 0) { g += std::format("  +{}", repo->ahead); }
+            if (repo->behind > 0) { g += std::format("  -{}", repo->behind); }
+            const std::size_t changed = repo->files.size() + repo->untracked_dirs.size();
+            g += changed == 0 ? "  clean" : std::format("  {} changed", changed);
+            p.text_right(area, g, changed == 0 ? pal.text_dim : pal.warning, env_.fonts.small, 16.0f);
+        }
     }
 }
 
