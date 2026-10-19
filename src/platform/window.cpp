@@ -1,7 +1,8 @@
 #include "platform/window.hpp"
 
+#include "core/crash.hpp"
 #include "core/text.hpp"
-#include "platform/standby.hpp"
+#include "platform/instance.hpp"
 
 #include <windows.h>
 #include <windowsx.h>
@@ -15,7 +16,7 @@ namespace prism::platform {
 
 namespace {
 
-constexpr const wchar_t* window_class = standby::k_main_window_class;
+constexpr const wchar_t* window_class = instance::k_main_window_class;
 constexpr UINT    wake_message   = WM_APP + 1;
 constexpr ULONG_PTR hint_message = 0x50524954; // WM_COPYDATA id: "outline yourself, a tab is about to drop here" ('1') or not ('0')
 constexpr wchar_t   ghost_class[] = L"prismfs_drag_ghost";
@@ -271,20 +272,31 @@ void Window::show_blank(std::uint32_t rgb)
     }
 }
 
-bool Window::pump()
+bool Window::pump_messages()
 {
-    MSG msg;
+    bool alive = true;
+    MSG  msg;
     while (::PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
-        if (msg.message == WM_QUIT) { quit_ = true; }
+        if (msg.message == WM_QUIT) { alive = false; }
         ::TranslateMessage(&msg);
         ::DispatchMessageW(&msg);
     }
-    return !quit_;
+    return alive;
 }
 
-void Window::wait(std::uint32_t timeout_ms) const
+void Window::wait_messages(std::uint32_t timeout_ms)
 {
     ::MsgWaitForMultipleObjectsEx(0, nullptr, timeout_ms, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+}
+
+void Window::abandon() noexcept
+{
+    faulted_ = true;
+    quit_    = true;
+    if (HWND h = as_hwnd(hwnd_)) {
+        ::ShowWindow(h, SW_HIDE);
+        ::DestroyWindow(h);
+    }
 }
 
 void Window::wake() const noexcept
@@ -488,12 +500,21 @@ std::intptr_t __stdcall Window::proc(void* hwnd, std::uint32_t msg, std::uintptr
         }
         return ::DefWindowProcW(h, msg, wparam, lparam);
     }
-    return self->handle_message(hwnd, msg, wparam, lparam);
+    if (self->faulted_) { return ::DefWindowProcW(h, msg, wparam, lparam); }
+    // all of this window's code (the ui callbacks) runs from here: a fault drops this window, not the others
+    std::intptr_t result = 0;
+    if (!core::crash::guard_window("window message", [&] { result = self->handle_message(hwnd, msg, wparam, lparam); })) {
+        self->faulted_ = true;
+        self->quit_    = true;
+        return 0;
+    }
+    return result;
 }
 
 std::intptr_t Window::handle_message(void* hwnd, std::uint32_t msg, std::uintptr_t wparam, std::intptr_t lparam)
 {
     HWND h = as_hwnd(hwnd);
+    activity_ = true;
     (void)platform_.handle_message(hwnd, msg, wparam, lparam);
     if (strata::win32_platform::swallows(msg)) { return 0; }
 

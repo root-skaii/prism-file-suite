@@ -32,8 +32,11 @@ public:
 
     // quick, synchronous
     [[nodiscard]] static bool rename(const std::string& path, const std::string& new_name);
-    // called (on the calling thread) after a rename succeeded, with the old and new full paths: things keyed by path follow
-    static inline std::function<void(const std::string& from, const std::string& to)> on_renamed;
+    // called (on the calling thread) after a rename succeeded, with the old and new full paths: things keyed by path follow.
+    // every window registers one (keyed by itself), so all of them are told
+    using RenameHook = std::function<void(const std::string& from, const std::string& to)>;
+    static void add_rename_hook(const void* owner, RenameHook hook) { rename_hooks().emplace_back(owner, std::move(hook)); }
+    static void remove_rename_hook(const void* owner) { std::erase_if(rename_hooks(), [owner](const auto& h) { return h.first == owner; }); }
     // creates "New folder", "New folder (2)" ... returns its name, empty on failure
     [[nodiscard]] static std::string create_folder(const std::string& dir);
     // creates an empty file "<stem><ext>", "<stem> (2)<ext>" ... returns its name, empty on failure
@@ -47,6 +50,12 @@ public:
     [[nodiscard]] static bool restore_from_recycle(const std::vector<std::string>& original_paths);
 
 private:
+    [[nodiscard]] static std::vector<std::pair<const void*, RenameHook>>& rename_hooks()
+    {
+        static std::vector<std::pair<const void*, RenameHook>> hooks;
+        return hooks;
+    }
+
     void run(OpKind kind, std::vector<std::string> sources, std::string dest, bool silent);
 
     std::function<void()>    wake_;

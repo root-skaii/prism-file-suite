@@ -2,6 +2,11 @@
 @name = 
 @plural = one-other
 
+# app/host.cpp
+"Open PrismFS" = ""
+"Settings" = ""
+"Exit PrismFS" = ""
+
 # core/drive_watcher.cpp
 "Recycle Bin" = ""
 
@@ -33,11 +38,9 @@
 "Local Disk" = ""
 
 # main.cpp
+"A PrismFS window crashed and was closed. The other windows keep running. A report was saved:\n{}\n\nOpen a new window?" = ""
 "PrismFS closed unexpectedly. A report was saved:\n{}\n\nStart PrismFS again?" = ""
 "PrismFS crashed" = ""
-"Open PrismFS" = ""
-"Settings" = ""
-"Exit PrismFS" = ""
 
 # ui/actions.cpp
 "New tab" = ""
@@ -416,10 +419,8 @@
 "Ask before deleting" = ""
 "Before a file goes to the Recycle Bin" = ""
 "Open my tabs again next time" = ""
-"Start faster" = ""
-"Keeps a small PrismFS process ready in the background, so new windows open almost at once" = ""
-"Tray icon" = ""
-"An icon near the clock while PrismFS runs in the background: right-click for Open, Settings and Exit. Keeps a small background process" = ""
+"Run in the background" = ""
+"Stay in the tray after the last window is closed" = ""
 "Index drives for instant search" = ""
 "Lets Search everywhere ({}) find files instantly." = ""
 "Copy and move in PrismFS" = ""

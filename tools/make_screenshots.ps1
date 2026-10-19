@@ -65,7 +65,7 @@ $sb += "[sidebar.2]", "title = Drives", "kind = drives", "collapsed = 0", "items
 Set-Content "$work\prismfs-sidebar.ini" $sb -Encoding ascii
 
 function Shot($name, $ini, $folder, $args2) {
-  Set-Content "$work\prismfs.ini" (@("[behavior]", "track_history = 0", "restore_tabs = 0", "standby = 0", "tray = 0", "[layout]", "window_w = 1360", "window_h = 820") + $ini) -Encoding ascii
+  Set-Content "$work\prismfs.ini" (@("[behavior]", "track_history = 0", "restore_tabs = 0", "background = 0", "[layout]", "window_w = 1360", "window_h = 820") + $ini) -Encoding ascii
   Remove-Item "$work\prismfs-visits.ini" -ErrorAction SilentlyContinue
   & "$PSScriptRoot\screenshot.ps1" -Exe "$work\prismfs.exe" -Out (Join-Path $Out $name) -WaitMs 6000 -ExeArgs (@("`"$folder`"") + $args2)
 }

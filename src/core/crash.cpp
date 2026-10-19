@@ -144,11 +144,10 @@ void write_dump(const wchar_t* path, EXCEPTION_POINTERS* ep)
     }
 }
 
-// the fatal path: log, dump, tell the user from another process (this one is in no state to show anything safely)
-LONG WINAPI top_filter(EXCEPTION_POINTERS* ep)
+// log, dump, tell the user from another process (this one is in no state to show anything safely).
+// whole_process: the process is about to die; else one window was dropped and the rest keeps running
+void write_report(EXCEPTION_POINTERS* ep, bool whole_process)
 {
-    if (g_reporting.exchange(true)) { return EXCEPTION_CONTINUE_SEARCH; } // (a fault inside the handler: give up)
-
     wchar_t dir[MAX_PATH]{};
     ensure_dir(dir, MAX_PATH);
     SYSTEMTIME t{};
@@ -181,7 +180,7 @@ LONG WINAPI top_filter(EXCEPTION_POINTERS* ep)
     prune(dir);
 
     // the notice comes from a new process: `prismfs.exe --crashed <report>` (see main.cpp)
-    std::wstring cmd = L"\"" + std::wstring{exe} + L"\" --crashed \"" + log_path + L"\"";
+    std::wstring cmd = L"\"" + std::wstring{exe} + L"\" --crashed \"" + log_path + L"\"" + (whole_process ? L"" : L" --window");
     STARTUPINFOW        si{};
     si.cb = sizeof si;
     PROCESS_INFORMATION pi{};
@@ -189,6 +188,12 @@ LONG WINAPI top_filter(EXCEPTION_POINTERS* ep)
         ::CloseHandle(pi.hThread);
         ::CloseHandle(pi.hProcess);
     }
+}
+
+LONG WINAPI top_filter(EXCEPTION_POINTERS* ep)
+{
+    if (g_reporting.exchange(true)) { return EXCEPTION_CONTINUE_SEARCH; } // (a fault inside the handler: give up)
+    write_report(ep, true);
     return EXCEPTION_EXECUTE_HANDLER;
 }
 
@@ -218,6 +223,15 @@ int guard_filter(EXCEPTION_POINTERS* ep, const char* what)
     return EXCEPTION_EXECUTE_HANDLER;
 }
 
+int window_filter(EXCEPTION_POINTERS* ep)
+{
+    if (!is_fault(ep->ExceptionRecord->ExceptionCode) && ep->ExceptionRecord->ExceptionCode != k_abort_code) { return EXCEPTION_CONTINUE_SEARCH; }
+    if (g_reporting.exchange(true)) { return EXCEPTION_CONTINUE_SEARCH; } // (already reporting: let it go to the top-level handler)
+    write_report(ep, false);
+    g_reporting.store(false);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
 } // namespace
 
 void install()
@@ -230,6 +244,16 @@ void install()
 }
 
 void set_directory(const std::wstring& dir) { wcsncpy_s(g_dir, dir.c_str(), _TRUNCATE); }
+
+bool guarded_window(const char*, void (*fn)(void*), void* context) noexcept
+{
+    __try {
+        fn(context);
+        return true;
+    } __except (window_filter(GetExceptionInformation())) {
+        return false;
+    }
+}
 
 bool guarded(const char* what, void (*fn)(void*), void* context) noexcept
 {

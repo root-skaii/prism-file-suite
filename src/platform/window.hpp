@@ -47,10 +47,17 @@ public:
     // shows the window now, filled with one colour, while the rest of start-up still runs (0xRRGGBB)
     void show_blank(std::uint32_t rgb);
 
-    // false once the window is closed
-    [[nodiscard]] bool pump();
+    // dispatches every queued message of the thread, for all windows. false once WM_QUIT arrived
+    [[nodiscard]] static bool pump_messages();
     // sleeps until a message arrives or `timeout_ms` passes (INFINITE = 0xffffffff)
-    void wait(std::uint32_t timeout_ms) const;
+    static void wait_messages(std::uint32_t timeout_ms);
+    // the user (or the app) closed this window
+    [[nodiscard]] bool closed() const noexcept { return quit_; }
+    // true once after any message reached this window (input, a worker's wake-up ...): it needs a frame
+    [[nodiscard]] bool take_activity() noexcept { return std::exchange(activity_, false); }
+    // after a fault in this window's code: hides and destroys the OS window and ignores every later message. the owner
+    // must then leave this object alone (leak it): its state is not to be trusted
+    void abandon() noexcept;
     // wakes wait() from any thread
     void wake() const noexcept;
     // the same as a free-standing callable (copies the handle: safe on a worker thread that outlives the window)
@@ -113,6 +120,8 @@ private:
     void*                 hwnd_{};
     strata::win32_platform platform_;
     bool                  quit_{};
+    bool                  faulted_{};   // a fault hit this window: messages are ignored from then on
+    bool                  activity_{true};
     bool                  minimized_{};
     bool                  resized_{};
     bool                  sizing_{}; // inside the system's resize / move loop

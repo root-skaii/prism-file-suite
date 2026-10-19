@@ -10,7 +10,6 @@
 #include "ui/ui_strings.hpp"
 #include "core/text.hpp"
 #include "platform/dnd.hpp"
-#include "platform/standby.hpp"
 #include "strata/frame.hpp"
 
 #include <windows.h>
@@ -51,18 +50,8 @@ bool Application::init(const Options& opts)
     ::SetPriorityClass(::GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
     PROCESS_POWER_THROTTLING_STATE throttle{PROCESS_POWER_THROTTLING_CURRENT_VERSION, PROCESS_POWER_THROTTLING_EXECUTION_SPEED, 0};
     ::SetProcessInformation(::GetCurrentProcess(), ProcessPowerThrottling, &throttle, sizeof throttle);
-    ui::register_actions(binds_);
-    settings_.binds = &binds_;
-    settings_.load();
-    {
-        const std::string p = ui::Settings::file_path(); // (crash reports go in a folder beside the settings)
-        core::crash::set_directory(core::text::widen(p.substr(0, p.find_last_of('\\') == std::string::npos ? 0 : p.find_last_of('\\') + 1) + "crashes"));
-    }
-    core::i18n::scan(ui::Settings::language_dirs());
-    core::i18n::set_language(settings_.language);
-    if (opts.log) { settings_.log_enabled = true; }
-    if (settings_.log_enabled) { start_log(); }
-    lap("settings load");
+    lang_revision_ = core::i18n::revision(); // (the host registered the actions for this language already)
+    crash_test_window_ = opts.crash_test_window;
     if (opts.light) { settings_.dark = false; }
     if (opts.compact) { settings_.compact = true; }
     if (opts.grid) { settings_.grid_view = true; }
@@ -159,13 +148,19 @@ bool Application::init(const Options& opts)
     if (opts.palette) { shell_->show_palette(); }
     if (!opts.properties.empty()) { shell_->show_properties({opts.properties}, opts.properties_tab); }
     apply_theme();
-    standby_on_      = settings_.standby || settings_.tray;
-    tray_on_         = settings_.tray;
-    standby_pending_ = standby_on_;
-    // after the first frame, out of its way (sooner with the tray icon: it is gone from the clock until the next spare is up)
-    standby_at_      = std::chrono::steady_clock::now() + std::chrono::milliseconds{tray_on_ ? 400 : 1500};
+    shell_->open_window_hook = [this](const std::string& folder, bool has_at, int x, int y, int w, int h) {
+        Options o;
+        o.path   = folder;
+        o.has_at = has_at;
+        o.at_x   = x;
+        o.at_y   = y;
+        o.width  = w;
+        o.height = h;
+        open_window_(o);
+    };
     lap("final setup");
     core::log::info("startup: init finished, the first frame comes next");
+    window_.show();
     return true;
 }
 
@@ -212,21 +207,6 @@ bool Application::step(bool force_draw)
         binds_ = strata::keybinds{};
         ui::register_actions(binds_);
         (void)binds_.load(chords);
-    }
-    if (const bool want = settings_.standby || settings_.tray; want != standby_on_ || settings_.tray != tray_on_) { // (switched in Settings)
-        const bool tray_changed = settings_.tray != tray_on_;
-        standby_on_ = want;
-        tray_on_    = settings_.tray;
-        if (!want) {
-            standby_pending_ = false;
-            platform::standby::stop(false);
-        } else if (tray_changed) {
-            standby_pending_ = false;
-            platform::standby::restart(tray_on_); // (the icon belongs to the spare, which has to start again with / without it)
-        } else {
-            standby_pending_ = true;
-            standby_at_      = std::chrono::steady_clock::now();
-        }
     }
     if (settings_.log_enabled != core::log::enabled()) { // (switched in Settings)
         if (settings_.log_enabled) { start_log(); } else { core::log::info("log switched off"); core::log::disable(); }
@@ -328,44 +308,45 @@ bool Application::step(bool force_draw)
     return presented;
 }
 
-int Application::run()
+void Application::tick()
 {
-    window_.show();
-    while (window_.pump()) {
-        if (window_.minimized()) {
-            window_.wait(0xffffffffu);
-            continue;
-        }
-        if (window_.take_resized()) {
-            gpu_.resize();
-            ui_->invalidate();
-        }
-        if (presented_) { gpu_.wait_for_frame(); }
-        presented_ = step(false);
-
-        double standby_left = 0.0; // seconds until a spare process is due
-        if (standby_pending_) {
-            standby_left = std::chrono::duration<double>(standby_at_ - std::chrono::steady_clock::now()).count();
-            if (standby_left <= 0.0) {
-                standby_pending_ = false;
-                platform::standby::ensure(tray_on_);
-            }
-        }
-
-        // sleep until input arrives or the ui needs a frame (animation, caret, tooltip delay). a directory loader
-        // posts a message when it has rows, which ends the sleep
-        double wait = ui_->next_wake_seconds();
-        if (standby_pending_ && standby_left > 0.0 && wait > 0.0) { wait = std::min(wait, standby_left); }
-        if (wait > 0.0) {
-            window_.wait(wait >= 3600.0 ? 0xffffffffu : static_cast<std::uint32_t>(std::ceil(wait * 1000.0)));
-        } else {
-            gpu_.pace_to_display(); // animating: one frame per refresh, not a busy loop
-        }
+    if (window_.minimized()) { // (nothing to draw: the next message that matters is the restore)
+        (void)window_.take_activity();
+        due_      = std::chrono::steady_clock::now() + std::chrono::hours{1};
+        animating_ = false;
+        return;
     }
+    const bool active = window_.take_activity();
+    if (!active && !animating_ && std::chrono::steady_clock::now() < due_) { return; }
+
+    if (crash_test_window_ && ++frames_ == 30) { *static_cast<volatile int*>(nullptr) = 1; } // (--crash-test-window)
+
+    if (window_.take_resized()) {
+        gpu_.resize();
+        ui_->invalidate();
+    }
+    if (presented_) { gpu_.wait_for_frame(); }
+    presented_ = step(false);
+
+    // the next frame is due when input arrives, a timer runs out (caret, tooltip delay) or an animation is still moving.
+    // a directory loader posts a message when it has rows, which counts as input
+    const double wait = ui_ != std::nullopt ? ui_->next_wake_seconds() : 3600.0;
+    animating_ = wait <= 0.0;
+    due_       = std::chrono::steady_clock::now() + std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(std::min(wait, 3600.0)));
+}
+
+double Application::seconds_until_due() const
+{
+    if (animating_) { return 0.0; }
+    return std::max(0.0, std::chrono::duration<double>(due_ - std::chrono::steady_clock::now()).count());
+}
+
+void Application::shutdown()
+{
     platform::detach_drop_target(window_.handle());
+    if (!ui_ || !shell_) { return; }
     const strata::vec2 logical = ui_->display_size();
     shell_->save_session(static_cast<int>(logical.x * static_cast<float>(scale_pct_) / 100.0f), static_cast<int>(logical.y * static_cast<float>(scale_pct_) / 100.0f));
-    return 0;
 }
 
 } // namespace prism::app

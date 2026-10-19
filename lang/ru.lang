@@ -2,6 +2,11 @@
 @name = Русский
 @plural = slavic
 
+# app/host.cpp
+"Open PrismFS" = "Открыть PrismFS"
+"Settings" = "Настройки"
+"Exit PrismFS" = "Выйти из PrismFS"
+
 # core/drive_watcher.cpp
 "Recycle Bin" = "Корзина"
 
@@ -33,11 +38,9 @@
 "Local Disk" = "Локальный диск"
 
 # main.cpp
+"A PrismFS window crashed and was closed. The other windows keep running. A report was saved:\n{}\n\nOpen a new window?" = "Окно PrismFS завершилось сбоем и было закрыто. Остальные окна продолжают работать. Отчёт сохранён:\n{}\n\nОткрыть новое окно?"
 "PrismFS closed unexpectedly. A report was saved:\n{}\n\nStart PrismFS again?" = "PrismFS неожиданно закрылся. Отчёт сохранён:\n{}\n\nЗапустить PrismFS снова?"
 "PrismFS crashed" = "Сбой PrismFS"
-"Open PrismFS" = "Открыть PrismFS"
-"Settings" = "Настройки"
-"Exit PrismFS" = "Выйти из PrismFS"
 
 # ui/actions.cpp
 "New tab" = "Новая вкладка"
@@ -416,10 +419,8 @@
 "Ask before deleting" = "Спрашивать перед удалением"
 "Before a file goes to the Recycle Bin" = "Перед отправкой файла в корзину"
 "Open my tabs again next time" = "Открывать мои вкладки при следующем запуске"
-"Start faster" = "Быстрый запуск"
-"Keeps a small PrismFS process ready in the background, so new windows open almost at once" = "Держит в фоне небольшой процесс PrismFS, чтобы новые окна открывались почти мгновенно"
-"Tray icon" = "Значок в трее"
-"An icon near the clock while PrismFS runs in the background: right-click for Open, Settings and Exit. Keeps a small background process" = "Значок у часов, пока PrismFS работает в фоне: правый клик — Открыть, Настройки и Выход. Держит небольшой фоновый процесс"
+"Run in the background" = "Работать в фоне"
+"Stay in the tray after the last window is closed" = "Оставаться в трее после закрытия последнего окна"
 "Index drives for instant search" = "Индексировать диски для мгновенного поиска"
 "Lets Search everywhere ({}) find files instantly." = "Позволяет функции «Поиск везде» ({}) находить файлы мгновенно."
 "Copy and move in PrismFS" = "Копирование и перемещение в PrismFS"
@@ -750,6 +751,13 @@
 "Copied" = "Скопировано"
 
 # unused (no longer in the code)
+"Keeps PrismFS running after the last window is closed, with an icon near the clock (right-click: Open, Settings, Exit). The next window opens at once. When off, closing the last window quits PrismFS" = "Оставляет PrismFS работать после закрытия последнего окна, со значком у часов (правый клик: Открыть, Настройки, Выход). Следующее окно открывается сразу. Если выключено, закрытие последнего окна завершает PrismFS"
+"Start faster" = "Быстрый запуск"
+"Keeps PrismFS running in the background after the last window is closed, so the next one opens at once" = "Оставляет PrismFS работать в фоне после закрытия последнего окна, чтобы следующее открывалось мгновенно"
+"Tray icon" = "Значок в трее"
+"An icon near the clock while PrismFS runs: right-click for Open, Settings and Exit. It stays when the last window is closed" = "Значок у часов, пока PrismFS работает: правый клик — Открыть, Настройки и Выход. Остаётся после закрытия последнего окна"
+"Keeps a small PrismFS process ready in the background, so new windows open almost at once" = "Держит в фоне небольшой процесс PrismFS, чтобы новые окна открывались почти мгновенно"
+"An icon near the clock while PrismFS runs in the background: right-click for Open, Settings and Exit. Keeps a small background process" = "Значок у часов, пока PrismFS работает в фоне: правый клик — Открыть, Настройки и Выход. Держит небольшой фоновый процесс"
 "Open archives like folders" = "Открывать архивы как папки"
 "Enter on a zip, 7z or tar shows what is inside" = "Enter на zip, 7z или tar показывает содержимое"
 "done" = "готово"

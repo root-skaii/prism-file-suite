@@ -25,4 +25,14 @@ template <class F>
     return guarded(what, [](void* p) { (*static_cast<std::remove_reference_t<F>*>(p))(); }, &f);
 }
 
+// for one window's frame or message: a fault is reported (log, dump, a notice from another process saying that one
+// window was closed) and false returned; the caller drops that window and the others keep running
+[[nodiscard]] bool guarded_window(const char* what, void (*fn)(void*), void* context) noexcept;
+
+template <class F>
+[[nodiscard]] bool guard_window(const char* what, F&& f)
+{
+    return guarded_window(what, [](void* p) { (*static_cast<std::remove_reference_t<F>*>(p))(); }, &f);
+}
+
 } // namespace prism::core::crash

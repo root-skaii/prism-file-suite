@@ -25,7 +25,7 @@
 - **Batch rename** (`F2` on several files), links (symbolic, hard, junction), picture tools (rotate, resize, JPEG / PNG), zip / extract
 
 **Tools**
-- **Disk usage** (`Ctrl+Shift+U`) – sortable folder tree beside a treemap, one selection; double click looks inside
+- **Disk usage** (`Ctrl+Shift+U`) – sortable folder tree beside a treemap, one selection; double click looks insid
 - **Folder compare and sync** (`Ctrl+Shift+E`, two panes) – see what differs, pick a direction per row, copy; nothing is deleted
 - **Duplicate finder**, **empty-folder cleaner**, folder sizes in the size column (View options)
 

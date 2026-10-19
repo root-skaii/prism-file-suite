@@ -18,8 +18,7 @@ struct Settings {
     bool  show_hidden{false};
     bool  confirm_delete{false}; // ask before moving to the recycle bin (deleting for good always asks)
     bool  restore_tabs{true};
-    bool  tray{true};            // a notification-area icon (open / settings / exit) that stays while PrismFS runs in the background; lives in the spare process
-    bool  standby{true};        // a small spare process waits in the background so the next window opens almost at once (platform/standby.hpp)
+    bool  background{true};      // PrismFS keeps running after the last window closes, with a notification-area icon (open / settings / exit); off: the last window quits it
     bool  shell_menu{true};     // the right-click menu also lists Explorer's own entries (Open with Code, 7-Zip, New ...)
     bool  browse_archives{true}; // Enter on a zip / 7z / tar opens it as a folder (a temporary unpacked copy) instead of the default app
     bool  index_drives{true};    // a background index of the fixed drives' file names, for "Search everywhere" (Ctrl+Shift+F)

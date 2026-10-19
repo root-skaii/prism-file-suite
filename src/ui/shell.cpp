@@ -53,10 +53,10 @@ Shell::Shell(platform::Window& window, Theme& theme, FontSet fonts, model::TabSe
     (void)tags_.load_file(Settings::tags_path());
     saved_tags_ = tags_.revision();
     core::clear_archive_cache(); // (the unpacked copies of archives browsed in an earlier session)
-    core::FileOps::on_renamed = [this](const std::string& from, const std::string& to) { tags_.rename_prefix(from, to); }; // (labels follow a rename)
+    core::FileOps::add_rename_hook(this, [this](const std::string& from, const std::string& to) { tags_.rename_prefix(from, to); }); // (labels follow a rename)
 }
 
-Shell::~Shell() { core::FileOps::on_renamed = nullptr; }
+Shell::~Shell() { core::FileOps::remove_rename_hook(this); }
 
 // the local fixed drives: what the instant search covers (network and removable drives are slow and come and go)
 void Shell::rebuild_index()
@@ -155,18 +155,7 @@ void Shell::spawn_window(const std::string& folder, std::optional<std::pair<int,
 {
     const platform::Window::Placement at = pointer ? env_.window.placement_at(pointer->first, pointer->second) : env_.window.cascaded_placement();
     const auto [lw, lh] = env_.window.logical_size();
-    wchar_t exe[MAX_PATH]{};
-    ::GetModuleFileNameW(nullptr, exe, MAX_PATH);
-    std::wstring cmd = L"\"" + std::wstring{exe} + L"\" \"" + core::text::widen(folder) + L"\" --at " + std::to_wstring(at.x) + L"," + std::to_wstring(at.y) +
-                       L" --size " + std::to_wstring(lw) + L"," + std::to_wstring(lh);
-    STARTUPINFOW si{};
-    si.cb = sizeof si;
-    PROCESS_INFORMATION pi{};
-    if (::CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
-        ::AllowSetForegroundWindow(pi.dwProcessId); // (this window has the foreground: the new one may take it, so it opens on top)
-        ::CloseHandle(pi.hThread);
-        ::CloseHandle(pi.hProcess);
-    }
+    if (open_window_hook) { open_window_hook(folder, true, at.x, at.y, lw, lh); } // (the host makes the window, in this process)
 }
 
 // a tab dropped outside this window: into the PrismFS window under the pointer, else into a window of its own

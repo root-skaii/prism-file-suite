@@ -128,7 +128,10 @@ bool FileOps::rename(const std::string& path, const std::string& new_name)
     const std::string target = path::join(path::parent(path), new_name);
     // (case-only renames are allowed: MoveFileEx treats them as a rename of the same file)
     const bool ok = ::MoveFileExW(text::widen(path).c_str(), text::widen(target).c_str(), 0) != FALSE;
-    if (ok && on_renamed) { on_renamed(path, target); }
+    if (ok) {
+        const auto hooks = rename_hooks(); // (a copy: a hook may close its window)
+        for (const auto& h : hooks) { if (h.second) { h.second(path, target); } }
+    }
     return ok;
 }
 
