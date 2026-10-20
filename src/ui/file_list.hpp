@@ -6,6 +6,7 @@
 #include "core/shell_menu.hpp"
 #include "ui/env.hpp"
 #include "ui/painter.hpp"
+#include "ui/shell_page.hpp"
 
 #include <array>
 #include <optional>
@@ -79,14 +80,10 @@ private:
     void draw_rename(Painter& p, model::Tab& tab, const Geo& g, strata::vec2 origin);
     [[nodiscard]] bool is_cut(const model::Tab& tab, std::string_view name) const;
 
-    void draw_shell_items(strata::context& ui, const std::vector<core::ShellMenuItem>& items, bool drill);
-    std::vector<std::size_t> shell_path_;   // the entries opened in place inside "More options"
-    bool                     shell_page_drawn_{}; // (the page was drawn this frame: when it was not, the menu closed)
-    void draw_shell_page(strata::context& ui, const std::vector<core::ShellMenuItem>& items);
-
     Env&  env_;
     bool  right_{};
     core::ShellMenu shell_menu_; // (Explorer's own entries for the right-click menu, read on a worker)
+    ShellPage       shell_page_{env_, shell_menu_}; // ("More options")
     std::array<float, col_count> widths_{170.0f, 150.0f, 100.0f};
     int         resize_col_{-1};
     float       resize_start_x_{};

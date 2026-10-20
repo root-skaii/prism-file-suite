@@ -69,6 +69,7 @@ public:
     // the folder the second pane opens with when it appears (command line)
     void set_second_folder(std::string folder) { pending_right_ = std::move(folder); }
     void show_properties(std::vector<std::string> paths, int tab = 0) { properties_dialog_.open(std::move(paths), tab); }
+    void show_usage(std::string folder) { usage_dialog_.open(std::move(folder)); }
 
     // asks the host for another window: folder, whether `x, y` (screen pixels) place it, and its logical size
     std::function<void(const std::string& folder, bool has_at, int x, int y, int w, int h)> open_window_hook;

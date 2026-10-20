@@ -6,6 +6,7 @@
 #include "core/shell_menu.hpp"
 #include "ui/env.hpp"
 #include "ui/painter.hpp"
+#include "ui/shell_page.hpp"
 
 #include <string>
 
@@ -39,7 +40,8 @@ private:
     void apply_filter(model::Tab& tab, bool run);
 
     Env&         env_;
-    core::ShellMenu shell_menu_; // Explorer's own "New" entries (Word document, Bitmap image ...) for the New menu, read on a worker
+    core::ShellMenu shell_menu_; // Explorer's own entries (the New menu's Word document ..., the path folder's "More options"), read on a worker
+    ShellPage       shell_page_{env_, shell_menu_};
     bool         editing_{};
     bool         want_edit_{};
     bool         want_filter_focus_{};

@@ -277,7 +277,8 @@ void Toolbar::address(Painter& p, float area_x, float area_y, float width, float
         }
     } else {
         auto parts = core::path::segments(tab.path());
-        // the Recycle Bin: "Recycle Bin > ..." instead of "C:\ > $Recycle.Bin > S-1-5-21-..."
+        if (tab.path() == core::recycle::all) { parts.clear(); add_seg(std::string{tr("Recycle Bin")}, tab.path()); }
+        // the Recycle Bin:"Recycle Bin > ..." instead of "C:\ > $Recycle.Bin > S-1-5-21-..."
         const auto bin = std::ranges::find_if(parts, [](const auto& s) { return core::text::lower_ascii(s.name) == "$recycle.bin"; });
         if (bin != parts.end() && std::next(bin) != parts.end()) {
             for (auto it = parts.begin(); it != bin; ++it) { add_seg(std::move(it->name), std::move(it->path)); } // ("C:\")
@@ -353,6 +354,7 @@ void Toolbar::crumb_context_menu(Painter& p)
 {
     context& ui = p.ui();
     const MenuDensity density{ui, env_.settings.compact};
+    shell_page_.begin_frame();
     auto menu = ui.popup_menu("##crumb_ctx");
     if (!menu) { return; }
     const std::string& dir = crumb_ctx_path_;
@@ -382,13 +384,30 @@ void Toolbar::crumb_context_menu(Painter& p)
     }
     ui.menu_separator();
     if (ui.menu_item(env_.layout.find(dir) ? tr("Unpin from sidebar") : tr("Pin to sidebar"))) { env_.cmd.toggle_pin(dir); }
+    const bool is_root = dir.size() <= 3; // "C:\"
+    if (!is_root) {
+        if (ui.menu_item(tr("Cut"), env_.binds.text("cut"))) { (void)core::clipboard_set_files({dir}, true); }
+    }
+    if (ui.menu_item(tr("Copy"), env_.binds.text("copy"))) { (void)core::clipboard_set_files({dir}, false); }
+    if (!is_root && ui.menu_item(tr("Delete"), "Del")) { env_.cmd.request_delete({dir}, false); }
+    ui.menu_separator();
     if (ui.menu_item(tr("Copy path"))) {
         (void)core::shell::set_clipboard_text(dir);
         env_.cmd.toast(tr("Path copied"), toast_kind::info);
     }
     if (ui.menu_item(tr("Show in File Explorer"))) { (void)core::shell::reveal_in_explorer(dir); }
+    if (ui.menu_item(tr("Open in terminal"))) { (void)core::shell::run_command("wt", dir); }
     if (ui.menu_item(tr("Properties"), env_.binds.text("properties"))) { env_.cmd.open_properties({dir}); }
+    // Explorer's own entries for the folder itself (7-Zip, Open with Code, Git Bash Here ...)
+    if (env_.settings.shell_menu) {
+        shell_menu_.query({dir}, false);
+        const std::vector<core::ShellMenuItem> shell_items = shell_menu_.items();
+        if (!shell_items.empty()) {
+            if (auto more = ui.menu(tr("More options"))) { shell_page_.draw(ui, shell_items); }
+        }
+    }
     ui.menu_separator();
+    if (ui.menu_item(tr("Windows properties"))) { (void)core::shell::show_properties(dir); }
     if (ui.menu_item(tr("Windows options"))) { (void)core::shell::show_native_menu({dir}, env_.window.handle()); }
 }
 

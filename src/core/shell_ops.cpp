@@ -278,8 +278,8 @@ bool run_command(const std::string& line, const std::string& folder)
                     return true;
                 }
             }
-        } else if (!dir.empty() && reinterpret_cast<INT_PTR>(::ShellExecuteW(nullptr, verb, L"wt.exe", wt_args.c_str(), nullptr, SW_SHOWNORMAL)) > 32) { return true; }
-        // (an elevated wt.exe is not always allowed through its alias: the plain console is the fallback, still elevated)
+        }
+        // elevated: the plain console. `runas` on the wt.exe alias asks for permission and then starts nothing
         return reinterpret_cast<INT_PTR>(::ShellExecuteW(nullptr, verb, (name + L".exe").c_str(), args.empty() ? nullptr : args.c_str(), cwd, SW_SHOWNORMAL)) > 32;
     }
     if (reinterpret_cast<INT_PTR>(::ShellExecuteW(nullptr, verb, text::widen(prog).c_str(), args.empty() ? nullptr : args.c_str(), cwd, SW_SHOWNORMAL)) > 32) { return true; }

@@ -30,6 +30,7 @@ Application::Options parse_command_line(const wchar_t* command_line)
             else if (a == L"--palette") { opts.palette = true; }
             else if (a == L"--properties" && i + 1 < argc) { opts.properties = core::text::narrow(argv[++i]); }
             else if (a == L"--properties-tab" && i + 1 < argc) { opts.properties_tab = _wtoi(argv[++i]); }
+            else if (a == L"--usage" && i + 1 < argc) { opts.usage = core::text::narrow(argv[++i]); }
             else if (a == L"--grid") { opts.grid = true; }
             else if (a == L"--preview") { opts.preview = true; }
             else if (a == L"--split") { opts.split = true; }

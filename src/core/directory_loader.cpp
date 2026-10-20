@@ -126,54 +126,73 @@ void DirectoryLoader::work(std::shared_ptr<Job> job, std::wstring pattern, std::
         if (wake) { wake(); }
     };
 
-    const std::string bin_dir_raw = text::narrow(pattern);
-    const bool        in_bin      = recycle::inside(bin_dir_raw);
-    const std::string bin_dir     = in_bin && bin_dir_raw.size() > 1 ? bin_dir_raw.substr(0, bin_dir_raw.size() - 1) : std::string{}; // (the pattern ends in "\*")
+    // the all-bins view lists every drive's bin together, so its entries carry their full paths as names
+    const bool all_bins = pattern == text::widen(std::string{recycle::all} + "\\*");
+    std::vector<std::wstring> patterns;
+    if (all_bins) {
+        for (const std::string& b : recycle::folders()) { patterns.push_back(text::widen(b) + L"\\*"); }
+    } else {
+        patterns.push_back(pattern);
+    }
     WIN32_FIND_DATAW fd;
     const auto started = clock::now();
     std::size_t listed = 0;
+    DWORD last_error = 0;
     // a slow folder is the thing the log is for: how long the first entry took (network, antivirus, sleeping disk) and the whole listing
     const auto note = [&](const char* how) {
         const double total = std::chrono::duration<double, std::milli>(clock::now() - started).count();
         if (log::enabled() && total >= 150.0) { log::write(std::format("folder {} {}: {} entries in {:.0f} ms", how, text::narrow(pattern), listed, total)); }
     };
-    // FindExInfoBasic skips the short (8.3) name; LARGE_FETCH asks the filesystem for bigger buffers
-    HANDLE h = ::FindFirstFileExW(pattern.c_str(), FindExInfoBasic, &fd, FindExSearchNameMatch, nullptr, FIND_FIRST_EX_LARGE_FETCH);
-    if (h == INVALID_HANDLE_VALUE) {
-        const DWORD e = ::GetLastError();
-        note("failed");
-        flush(true, e);
-        return;
-    }
-    if (log::enabled()) {
-        const double first = std::chrono::duration<double, std::milli>(clock::now() - started).count();
-        if (first >= 100.0) { log::write(std::format("folder {}: first entry took {:.0f} ms", text::narrow(pattern), first)); }
-    }
-    do {
-        ++listed;
-        const wchar_t* n = fd.cFileName;
-        if (n[0] == L'.' && (n[1] == L'\0' || (n[1] == L'.' && n[2] == L'\0'))) { continue; }
-        if (in_bin && (n[0] == L'$') && (n[1] == L'I' || n[1] == L'i')) { continue; } // (a record, not an item)
-        batch.push_back(make_entry(fd));
-        if (in_bin && n[0] == L'$' && (n[1] == L'R' || n[1] == L'r')) {
-            // the bin's own name is `$R4ND0M.ext`: show the name it was deleted under, and when
-            if (const auto rec = recycle::read(bin_dir + text::narrow(n))) {
-                FileEntry& e = batch.back();
-                e.shown    = path::leaf(rec->original);
-                e.modified = rec->deleted;
+    for (const std::wstring& pat : patterns) {
+        const std::string raw     = text::narrow(pat);
+        const bool        in_bin  = recycle::inside(raw);
+        const std::string bin_dir = in_bin && raw.size() > 1 ? raw.substr(0, raw.size() - 1) : std::string{}; // (the pattern ends in "\*")
+        // FindExInfoBasic skips the short (8.3) name; LARGE_FETCH asks the filesystem for bigger buffers
+        HANDLE h = ::FindFirstFileExW(pat.c_str(), FindExInfoBasic, &fd, FindExSearchNameMatch, nullptr, FIND_FIRST_EX_LARGE_FETCH);
+        if (h == INVALID_HANDLE_VALUE) {
+            if (all_bins) { continue; } // (a drive that went away: the others still list)
+            const DWORD e = ::GetLastError();
+            note("failed");
+            flush(true, e);
+            return;
+        }
+        if (log::enabled()) {
+            const double first = std::chrono::duration<double, std::milli>(clock::now() - started).count();
+            if (first >= 100.0) { log::write(std::format("folder {}: first entry took {:.0f} ms", raw, first)); }
+        }
+        do {
+            ++listed;
+            const wchar_t* n = fd.cFileName;
+            if (n[0] == L'.' && (n[1] == L'\0' || (n[1] == L'.' && n[2] == L'\0'))) { continue; }
+            if (in_bin && (n[0] == L'$') && (n[1] == L'I' || n[1] == L'i')) { continue; } // (a record, not an item)
+            batch.push_back(make_entry(fd));
+            FileEntry& e = batch.back();
+            if (in_bin && n[0] == L'$' && (n[1] == L'R' || n[1] == L'r')) {
+                // the bin's own name is `$R4ND0M.ext`: show the name it was deleted under, and when
+                if (const auto rec = recycle::read(bin_dir + text::narrow(n))) {
+                    e.shown    = path::leaf(rec->original);
+                    e.original = rec->original;
+                    e.modified = rec->deleted;
+                }
             }
-        }
-        // first rows quickly, then bigger and rarer batches
-        const auto age = clock::now() - last_flush;
-        if (batch.size() >= 4096 || (batch.size() >= 64 && age > std::chrono::milliseconds{40})) {
-            if (job->cancelled.load(std::memory_order_relaxed)) { break; }
-            flush(false, 0);
-        }
-    } while (::FindNextFileW(h, &fd));
-    const DWORD err = ::GetLastError();
-    ::FindClose(h);
+            if (all_bins) {
+                if (e.shown.empty()) { e.shown = e.name; } // (no record: the bin's own name, not the whole path)
+                e.name       = bin_dir + e.name;
+                e.ext_offset = static_cast<std::uint16_t>(e.ext_offset + bin_dir.size());
+            }
+            // first rows quickly, then bigger and rarer batches
+            const auto age = clock::now() - last_flush;
+            if (batch.size() >= 4096 || (batch.size() >= 64 && age > std::chrono::milliseconds{40})) {
+                if (job->cancelled.load(std::memory_order_relaxed)) { break; }
+                flush(false, 0);
+            }
+        } while (::FindNextFileW(h, &fd));
+        const DWORD err = ::GetLastError();
+        ::FindClose(h);
+        last_error = err == ERROR_NO_MORE_FILES ? 0 : err;
+    }
     note("listed");
-    flush(true, err == ERROR_NO_MORE_FILES ? 0 : err);
+    flush(true, all_bins ? 0 : last_error);
 }
 
 } // namespace prism::core

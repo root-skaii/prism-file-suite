@@ -44,7 +44,21 @@ namespace {
 
 bool inside(std::string_view path)
 {
-    return text::lower_ascii(path).find("\\$recycle.bin") != std::string::npos;
+    return path.starts_with(all) || text::lower_ascii(path).find("\\$recycle.bin") != std::string::npos;
+}
+
+std::vector<std::string> folders()
+{
+    std::vector<std::string> out;
+    const DWORD mask = ::GetLogicalDrives();
+    for (int i = 0; i < 26; ++i) {
+        if ((mask & (1u << i)) == 0) { continue; }
+        const std::wstring root = {static_cast<wchar_t>(L'A' + i), L':', L'\\'};
+        const UINT type = ::GetDriveTypeW(root.c_str());
+        if (type != DRIVE_FIXED && type != DRIVE_REMOVABLE) { continue; } // (not shares: a slow lookup)
+        if (std::string f = folder(text::narrow(root)); !f.empty()) { out.push_back(std::move(f)); }
+    }
+    return out;
 }
 
 std::optional<Record> read(const std::string& item)
@@ -85,7 +99,7 @@ std::optional<Record> read(const std::string& item)
 
 std::string drive_of(std::string_view p)
 {
-    return p.size() >= 2 && p[1] == ':' ? std::string{p.substr(0, 2)} + "\\" : std::string{};
+    return p.size() >= 2 && p[1] == ':' && p[0] != ':' ?std::string{p.substr(0, 2)} + "\\" : std::string{};
 }
 
 std::string folder_path(std::string_view drive_root)

@@ -35,6 +35,7 @@ public:
         bool        palette{};
         std::string properties;  // open the Properties dialog for this path at start
         int         properties_tab{};
+        std::string usage;       // open Disk usage for this folder at start
         bool        grid{};
         bool        preview{};
         bool        split{};

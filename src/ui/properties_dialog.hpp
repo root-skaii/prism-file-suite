@@ -4,11 +4,13 @@
 // (the system's dialog stays available next to it). built from the widget kit: own header, pill tabs, cards.
 
 #include "core/file_info.hpp"
+#include "core/recycle.hpp"
 #include "ui/env.hpp"
 #include "ui/painter.hpp"
 #include "ui/widgets.hpp"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -40,6 +42,7 @@ private:
     float                   content_h_{420.0f}; // the body's content height, measured last frame
     std::vector<std::string> paths_;
     std::vector<core::FileInfo> infos_;
+    std::optional<core::recycle::Record> bin_; // a single Recycle Bin item: where and when it was deleted
     std::vector<std::unique_ptr<core::FolderScan>> scans_;
     core::HashJob           hash_;
     bool                    hash_started_{};

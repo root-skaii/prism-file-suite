@@ -1,6 +1,7 @@
 #pragma once
 
-// where the disk space goes: a folder tree (open any folder in place, as deep as you like) with a size bar per row.
+// where the disk space goes: a ring of the biggest items (legend beside it) over a folder tree (open any folder in place,
+// as deep as you like) with a share bar per row; ring, legend and rows share colours and hover.
 // only the rows in view are drawn (strata list_clipper), the flat row list is rebuilt only when something structural
 // changes, and the list scrolls both ways. folders past what a scan kept are scanned on demand; Back and the crumbs
 // return across those scans, finished scans are cached. core::DiskUsage scans on a worker
@@ -36,8 +37,10 @@ private:
         const core::UsageNode* node{};
         int                    parent{-1}; // index of the row it is under
         int                    depth{};
-        std::size_t            top{};      // which top-level item it belongs to (its colour)
+        std::size_t            top{};      // rank of the top-level item it belongs to (its colour, its ring segment)
+        core::FileKind         kind{};
     };
+    static constexpr std::size_t ring_items = 7; // biggest items with a colour of their own; the rest share one
     // a scan the user drilled out of: its trail is kept so Back lands where they were
     struct View {
         std::string                            base;
@@ -59,8 +62,12 @@ private:
     [[nodiscard]] Pick pick_at(std::size_t row) const;
     void look_inside(const Pick& pick);   // goes into a folder (or scans it, past what the scan kept)
     void go_to(std::size_t depth);        // back out to trail_[depth]
+    void rank(const core::UsageNode& cur);
+    [[nodiscard]] std::size_t rank_of(const core::UsageNode* top) const noexcept;
     void rebuild_rows(strata::context& ui, const FontSet& f, const core::UsageNode& cur);
-    void draw_tree(strata::context& ui, const FontSet& f, const Palette& pal, const core::UsageNode& cur, float row_h, float height);
+    void select_top(const core::UsageNode* top);
+    void draw_overview(Painter& p, const core::UsageNode& cur);
+    void draw_tree(Painter& p, const core::UsageNode& cur, float row_h, float height);
     void tree_keys(strata::context& ui);
 
     Env&                                     env_;
@@ -72,6 +79,8 @@ private:
     std::string                              base_;     // the folder the scan started at
     Pick                                     pick_;     // the selection
     Pick                                     ctx_;      // what the right-click menu is about
+    strata::vec2                             ctx_pos_{};
+    bool                                     ctx_open_{};
     std::unordered_set<const core::UsageNode*> open_;   // folders opened in the tree
     std::vector<Row>                         rows_;
     const core::UsageNode*                   rows_root_{};
@@ -82,6 +91,13 @@ private:
     int                                      sort_col_{1};  // 0 name, 1 size, 2 files
     bool                                     sort_asc_{false};
     unsigned                                 generation_{};
+    std::vector<const core::UsageNode*>      ranked_;       // the biggest ring_items children of ranked_root_
+    const core::UsageNode*                   ranked_root_{};
+    unsigned                                 ranked_gen_{};
+    int                                      hot_{-1};      // ring segment under the pointer (ring, legend or a row), last frame
+    int                                      hot_next_{-1};
+    unsigned                                 anim_gen_{~0u}; // the ring grows in when the folder on screen changes
+    double                                   anim_start_{};
     bool                                     want_open_{};
     bool                                     shown_{};
 };

@@ -78,6 +78,7 @@ void PropertiesDialog::reload()
 {
     infos_.clear();
     for (const std::string& p : paths_) { infos_.push_back(core::query_file_info(p)); }
+    bin_ = paths_.size() == 1 ? core::recycle::read(paths_.front()) : std::nullopt;
     if (scans_.empty()) {
         for (const core::FileInfo& i : infos_) {
             auto scan = std::make_unique<core::FolderScan>();
@@ -137,7 +138,7 @@ void PropertiesDialog::header(Kit& kit)
         else { p.file_icon(icon, kind); }
     }
     const float tx = tile.max.x + 16.0f;
-    const std::string title = single ? first.name : trf_n("{} item", "{} items", static_cast<long long>(infos_.size()), infos_.size());
+    const std::string title = bin_ ? core::path::leaf(bin_->original) : single ? first.name :trf_n("{} item", "{} items", static_cast<long long>(infos_.size()), infos_.size());
     p.text_left(rect{{tx, r.bounds.min.y + 6.0f}, {r.bounds.max.x, r.bounds.min.y + 34.0f}}, title, pal.text, f.title);
     std::string sub;
     if (single) {
@@ -246,6 +247,17 @@ void PropertiesDialog::general(Kit& kit)
     const std::string modified = single ? core::path::format_time(first.modified) : std::string{};
     const std::string accessed = single ? core::path::format_time(first.accessed) : std::string{};
     const float rh = kit.row_h();
+    if (bin_) {
+        // a Recycle Bin item: the bin's own file name and times say nothing, its record says where and when
+        const std::string deleted_from = core::path::parent(bin_->original);
+        kit.card_begin("##card_where", tr("Recycle Bin"), rh * 4.0f);
+        kit.key_value({"##kv_orig", tr("Original location"), deleted_from.empty() ? bin_->original : deleted_from, false, true, true});
+        kit.key_value({"##kv_origname", tr("Original name"), core::path::leaf(bin_->original), false, true, true});
+        kit.key_value({"##kv_deleted", tr("Deleted"), core::path::format_time(bin_->deleted), false, true, true});
+        kit.key_value({"##kv_binpath", tr("Stored as"), first.path, false, true, false});
+        kit.card_end("##card_where");
+        return;
+    }
     kit.card_begin("##card_where", single ? "Details" : "Selection", rh * (single ? (first.owner.empty() ? 4.0f : 5.0f) : 1.0f));
     kit.key_value({"##kv_loc", tr("Location"), location, false, true, single});
     if (single) {

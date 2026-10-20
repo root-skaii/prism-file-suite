@@ -34,6 +34,7 @@ struct FileEntry {
     FileKind      kind{FileKind::other};
     std::uint16_t tags{};          // colour labels (core::tag bits); the listing fills it from the tag store, not the loader
     std::string   shown;           // what to show instead of `name` (Recycle Bin items: the name they were deleted under); empty = `name`
+    std::string   original;        // Recycle Bin items: the full path they were deleted from
 
     [[nodiscard]] std::string_view display() const noexcept { return shown.empty() ? std::string_view{name} : std::string_view{shown}; }
     [[nodiscard]] bool is_dir() const noexcept { return (attributes & attr::directory) != 0; }

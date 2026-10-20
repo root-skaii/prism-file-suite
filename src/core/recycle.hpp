@@ -7,10 +7,16 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace prism::core::recycle {
 
-[[nodiscard]] bool inside(std::string_view path); // `path` is a Recycle Bin folder or below one
+// the virtual folder that lists every drive's bin together (its items are named by their full paths)
+inline constexpr std::string_view all = "prism:RecycleBin"; // ("::" paths are portable devices, "\\" ones are shares)
+
+[[nodiscard]] bool inside(std::string_view path); // `path` is a Recycle Bin folder (or `all`) or below one
+// this user's existing bin folders on every fixed / removable drive
+[[nodiscard]] std::vector<std::string> folders();
 
 struct Record {
     std::string   original;  // the full path it was deleted from

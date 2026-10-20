@@ -639,11 +639,13 @@ void FileList::draw_header(Painter& p, model::Listing& L, const std::string& fol
     const vec2  mp  = ui.mouse_pos();
     p.dl().rect_filled({{box.min.x + k_pad, box.max.y - 1.0f}, {box.max.x - k_pad, box.max.y}}, pal.divider);
 
+    // in the Recycle Bin the date is when it was deleted and the third column says where it came from
+    const bool in_bin = core::recycle::inside(folder);
     struct Cell { SortKey key; std::string_view label; float x0, x1; bool right; };
     const Cell cells[] = {
         {SortKey::name,     tr("Name"),          box.min.x + k_pad,    box.min.x + c.mod_x,  false},
-        {SortKey::modified, tr("Date modified"), box.min.x + c.mod_x,  box.min.x + c.type_x, false},
-        {SortKey::type,     tr("Type"),          box.min.x + c.type_x, box.min.x + c.size_x, false},
+        {SortKey::modified, in_bin ? tr("Date deleted") : tr("Date modified"), box.min.x + c.mod_x,  box.min.x + c.type_x, false},
+        {SortKey::type,     in_bin ? tr("Original location") : tr("Type"), box.min.x + c.type_x, box.min.x + c.size_x, false},
         {SortKey::size,     tr("Size"),          box.min.x + c.size_x, box.max.x - k_pad,    true},
     };
 
@@ -844,7 +846,8 @@ void FileList::draw_details(Painter& p, model::Tab& tab, const Geo& g, vec2 orig
         }
         const color dim = pal.text_dim;
         p.text_left(rect{{x0 + c.mod_x, y}, {x0 + c.type_x - 8.0f, y + rh}}, core::path::format_time(e.modified), dim, f.body, 10.0f);
-        p.text_left(rect{{x0 + c.type_x, y}, {x0 + c.size_x - 8.0f, y + rh}}, core::type_label(e.kind, e.ext()), dim, f.body, 10.0f);
+        p.text_left(rect{{x0 + c.type_x, y}, {x0 + c.size_x - 8.0f, y + rh}},
+                    e.original.empty() ? std::string{core::type_label(e.kind, e.ext())} : core::path::parent(e.original), dim, f.body, 10.0f);
         if (!e.is_dir()) {
             p.text_right(rect{{x0 + c.size_x, y}, {x0 + c.end_x, y + rh}}, core::path::format_size(e.size), dim, f.body, 14.0f);
         } else if (env_.settings.folder_sizes) {
@@ -951,6 +954,7 @@ void FileList::context_menu(Painter& p, model::Tab& tab, const rect& area)
             if (ui.menu_item(tr("Delete permanently"), "Del")) { env_.cmd.request_delete(selected_paths(tab), true); }
             ui.menu_separator();
             if (ui.menu_item(tr("Copy"), env_.binds.text("copy"))) { copy_selection(tab, false); }
+            if (ui.menu_item(tr("Properties"), env_.binds.text("properties"))) { env_.cmd.open_properties(selected_paths(tab)); }
         }
         return;
     }
@@ -1005,7 +1009,7 @@ void FileList::context_menu(Painter& p, model::Tab& tab, const rect& area)
                 }
                 if (!rest.empty()) {
                     ui.menu_separator();
-                    draw_shell_items(ui, rest, false);
+                    shell_page_.draw_items(ui, rest, false);
                 }
             }
         }
@@ -1024,7 +1028,7 @@ void FileList::context_menu(Painter& p, model::Tab& tab, const rect& area)
         if (ui.menu_item(tr("Properties"), env_.binds.text("properties"))) { env_.cmd.open_properties({tab.path()}); }
         // (one submenu: installed tools add a dozen rows, more than the window is tall)
         if (!shell_items.empty()) {
-            if (auto more = ui.menu(tr("More options"))) { draw_shell_page(ui, shell_items); }
+            if (auto more = ui.menu(tr("More options"))) { shell_page_.draw(ui, shell_items); }
         }
         if (!tab.path().empty() && !tab.searching()) {
             ui.menu_separator();
@@ -1113,81 +1117,11 @@ void FileList::context_menu(Painter& p, model::Tab& tab, const rect& area)
     if (ui.menu_item(tr("Show in File Explorer"))) { (void)core::shell::reveal_in_explorer(full); }
     if (ui.menu_item(tr("Properties"), env_.binds.text("properties"))) { env_.cmd.open_properties(selected_paths(tab)); }
     if (!shell_items.empty()) {
-        if (auto more = ui.menu(tr("More options"))) { draw_shell_page(ui, shell_items); }
+        if (auto more = ui.menu(tr("More options"))) { shell_page_.draw(ui, shell_items); }
     }
     ui.menu_separator();
     if (ui.menu_item(tr("Windows properties"))) { (void)core::shell::show_properties(full); }
     if (ui.menu_item(tr("Windows options"))) { (void)core::shell::show_native_menu(selected_paths(tab), env_.window.handle()); }
-}
-
-// the "More options" submenu. strata menus cannot leave the window, scroll, or nest well (a third level flips back over its
-// parent and the pointer loses it), so: a list taller than the window sits in a scrolling child, and an entry with
-// children (7-Zip, Send to ...) opens its list in place, with a row on top that goes back
-void FileList::draw_shell_page(context& ui, const std::vector<core::ShellMenuItem>& root)
-{
-    shell_page_drawn_ = true;
-
-    // follow the path of opened entries (it can be stale when the entries were read again)
-    const std::vector<core::ShellMenuItem>* items = &root;
-    std::string title;
-    std::size_t depth = 0;
-    for (; depth < shell_path_.size(); ++depth) {
-        const std::size_t i = shell_path_[depth];
-        if (i >= items->size() || (*items)[i].children.empty()) { break; }
-        title = (*items)[i].label;
-        items = &(*items)[i].children;
-    }
-    shell_path_.resize(depth);
-
-    if (depth > 0) {
-        menu_item_options back;
-        back.keep_open = true;
-        std::string label = "< " + title;
-        for (std::size_t i = 0; (i = label.find('&', i)) != std::string::npos; i += 2) { label.insert(i, 1, '&'); }
-        if (ui.menu_item(label + "##back", back)) { shell_path_.pop_back(); }
-        ui.menu_separator();
-    }
-
-    const float row_h  = env_.settings.compact ? 26.0f : 30.0f;
-    const float room   = std::max(row_h * 6.0f, ui.display_size().y - 110.0f);
-    const float wanted = row_h * static_cast<float>(items->size());
-    if (wanted <= room) {
-        draw_shell_items(ui, *items, true);
-    } else if (auto body = ui.child("##shell_more" + std::to_string(depth), {0.0f, room}, child_flags::no_padding)) {
-        draw_shell_items(ui, *items, true);
-    }
-}
-
-// `drill`: entries with children open in place (see draw_shell_page); otherwise they are strata submenus
-void FileList::draw_shell_items(context& ui, const std::vector<core::ShellMenuItem>& items, bool drill)
-{
-    for (std::size_t n = 0; n < items.size(); ++n) {
-        const core::ShellMenuItem& it = items[n];
-        if (it.separator) {
-            ui.menu_separator();
-            continue;
-        }
-        std::string label; // ('&' marks a mnemonic in strata menus)
-        for (const char c : it.label) {
-            label.push_back(c);
-            if (c == '&') { label.push_back('&'); }
-        }
-        if (!it.children.empty() && drill) {
-            menu_item_options o;
-            o.enabled   = it.enabled;
-            o.keep_open = true;
-            o.shortcut  = ">";
-            if (ui.menu_item(label + "##d" + std::to_string(n), o)) { shell_path_.push_back(n); }
-        } else if (!it.children.empty()) {
-            if (auto sub = ui.menu(label + "##s" + std::to_string(n), it.enabled)) { draw_shell_items(ui, it.children, false); }
-        } else {
-            menu_item_options o;
-            o.enabled = it.enabled;
-            if (it.icon != nullptr) { o.image = env_.images.raw(it.icon->key, it.icon->w, it.icon->h, it.icon->bgra).id; }
-            // (entries can share a label: the id keeps their hover animation and clicks apart)
-            if (ui.menu_item(label + "##c" + std::to_string(it.id), o)) { shell_menu_.invoke(it.id, env_.window.handle()); }
-        }
-    }
 }
 
 void FileList::frame(Painter& p, const rect& area, model::Tab& tab, const FrameInput& in, bool active)
@@ -1198,8 +1132,7 @@ void FileList::frame(Painter& p, const rect& area, model::Tab& tab, const FrameI
     model::Listing& L   = tab.listing();
     area_  = area;
     shown_ = &tab;
-    if (!shell_page_drawn_) { shell_path_.clear(); } // ("More options" was closed: next time it opens at the top)
-    shell_page_drawn_ = false;
+    shell_page_.begin_frame();
 
     PanelScope panel{ui, right_ ? "##files_r" : "##files", area};
 

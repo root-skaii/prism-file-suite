@@ -147,6 +147,7 @@ bool Application::init(const Options& opts)
     if (opts.settings) { shell_->show_settings(); }
     if (opts.palette) { shell_->show_palette(); }
     if (!opts.properties.empty()) { shell_->show_properties({opts.properties}, opts.properties_tab); }
+    if (!opts.usage.empty()) { shell_->show_usage(opts.usage); }
     apply_theme();
     shell_->open_window_hook = [this](const std::string& folder, bool has_at, int x, int y, int w, int h) {
         Options o;

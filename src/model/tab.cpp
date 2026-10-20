@@ -164,6 +164,7 @@ std::string Tab::title() const
     const std::string& p = path();
     if (p.empty()) { return "New tab"; }
     // (the bin's folder is named after your SID)
+    if (p == core::recycle::all) { return "Recycle Bin"; }
     if (core::recycle::inside(p) && core::text::lower_ascii(core::path::leaf(core::path::parent(p))) == "$recycle.bin") { return "Recycle Bin"; }
     return core::path::leaf(p);
 }

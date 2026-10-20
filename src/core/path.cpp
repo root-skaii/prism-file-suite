@@ -32,6 +32,8 @@ std::string leaf(std::string_view p)
 
 std::string join(std::string_view dir, std::string_view name)
 {
+    // (a listing that mixes folders, like the all-bins view, names its entries by full path)
+    if (name.size() >= 3 && name[1] == ':' && name[2] == '\\' && name[0] != ':') { return std::string{name}; }
     std::string r{dir};
     if (!r.empty() && r.back() != '\\') { r.push_back('\\'); }
     r += name;

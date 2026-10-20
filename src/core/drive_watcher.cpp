@@ -57,10 +57,10 @@ void DriveWatcher::run(std::stop_token st)
         }
         if (st.stop_requested()) { return; }
         std::vector<Place> now = core::drives(); // (may take seconds: no lock held)
-        if (std::string bin = recycle::folder(); !bin.empty()) {
+        if (!recycle::folders().empty()) { // (one row for every drive's bin)
             Place p;
             p.name    = std::string{i18n::tr("Recycle Bin")};
-            p.path    = std::move(bin);
+            p.path    = std::string{recycle::all};
             p.recycle = true;
             now.push_back(std::move(p));
         }
