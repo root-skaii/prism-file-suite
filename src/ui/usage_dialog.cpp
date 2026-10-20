@@ -347,9 +347,11 @@ void UsageDialog::draw_overview(Painter& p, const core::UsageNode& cur)
         if (hot_ == s.id) { p.dl().rect_filled(cell, pal.hover, 6.0f); }
         const float cy = cell.center().y;
         p.dl().rect_filled(rect::from_size({cell.min.x + 9.0f, cy - 5.0f}, {10.0f, 10.0f}), hue_of(static_cast<std::size_t>(s.id), pal), 3.0f);
-        p.text_left(rect{{cell.min.x + 28.0f, cell.min.y}, {cell.max.x - 136.0f, cell.max.y}}, s.name, s.node != nullptr ? pal.text : pal.text_dim, f.body);
-        p.text_right(rect{{cell.max.x - 136.0f, cell.min.y}, {cell.max.x - 54.0f, cell.max.y}}, core::path::format_size(s.bytes), pal.text, f.body);
-        p.text_right(rect{{cell.max.x - 54.0f, cell.min.y}, cell.max}, percent(static_cast<double>(s.bytes) / total), pal.text_dim, f.small, 8.0f);
+        // a narrow dialog drops the percent so the names keep their room (the ring and the list still show it)
+        const float pct_w = cw >= 330.0f ? 54.0f : 0.0f;
+        p.text_left(rect{{cell.min.x + 28.0f, cell.min.y}, {cell.max.x - 82.0f - pct_w, cell.max.y}}, s.name, s.node != nullptr ? pal.text : pal.text_dim, f.body);
+        p.text_right(rect{{cell.max.x - 82.0f - pct_w, cell.min.y}, {cell.max.x - pct_w, cell.max.y}}, core::path::format_size(s.bytes), pal.text, f.body, pct_w > 0.0f ? 0.0f : 8.0f);
+        if (pct_w > 0.0f) { p.text_right(rect{{cell.max.x - pct_w, cell.min.y}, cell.max}, percent(static_cast<double>(s.bytes) / total), pal.text_dim, f.small, 8.0f); }
     }
 
     if (hot >= 0) { hot_next_ = hot; }
@@ -750,11 +752,16 @@ void UsageDialog::frame(Painter& p)
         const item_result hint = ui.custom_item("##du_hint", {ui.content_width() - bw_back - bw_scan - bw_show - 40.0f, kit.control_h()});
         if (pick_.node != nullptr) {
             const double share = cur.bytes > 0 ? static_cast<double>(pick_.node->bytes) / static_cast<double>(cur.bytes) : 0.0;
-            const std::string line = trf("{}  -  {}  -  ", pick_.node->name, core::path::format_size(pick_.node->bytes)) + percent(share) + "  -  "
+            // the numbers keep their room; a long name (or a wide language) is what gets cut
+            const std::string info = core::path::format_size(pick_.node->bytes) + "  -  " + percent(share) + "  -  "
                                    + trf_n("{} file", "{} files", static_cast<long long>(pick_.node->files), pick_.node->files);
-            p.text_left(hint.bounds, line, pal.text, f.small, 4.0f);
+            const float iw = p.measure(f.small, info).x;
+            const float nw = std::min(p.measure(f.small, pick_.node->name).x + 8.0f, std::max(0.0f, hint.bounds.width() - iw - 24.0f));
+            const rect  nr{{hint.bounds.min.x, hint.bounds.min.y}, {hint.bounds.min.x + nw, hint.bounds.max.y}};
+            if (nw > 24.0f) { p.text_left(nr, pick_.node->name, pal.text, f.small, 4.0f); }
+            p.text_left(rect{{hint.bounds.min.x + (nw > 24.0f ? nw + 8.0f : 0.0f), hint.bounds.min.y}, hint.bounds.max}, info, pal.text_dim, f.small, 4.0f);
         } else {
-            p.text_left(hint.bounds, tr("Double click opens a folder or file. Right click for more. Click a column to sort."), pal.text_dim, f.small, 4.0f);
+            p.text_left(hint.bounds, tr("Double click to open, right click for more"), pal.text_dim, f.small, 4.0f);
         }
         if (can_back) {
             ui.same_line();

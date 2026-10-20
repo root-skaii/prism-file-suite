@@ -195,9 +195,9 @@ void Toolbar::help_popup(Painter& p, model::Tab& tab)
         }
     }
     const rect foot = ui.custom_item("##help_foot", {540.0f, 56.0f}).bounds;
-    p.text_left(rect{foot.min, {foot.max.x, foot.min.y + 18.0f}}, tr("This folder filters the list as you type."), pal.text_dim, f.small, 8.0f);
-    p.text_left(rect{{foot.min.x, foot.min.y + 18.0f}, {foot.max.x, foot.min.y + 36.0f}}, tr("Subfolders searches everything below it: press Enter  (Ctrl+Enter from This folder)."), pal.text_dim, f.small, 8.0f);
-    p.text_left(rect{{foot.min.x, foot.min.y + 36.0f}, {foot.max.x, foot.max.y}}, tr("Aa matches case. .* reads plain words as regular expressions. Esc clears."), pal.text_dim, f.small, 8.0f);
+    p.text_left(rect{foot.min, {foot.max.x, foot.min.y + 18.0f}}, tr("This folder filters the list as you type"), pal.text_dim, f.small, 8.0f);
+    p.text_left(rect{{foot.min.x, foot.min.y + 18.0f}, {foot.max.x, foot.min.y + 36.0f}}, tr("Subfolders searches everything below it: press Enter  (Ctrl+Enter from This folder)"), pal.text_dim, f.small, 8.0f);
+    p.text_left(rect{{foot.min.x, foot.min.y + 36.0f}, {foot.max.x, foot.max.y}}, tr("Aa matches case, .* reads plain words as regular expressions, Esc clears"), pal.text_dim, f.small, 8.0f);
 }
 
 void Toolbar::address(Painter& p, float area_x, float area_y, float width, float height)

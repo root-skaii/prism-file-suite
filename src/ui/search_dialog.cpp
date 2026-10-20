@@ -105,7 +105,7 @@ void SearchDialog::frame(Painter& p)
     {
         const item_result r = ui.custom_item("##se_status", {ui.content_width(), 28.0f});
         std::string line;
-        if (text_.empty()) { line = tr("Names only. Words are all required; | means or; -word leaves it out."); }
+        if (text_.empty()) { line = tr("Names only - all words are required, | means or, -word leaves it out"); }
         else if (stale && index_.searching()) { line = tr("Searching ..."); }
         else if (res.total == 0) { line = tr("Nothing found"); }
         else { line = trf("{} found{}  ({:.0f} ms)", res.total, res.total > res.hits.size() ? trf(", the first {} are listed", res.hits.size()) : std::string{}, res.milliseconds); }

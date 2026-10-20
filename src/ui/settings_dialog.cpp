@@ -205,8 +205,8 @@ bool SettingsDialog::frame(Painter& p)
             if (kit.switch_row("##sw_confirm", tr("Ask before deleting"), tr("Before a file goes to the Recycle Bin"), s.confirm_delete, true)) { changed = true; }
             if (kit.switch_row("##sw_tabs", tr("Open my tabs again next time"), {}, s.restore_tabs, true)) { changed = true; }
             if (kit.switch_row("##sw_background", tr("Run in the background"), tr("Stay in the tray after the last window is closed"), s.background, true)) { changed = true; }
-            if (kit.switch_row("##sw_index", tr("Index drives for instant search"), trf("Lets Search everywhere ({}) find files instantly.", key_hint(env_.binds, "search_everywhere")), s.index_drives, true)) { changed = true; }
-            if (kit.switch_row("##sw_copyengine",tr("Copy and move in PrismFS"), tr("Shows progress with pause and cancel. When off, Windows' own copy window is used."), s.builtin_copy, true)) { changed = true; }
+            if (kit.switch_row("##sw_index", tr("Index drives for instant search"), trf("Lets Search everywhere ({}) find files instantly", key_hint(env_.binds, "search_everywhere")), s.index_drives, true)) { changed = true; }
+            if (kit.switch_row("##sw_copyengine",tr("Copy and move in PrismFS"), tr("Shows progress with pause and cancel; when off, Windows' own copy window is used"), s.builtin_copy, true)) { changed = true; }
             if (kit.switch_row("##sw_archives",tr("Archive support"), tr("Enter on a zip, 7z or tar shows what is inside; adds Extract and Compress. When off, archives open with Windows' default app"), s.browse_archives, true)) { changed = true; }
             if (kit.switch_row("##sw_shellmenu", tr("Windows context menu entries"), tr("Open with Code, 7-Zip and the other entries Explorer shows"), s.shell_menu, false)) { changed = true; }
             kit.card_end("##card_beh");
@@ -233,21 +233,21 @@ bool SettingsDialog::frame(Painter& p)
                     s.sort_ascending = dir == 0;
                     changed = true;
                 }
-                if (kit.switch_row("##sw_natural", tr("Numbers in order"), tr("Puts file2 before file10. When off, names are sorted strictly letter by letter."), s.sort_natural, true)) { changed = true; }
+                if (kit.switch_row("##sw_natural", tr("Numbers in order"), tr("Puts file2 before file10; when off, names are sorted strictly letter by letter"), s.sort_natural, true)) { changed = true; }
                 if (kit.switch_row("##sw_hiddenlast", tr("Hidden files last"), tr("Dot files and hidden items go after the rest of their group"), s.sort_hidden_last, true)) { changed = true; }
-                if (kit.switch_row("##sw_perfolder", tr("Remember the order per folder"), tr("A column you click is remembered for that folder only. When off, it sets the order for every folder."), s.sort_per_folder, false)) { changed = true; }
+                if (kit.switch_row("##sw_perfolder", tr("Remember the order per folder"), tr("A column you click is remembered for that folder only; when off, it sets the order for every folder"), s.sort_per_folder, false)) { changed = true; }
                 kit.card_end("##card_sort");
             }
 
             // Windows: who opens folders for other programs. per user, nothing needs admin rights, and off puts Explorer back
             kit.card_begin("##card_sys", tr("Windows"), (kit.row_h() + 16.0f) * 2.0f);
-            if (kit.switch_row("##sw_default", tr("Open folders from other apps with PrismFS"), tr("Folders opened by other apps use PrismFS instead of Windows Explorer. Win+E and the taskbar still open Explorer."), default_manager_, false)) {
+            if (kit.switch_row("##sw_default", tr("Open folders from other apps with PrismFS"), tr("Folders opened by other apps use PrismFS instead of Windows Explorer; Win+E and the taskbar still open Explorer"), default_manager_, false)) {
                 if (!core::set_default_manager(default_manager_)) {
                     default_manager_ = !default_manager_;
                     env_.cmd.toast(tr("Windows would not change the setting"), toast_kind::error);
                 }
             }
-            if (kit.switch_row("##sw_bin", tr("Open the desktop Recycle Bin with PrismFS"), tr("Double-clicking the Recycle Bin icon opens it in PrismFS. Empty and Properties in its menu stay with Windows."), bin_handler_, false)) {
+            if (kit.switch_row("##sw_bin", tr("Open the desktop Recycle Bin with PrismFS"), tr("Double-clicking the Recycle Bin icon opens it in PrismFS; Empty and Properties in its menu stay with Windows"), bin_handler_, false)) {
                 if (!core::set_recycle_bin_handler(bin_handler_)) {
                     bin_handler_ = !bin_handler_;
                     env_.cmd.toast(tr("Windows would not change the setting"), toast_kind::error);
@@ -299,7 +299,7 @@ bool SettingsDialog::frame(Painter& p)
                 if (kit.switch_row("##sw_recent", tr("Recent folders"), tr("The folders you opened last"), recent_on, true)) { toggle_auto(Auto::recent, tr("Hide recent folders"), tr("Show recent folders")); }
                 bool frequent_on = lay.has_auto(Auto::frequent);
                 if (kit.switch_row("##sw_frequent", tr("Frequent folders"), tr("The ones you keep coming back to"), frequent_on, true)) { toggle_auto(Auto::frequent, tr("Hide frequent folders"), tr("Show frequent folders")); }
-                if (kit.switch_row("##sw_history", tr("Remember visited folders"), tr("Needed for the Recent and Frequent lists. When off, visited folders are not recorded."), s.track_history, false)) { changed = true; }
+                if (kit.switch_row("##sw_history", tr("Remember visited folders"), tr("Needed for the Recent and Frequent lists; when off, visited folders are not recorded"), s.track_history, false)) { changed = true; }
 
                 for (std::size_t i = 0; i < hidden.size(); ++i) {
                     const std::string root = hidden[i];
@@ -318,7 +318,7 @@ bool SettingsDialog::frame(Painter& p)
                 kit.hgap(8.0f);
                 if (kit.button({"##sb_paste", tr("Paste layout"), 0, Kit::ButtonKind::secondary, true, tr("Use a sidebar copied from here or from a friend"), 0.0f})) { env_.cmd.paste_sidebar(); }
                 kit.hgap(8.0f);
-                if (kit.button({"##sb_reset", tr("Reset"), 0, Kit::ButtonKind::ghost, true, tr("Restores Quick access and This PC."), 0.0f})) {
+                if (kit.button({"##sb_reset", tr("Reset"), 0, Kit::ButtonKind::ghost, true, tr("Restores Quick access and This PC"), 0.0f})) {
                     (void)env_.cmd.edit_sidebar(tr("Reset sidebar"), [](model::SidebarLayout& l) { l.reset(); });
                 }
                 kit.vgap(8.0f);
@@ -330,7 +330,7 @@ bool SettingsDialog::frame(Painter& p)
             // the pointer crossed it and stall the page. its height is measured and the card follows one frame behind
             kit.card_begin("##card_keys", tr("Keyboard shortcuts"), 32.0f + keys_h_ + 8.0f);
             const item_result hint = ui.custom_item("##keys_hint", {ui.content_width(), 32.0f});
-            p.text_left(hint.bounds, trf("Click a field and press the new keys.  {} searches every command.", key_hint(env_.binds, "palette")), pal.text_dim, f.small, Kit::pad());
+            p.text_left(hint.bounds, trf("Click a field and press the new keys  -  {} searches every command", key_hint(env_.binds, "palette")), pal.text_dim, f.small, Kit::pad());
             (void)ui.custom_item("##keys_lead", {Kit::pad(), 1.0f});
             ui.same_line();
             ui.set_next_item_width(ui.content_width() - Kit::pad() * 2.0f);
@@ -341,7 +341,7 @@ bool SettingsDialog::frame(Painter& p)
 
             // diagnostics: for "why is it slow to start / slow sometimes"
             kit.card_begin("##card_diag", tr("Diagnostics"), kit.row_h() + 16.0f + kit.control_h() + 14.0f);
-            if (kit.switch_row("##sw_log", tr("Write a log file"), tr("Records start-up steps and any slow frames or folders, with timings."), s.log_enabled, false)) { changed = true; }
+            if (kit.switch_row("##sw_log", tr("Write a log file"), tr("Records start-up steps and any slow frames or folders, with timings"), s.log_enabled, false)) { changed = true; }
             kit.vgap(6.0f);
             (void)ui.custom_item("##log_lead", {Kit::pad(), 1.0f});
             ui.same_line();

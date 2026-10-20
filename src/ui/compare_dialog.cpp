@@ -163,7 +163,7 @@ void CompareDialog::frame(Painter& p)
 
     if (shown_.empty()) {
         const item_result r = ui.custom_item("##cmp_none", {ui.content_width(), 80.0f});
-        p.text_center(r.bounds, tr("The two folders match."), pal.text_dim, f.body);
+        p.text_center(r.bounds, tr("The two folders match"), pal.text_dim, f.body);
         return;
     }
 
@@ -216,7 +216,7 @@ void CompareDialog::frame(Painter& p)
     const float bw_none = kit.button_width(tr("Skip all"), false);
     const float bw_ok   = kit.button_width(tr("Copy"), false, Kit::ButtonKind::primary) + 70.0f;
     const item_result sr = ui.custom_item("##cmp_sum", {ui.content_width() - bw_none - bw_ok - 24.0f, kit.control_h()});
-    p.text_left(sr.bounds, tr("Nothing is deleted. Click an arrow to change a row's direction."), pal.text_dim, f.small, 4.0f);
+    p.text_left(sr.bounds, tr("Nothing is deleted - click an arrow to change a row's direction"), pal.text_dim, f.small, 4.0f);
     ui.same_line();
     if (kit.button({"##cmp_none_b", tr("Skip all")})) {
         for (Act& a : acts_) { a = Act::skip; }

@@ -91,7 +91,7 @@ void DuplicatesDialog::frame(Painter& p)
     }
     if (groups_.empty()) {
         const item_result r = ui.custom_item("##dup_none", {ui.content_width(), 64.0f});
-        p.text_center(r.bounds, tr("No duplicates found here."), pal.text_dim, f.body);
+        p.text_center(r.bounds, tr("No duplicates found here"), pal.text_dim, f.body);
         return;
     }
 
@@ -101,7 +101,7 @@ void DuplicatesDialog::frame(Painter& p)
     }
     {
         const item_result r = ui.custom_item("##dup_sum", {ui.content_width(), 30.0f});
-        p.text_left(r.bounds, trf("{} sets of identical files. {} can be freed. Click a file to keep or remove it.", groups_.size(), core::path::format_size(scan_.reclaimable())), pal.text_dim, f.body, 4.0f);
+        p.text_left(r.bounds, trf("{} sets of identical files, {} can be freed - click a file to keep or remove it", groups_.size(), core::path::format_size(scan_.reclaimable())), pal.text_dim, f.body, 4.0f);
     }
 
     const float rowh = 30.0f;

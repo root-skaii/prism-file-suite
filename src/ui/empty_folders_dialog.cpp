@@ -69,7 +69,7 @@ void EmptyFoldersDialog::frame(Painter& p)
     }
     if (found_.empty()) {
         const item_result r = ui.custom_item("##ef_none", {ui.content_width(), 64.0f});
-        p.text_center(r.bounds, tr("No empty folders here."), pal.text_dim, f.body);
+        p.text_center(r.bounds, tr("No empty folders here"), pal.text_dim, f.body);
         return;
     }
 

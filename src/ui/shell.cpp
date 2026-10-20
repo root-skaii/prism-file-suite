@@ -293,7 +293,7 @@ void Shell::service_delete(context& ui)
     const char* const id = delete_permanent_ ? "pfs_delete_forever" : "pfs_delete";
     if (delete_ask_) {
         const long long n = static_cast<long long>(delete_paths_.size());
-        ui.ask_confirm(id, delete_permanent_ ? trf_n("Permanently delete {} item? This can't be undone.", "Permanently delete {} items? This can't be undone.", n, n)
+        ui.ask_confirm(id, delete_permanent_ ? trf_n("Permanently delete {} item? This can't be undone", "Permanently delete {} items? This can't be undone", n, n)
                                              : trf_n("Move {} item to the Recycle Bin?", "Move {} items to the Recycle Bin?", n, n));
         delete_ask_ = false;
     }
