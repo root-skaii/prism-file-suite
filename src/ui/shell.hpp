@@ -60,6 +60,8 @@ public:
     // the paths of the drag in progress: drawn as a ghost at the pointer (with what a drop would do) while it is over the window
     void set_dragging(std::vector<std::string> paths) { ghost_paths_ = std::move(paths); }
     void refresh_all();
+    void refresh_quiet();
+    void start_delete(core::OpKind kind, std::vector<std::string> paths);
     void drop_files(std::vector<std::string> paths, const std::string& dest, bool move);
     // files a drag offered without a path (remote files) that could not be received
     void drop_failed(std::size_t count);

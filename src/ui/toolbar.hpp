@@ -24,6 +24,10 @@ public:
     void begin_edit() noexcept { want_edit_ = true; }
     void focus_filter() noexcept { want_filter_focus_ = true; }
 
+    // dropping files on a breadcrumb segment moves / copies them into that folder ("" outside the segments)
+    [[nodiscard]] std::string drop_target_at(strata::vec2 p) const;
+    void set_drop_point(std::optional<strata::vec2> p) { drop_ = p; }
+
 private:
     [[nodiscard]] bool icon_button(Painter& p, std::string_view id, char32_t glyph, bool enabled, bool on, std::string_view tip, float size);
     void address(Painter& p, float x, float y, float width, float height);
@@ -58,6 +62,9 @@ private:
     std::string  check_target_;
     std::string  filter_text_;
     std::string  crumb_parent_, crumb_next_; // the dropdown's folder and the segment the path continues with
+    struct CrumbRect { strata::rect rect; std::string path; };
+    std::vector<CrumbRect> crumb_rects_; // the segments drawn last frame
+    std::optional<strata::vec2> drop_;
     std::string  crumb_ctx_path_;   // the folder the right click menu is about
     bool         crumb_ctx_paste_{}; // the clipboard held files when it opened (looked at once, not every frame)
     std::vector<std::string> crumb_dirs_;

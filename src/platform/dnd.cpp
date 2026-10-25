@@ -1,5 +1,7 @@
 #include "platform/dnd.hpp"
 
+#include "core/file_kind.hpp"
+#include "core/log.hpp"
 #include "core/path.hpp"
 #include "core/text.hpp"
 #include "core/virtual_files.hpp"
@@ -49,6 +51,7 @@ public:
     // IDropTarget
     HRESULT STDMETHODCALLTYPE DragEnter(IDataObject* data, DWORD keys, POINTL pt, DWORD* effect) override
     {
+        data_    = data;
         sources_ = read_paths(data);
         virtual_ = sources_.empty() && core::offers_virtual_files(data);
         *effect  = acceptable() ? decide(keys, pt, *effect) : DROPEFFECT_NONE;
@@ -61,6 +64,8 @@ public:
     }
     HRESULT STDMETHODCALLTYPE DragLeave() override
     {
+        leave_program();
+        data_.Reset();
         sources_.clear();
         virtual_ = false;
         if (cb_.hover) { cb_.hover(std::nullopt); }
@@ -73,10 +78,19 @@ public:
         virtual_ = paths.empty() && core::offers_virtual_files(data);
         sources_ = paths;
         const std::string dest = resolve(pt);
-        const DWORD eff = acceptable() ? decide(keys, pt, *effect) : DROPEFFECT_NONE;
+        // a program under the pointer was asked during the drag already: asking again here, with the button released, would look
+        // like a right-button drop to its handler (it answers with its own "Open with / Cancel" menu)
+        const bool on_program = program_ != nullptr && program_path_ == dest && core::is_program_name(dest);
+        const DWORD eff = on_program ? program_effect_ : (acceptable() ? decide(keys, pt, *effect) : DROPEFFECT_NONE);
         if (cb_.hover) { cb_.hover(std::nullopt); }
         if (eff != DROPEFFECT_NONE && !dest.empty()) {
-            if (virtual_) {
+            if (program_ != nullptr && program_path_ == dest) {
+                // the program's own drop handler runs it with the files (what Explorer does): nothing is copied here
+                DWORD program_effect = eff;
+                // (the keys of the drag: the button that was held, as the handler saw it all along)
+                if (FAILED(program_->Drop(data, last_keys_, pt, &program_effect))) { core::log::info("drop on {}: the program's drop handler failed", dest); }
+                program_.Reset();
+            } else if (virtual_) {
                 // the contents come from the other program while we wait (a download, for a remote file): into a staging folder
                 // first, then moved to the destination like any other drop
                 core::ReceivedFiles got = core::receive_virtual_files(data, staging_root());
@@ -88,6 +102,8 @@ public:
         }
         // the work is done here (shell dialogs included): the source must not move or delete anything itself
         *effect = DROPEFFECT_NONE;
+        leave_program();
+        data_.Reset();
         sources_.clear();
         virtual_ = false;
         if (cb_.redraw) { cb_.redraw(); }
@@ -96,6 +112,39 @@ public:
 
 private:
     [[nodiscard]] bool acceptable() const noexcept { return !sources_.empty() || virtual_; }
+
+    // a program / script / shortcut under the pointer: the shell's drop target for that file says whether (and how) it takes
+    // the files, exactly as in Explorer. null when it takes nothing (a ".bat" that is gone, a shortcut to a document ...)
+    [[nodiscard]] DWORD program_effect(const std::string& path, DWORD keys, POINTL pt, DWORD allowed)
+    {
+        if ((keys & (MK_LBUTTON | MK_RBUTTON | MK_MBUTTON)) != 0) { last_keys_ = keys; }
+        const DWORD offered = (allowed & DROPEFFECT_COPY) != 0 ? DROPEFFECT_COPY : DROPEFFECT_NONE;
+        if (offered == DROPEFFECT_NONE) { return DROPEFFECT_NONE; }
+        if (program_path_ != path) {
+            leave_program();
+            program_path_ = path;
+            ComPtr<IShellItem> item;
+            if (data_ != nullptr && SUCCEEDED(::SHCreateItemFromParsingName(core::text::widen(path).c_str(), nullptr, IID_PPV_ARGS(&item))) &&
+                SUCCEEDED(item->BindToHandler(nullptr, BHID_SFUIObject, IID_PPV_ARGS(&program_)))) {
+                DWORD effect = offered;
+                if (FAILED(program_->DragEnter(data_.Get(), keys, pt, &effect)) || effect == DROPEFFECT_NONE) { program_.Reset(); }
+                program_effect_ = effect & offered;
+            } else {
+                program_.Reset();
+            }
+        } else if (program_ != nullptr) {
+            DWORD effect = offered;
+            if (FAILED(program_->DragOver(keys, pt, &effect))) { effect = DROPEFFECT_NONE; }
+            program_effect_ = effect & offered;
+        }
+        return program_ != nullptr ? program_effect_ : DROPEFFECT_NONE;
+    }
+    void leave_program()
+    {
+        if (program_ != nullptr) { (void)program_->DragLeave(); }
+        program_.Reset();
+        program_path_.clear();
+    }
 
     // where files without a path on disk are collected; emptied folders from earlier drops are removed on the way
     [[nodiscard]] static std::string staging_root()
@@ -159,6 +208,11 @@ private:
         const std::string dest = cb_.resolve ? cb_.resolve(logical) : std::string{};
         if (cb_.redraw) { cb_.redraw(); }
         if (dest.empty()) { return DROPEFFECT_NONE; }
+        if (core::is_program_name(dest)) {
+            if (virtual_) { return DROPEFFECT_NONE; } // (nothing on disk to hand to a program)
+            return program_effect(dest, keys, pt, allowed);
+        }
+        leave_program();
         if (virtual_) {
             if (cb_.link && cb_.link(dest)) { return DROPEFFECT_NONE; } // (nothing on disk to pin)
             return (allowed & DROPEFFECT_COPY) != 0 ? DROPEFFECT_COPY : DROPEFFECT_NONE;
@@ -187,6 +241,11 @@ private:
     DropCallbacks            cb_;
     std::vector<std::string> sources_;
     bool                     virtual_{}; // the drag offers files with no path on disk (core/virtual_files)
+    ComPtr<IDataObject>      data_;      // the drag being handled (kept for the program's drop target)
+    ComPtr<IDropTarget>      program_;   // the shell's drop target of the program under the pointer
+    std::string              program_path_;
+    DWORD                    program_effect_{};
+    DWORD                    last_keys_{};   // the key state of the drag while a button was held
 };
 
 // --- the source ----------------------------------------------------------------------------------------------

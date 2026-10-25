@@ -257,12 +257,20 @@ void Shell::request_delete(std::vector<std::string> paths, bool permanent)
     if (paths.empty()) { return; }
     if (std::ranges::all_of(paths, [](const std::string& p) { return core::recycle::inside(p); })) { permanent = true; } // (nothing recycles twice)
     if (!permanent && !settings_.confirm_delete) {
-        ops_.start(core::OpKind::recycle, std::move(paths), {});
+        start_delete(core::OpKind::recycle, std::move(paths));
         return;
     }
     delete_paths_     = std::move(paths);
     delete_permanent_ = permanent;
     delete_ask_       = true;
+}
+
+// the shell takes a moment to delete: the rows go now, so the next click and Delete do not land on a file that is already leaving
+void Shell::start_delete(core::OpKind kind, std::vector<std::string> paths)
+{
+    for (std::size_t i = 0; i < env_.tabs.size(); ++i) { env_.tabs.at(i).forget(paths); }
+    if (right_tab_) { right_tab_->forget(paths); }
+    ops_.start(kind, std::move(paths), {});
 }
 
 void Shell::restore_from_bin(std::vector<std::string> items)
@@ -306,7 +314,7 @@ void Shell::service_delete(context& ui)
         result = 1;
     }
     if (result == 0) { return; }
-    if (result == 1) { ops_.start(delete_permanent_ ? core::OpKind::erase : core::OpKind::recycle, std::move(delete_paths_), {}); }
+    if (result == 1) { start_delete(delete_permanent_ ? core::OpKind::erase : core::OpKind::recycle, std::move(delete_paths_)); }
     delete_paths_.clear();
 }
 
@@ -427,6 +435,14 @@ void Shell::refresh_all()
     git_.invalidate();
     for (std::size_t i = 0; i < env_.tabs.size(); ++i) { env_.tabs.at(i).refresh(); }
     if (right_tab_) { right_tab_->refresh(); }
+}
+
+// after a file operation: a full reload would empty the list and drop the selection the user already made for the next one
+void Shell::refresh_quiet()
+{
+    git_.invalidate();
+    for (std::size_t i = 0; i < env_.tabs.size(); ++i) { env_.tabs.at(i).refresh_quiet(); }
+    if (right_tab_) { right_tab_->refresh_quiet(); }
 }
 
 void Shell::apply_deferred()
@@ -560,7 +576,7 @@ void Shell::service_ops()
                 }
             }
         }
-        refresh_all();
+        refresh_quiet();
     }
 }
 
@@ -787,6 +803,7 @@ std::string Shell::resolve_drop(vec2 p) const
 {
     if (const std::string s = sidebar_.drop_target_at(p); !s.empty()) { return s; }
     if (const std::string t = title_bar_.drop_target_at(p); !t.empty()) { return t; }
+    if (const std::string c = toolbar_.drop_target_at(p); !c.empty()) { return c; }
     if (const std::string r = file_list_r_.drop_target_at(p); !r.empty() && right_tab_) { return r; }
     return file_list_.drop_target_at(p);
 }
@@ -798,6 +815,7 @@ void Shell::set_drop_point(std::optional<vec2> p)
     ghost_at_ = p;
     sidebar_.set_drop_point(p);
     title_bar_.set_drop_point(p);
+    toolbar_.set_drop_point(p);
 }
 
 // a card that follows the pointer while files are dragged over the window, saying what a drop here would do
@@ -820,7 +838,10 @@ void Shell::draw_drag_ghost(Painter& p)
     const bool no_op = !dest.empty() && !Sidebar::is_pin_target(dest) &&
                        std::ranges::any_of(ghost_paths_, [&](const std::string& g) { return same_path(g, dest) || same_path(core::path::parent(g), dest); });
     if (Sidebar::is_pin_target(dest)) { action = tr("Pin to sidebar"); }
-    else if (!dest.empty() && !no_op) { action = trf("Drop in {}", core::path::leaf(dest)); }
+    else if (!dest.empty() && !no_op) {
+        const bool program = env_.settings.drop_on_programs && core::is_program_name(dest);
+        action = program ? trf("Open with {}", core::path::leaf(dest)) : trf("Drop in {}", core::path::leaf(dest));
+    }
 
     const float w1 = p.measure(f.body, what).x;
     const float w2 = action.empty() ? 0.0f : p.measure(f.small, action).x;

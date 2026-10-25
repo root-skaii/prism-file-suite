@@ -82,6 +82,22 @@ void Tab::refresh()
     load(true);
 }
 
+void Tab::refresh_quiet()
+{
+    if (path().empty() || searching()) { refresh(); return; }
+    quiet_dirty_ = true;
+}
+
+void Tab::forget(const std::vector<std::string>& paths)
+{
+    if (path().empty() || searching()) { return; }
+    std::unordered_set<std::string> names;
+    for (const std::string& p : paths) {
+        if (core::text::lower_ascii(core::path::parent(p)) == core::text::lower_ascii(path())) { names.insert(core::path::leaf(p)); }
+    }
+    listing_.remove_names(names);
+}
+
 void Tab::search(core::Query query)
 {
     if (path().empty() || query.empty() || !query.valid()) { return; }

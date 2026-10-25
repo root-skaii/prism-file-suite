@@ -22,6 +22,10 @@ public:
     bool forward();
     bool up();
     void refresh();
+    // re-reads in the background and swaps the entries in when done: selection and scroll stay, the list never empties
+    void refresh_quiet();
+    // paths whose deletion just started: the ones inside this folder leave the list now
+    void forget(const std::vector<std::string>& paths);
     // recursive search below the current folder; results stream into the listing until clear_search(). an invalid or
     // empty query does nothing
     void search(core::Query query);

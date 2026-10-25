@@ -19,6 +19,7 @@ struct Settings {
     bool  confirm_delete{false}; // ask before moving to the recycle bin (deleting for good always asks)
     bool  restore_tabs{true};
     bool  background{true};      // PrismFS keeps running after the last window closes, with a notification-area icon (open / settings / exit); off: the last window quits it
+    bool  drop_on_programs{true}; // dropping files on a program (or script, shortcut) in the list runs it with them, like Explorer
     bool  detached_menus{false}; // experimental: menus may reach past the window edge (drawn in a window of their own)
     bool  shell_menu{true};     // the right-click menu also lists Explorer's own entries (Open with Code, 7-Zip, New ...)
     bool  browse_archives{true}; // Enter on a zip / 7z / tar opens it as a folder (a temporary unpacked copy) instead of the default app

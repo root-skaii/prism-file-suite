@@ -200,7 +200,7 @@ bool SettingsDialog::frame(Painter& p)
             if (kit.switch_row("##sw_compact", tr("Compact density"), tr("Smaller rows in the file list"), s.compact, false)) { changed = true; }
             kit.card_end("##card_look");
 
-            kit.card_begin("##card_beh", tr("Behavior"), kit.row_h() * 9.0f + 16.0f * 7.0f);
+            kit.card_begin("##card_beh", tr("Behavior"), kit.row_h() * 10.0f + 16.0f * 8.0f);
             if (kit.switch_row("##sw_hidden", tr("Show hidden files"), {}, s.show_hidden, true)) { changed = true; }
             if (kit.switch_row("##sw_confirm", tr("Ask before deleting"), tr("Before a file goes to the Recycle Bin"), s.confirm_delete, true)) { changed = true; }
             if (kit.switch_row("##sw_tabs", tr("Open my tabs again next time"), {}, s.restore_tabs, true)) { changed = true; }
@@ -209,6 +209,7 @@ bool SettingsDialog::frame(Painter& p)
             if (kit.switch_row("##sw_copyengine",tr("Copy and move in PrismFS"), tr("Shows progress with pause and cancel; when off, Windows' own copy window is used"), s.builtin_copy, true)) { changed = true; }
             if (kit.switch_row("##sw_archives",tr("Archive support"), tr("Enter on a zip, 7z or tar shows what is inside; adds Extract and Compress. When off, archives open with Windows' default app"), s.browse_archives, true)) { changed = true; }
             if (kit.switch_row("##sw_shellmenu", tr("Windows context menu entries"), tr("Open with Code, 7-Zip and the other entries Explorer shows"), s.shell_menu, false)) { changed = true; }
+            if (kit.switch_row("##sw_dropprog", tr("Drop files on a program to open them with it"), tr("Like Explorer: drag files onto an .exe, script or shortcut in the list"), s.drop_on_programs, false)) { changed = true; }
             if (kit.switch_row("##sw_detached", tr("Menus may leave the window (experimental)"), tr("Context menus can reach past the window edge, over the desktop"), s.detached_menus, false)) { changed = true; }
             kit.card_end("##card_beh");
 

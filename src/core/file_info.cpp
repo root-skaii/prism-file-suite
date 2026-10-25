@@ -95,10 +95,18 @@ FileInfo query_file_info(const std::string& p)
             f.file_id    = pack(bi.nFileIndexHigh, bi.nFileIndexLow);
         }
         if ((f.attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
-            wchar_t fin[MAX_PATH * 2]{};
-            if (::GetFinalPathNameByHandleW(h, fin, MAX_PATH * 2, FILE_NAME_NORMALIZED) > 0) {
+            // (the first call says how much room the path needs: it can be far longer than MAX_PATH)
+            std::wstring fin(MAX_PATH, L'\0');
+            DWORD got = ::GetFinalPathNameByHandleW(h, fin.data(), static_cast<DWORD>(fin.size()), FILE_NAME_NORMALIZED);
+            if (got >= fin.size()) {
+                fin.assign(got + 1, L'\0');
+                got = ::GetFinalPathNameByHandleW(h, fin.data(), static_cast<DWORD>(fin.size()), FILE_NAME_NORMALIZED);
+            }
+            if (got > 0 && got < fin.size()) {
+                fin.resize(got);
                 std::string t = text::narrow(fin);
-                if (t.rfind("\\\\?\\", 0) == 0) { t.erase(0, 4); }
+                if (t.rfind("\\\\?\\UNC\\", 0) == 0) { t = "\\\\" + t.substr(8); }
+                else if (t.rfind("\\\\?\\", 0) == 0) { t.erase(0, 4); }
                 if (t != p) { f.link_target = t; }
             }
         }

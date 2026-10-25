@@ -202,12 +202,21 @@ void Toolbar::help_popup(Painter& p, model::Tab& tab)
     p.text_left(rect{{foot.min.x, foot.min.y + 36.0f}, {foot.max.x, foot.max.y}}, tr("Aa matches case, .* reads plain words as regular expressions, Esc clears"), pal.text_dim, f.small, 8.0f);
 }
 
+std::string Toolbar::drop_target_at(vec2 p) const
+{
+    for (const CrumbRect& c : crumb_rects_) {
+        if (c.rect.contains(p)) { return c.path; }
+    }
+    return {};
+}
+
 void Toolbar::address(Painter& p, float area_x, float area_y, float width, float height)
 {
     context&       ui  = p.ui();
     const Palette& pal = p.pal();
     const FontSet& f   = env_.fonts;
     model::Tab&    tab = env_.tab();
+    crumb_rects_.clear();
 
     if (want_edit_) {
         want_edit_ = false;
@@ -326,6 +335,8 @@ void Toolbar::address(Painter& p, float area_x, float area_y, float width, float
     for (std::size_t i = first; i < segs.size(); ++i) {
         const rect cell{{x, box.min.y + 4.0f}, {x + segs[i].w, box.max.y - 4.0f}};
         const bool hot = r.hovered && cell.contains(mp);
+        crumb_rects_.push_back({cell, segs[i].path});
+        if (drop_ && cell.contains(*drop_)) { p.dl().rect_outline(cell, pal.accent, 6.0f, 2.0f); }
         if (hot) {
             over_segment = true;
             p.dl().rect_filled(cell, r.held ? pal.pressed : pal.hover, 6.0f);

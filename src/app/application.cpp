@@ -362,7 +362,8 @@ bool Application::present_frame()
     bool         detach = false;
     strata::vec2 origin{};
     int          sx = 0, sy = 0, w = 0, h = 0;
-    if (settings_.detached_menus && !popup_failed_ && popup_.created() && frame.overlay_first < frame.commands.size() && !frame.overlay_bounds.empty()) {
+    // (only a menu goes: the layers also hold toasts and the drag card, which slide in from outside the window every time)
+    if (settings_.detached_menus && !popup_failed_ && popup_.created() && ui_->menu_open() && frame.overlay_first < frame.commands.size() && !frame.overlay_bounds.empty()) {
         const strata::rect& b = frame.overlay_bounds;
         detach = b.min.x < 0.0f || b.min.y < 0.0f || b.max.x > frame.display_size.x || b.max.y > frame.display_size.y;
         if (detach) {

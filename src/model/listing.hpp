@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 namespace prism::model {
@@ -42,6 +43,8 @@ public:
     void finish();
     // swaps in a fresh read of the same folder without a reload flash: selection, focus and anchor follow the names
     void replace_entries(std::vector<core::FileEntry>&& fresh);
+    // takes entries out at once (a delete just started); a later read of the folder corrects it if the delete failed
+    void remove_names(const std::unordered_set<std::string>& names);
     [[nodiscard]] bool finished() const noexcept { return finished_; }
 
     void set_sort(SortSpec s);

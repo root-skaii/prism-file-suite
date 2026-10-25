@@ -17,6 +17,10 @@ enum class FileKind : std::uint8_t {
 // `ext` is lower-case without the dot ("" = none)
 [[nodiscard]] FileKind classify_extension(std::string_view ext) noexcept;
 
+// a file the shell lets you drop other files on to run it with them as arguments (programs, batch files, shortcuts). only a
+// candidate: the shell's own drop handler for the file has the last word
+[[nodiscard]] bool is_program_name(std::string_view name) noexcept;
+
 // "PNG File", "Folder", "Text Document": what explorer's Type column shows (no shell lookup, so it is instant)
 [[nodiscard]] std::string type_label(FileKind kind, std::string_view ext);
 

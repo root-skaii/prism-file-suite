@@ -120,6 +120,7 @@ void Settings::load()
     background     = c.get_bool("behavior", "background", c.get_bool("behavior", "tray", background)); // ("tray" was the older name: keep what was chosen)
     shell_menu     = c.get_bool("behavior", "shell_menu", shell_menu);
     detached_menus = c.get_bool("behavior", "detached_menus", detached_menus);
+    drop_on_programs = c.get_bool("behavior", "drop_on_programs", drop_on_programs);
     track_history  = c.get_bool("behavior", "track_history", track_history);
     browse_archives = c.get_bool("behavior", "browse_archives", browse_archives);
     builtin_copy    = c.get_bool("behavior", "builtin_copy", builtin_copy);
@@ -167,6 +168,7 @@ void Settings::save() const
     c.set_bool("behavior", "background", background);
     c.set_bool("behavior", "shell_menu", shell_menu);
     c.set_bool("behavior", "detached_menus", detached_menus);
+    c.set_bool("behavior", "drop_on_programs", drop_on_programs);
     c.set_bool("behavior", "track_history", track_history);
     c.set_bool("behavior", "browse_archives", browse_archives);
     c.set_bool("behavior", "builtin_copy", builtin_copy);

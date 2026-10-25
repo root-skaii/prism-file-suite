@@ -209,13 +209,19 @@ int FileList::index_at(const Geo& g, vec2 origin, vec2 p, std::size_t rows) cons
     return i < rows ? static_cast<int>(i) : -1;
 }
 
+// a row files can be dropped on: a folder, or (like Explorer) a program / script / shortcut that is run with them
+bool FileList::accepts_drop(const core::FileEntry& e) const
+{
+    return e.is_dir() || (env_.settings.drop_on_programs && core::is_program_name(e.name));
+}
+
 std::string FileList::drop_target_at(vec2 p) const
 {
     if (shown_ == nullptr || !area_.contains(p)) { return {}; }
     const model::Listing& L = shown_->listing();
     if (viewport_.contains(p)) {
         const int i = index_at(geo_, origin_, p, L.rows());
-        if (i >= 0 && L.at(static_cast<std::size_t>(i)).is_dir()) { return core::path::join(shown_->path(), L.at(static_cast<std::size_t>(i)).name); }
+        if (i >= 0 && accepts_drop(L.at(static_cast<std::size_t>(i)))) { return core::path::join(shown_->path(), L.at(static_cast<std::size_t>(i)).name); }
     }
     return shown_->path();
 }
@@ -223,8 +229,7 @@ std::string FileList::drop_target_at(vec2 p) const
 // --- navigation ---------------------------------------------------------------------------------------------
 
 void FileList::open_row(model::Tab& tab, std::size_t row)
-{
-    const core::FileEntry& e = tab.listing().at(row);
+{    const core::FileEntry& e = tab.listing().at(row);
     const std::string full = core::path::join(tab.path(), e.name);
     if (e.is_dir()) {
         tab.navigate(full);
@@ -792,7 +797,7 @@ void FileList::draw_details(Painter& p, model::Tab& tab, const Geo& g, vec2 orig
             p.dl().rect_filled(rect::from_size({row.min.x, row.center().y - 8.0f}, {3.0f, 16.0f}), pal.accent, 1.5f);
         }
         if (keyboard_mode_ && L.focus() == i) { p.dl().rect_outline(row, pal.selection_edge, 8.0f, 1.5f); }
-        if (drop_point_ && e.is_dir() && static_cast<int>(i) == hover) { p.dl().rect_outline(row, pal.accent, 8.0f, 2.0f); }
+        if (drop_point_ && accepts_drop(e) && static_cast<int>(i) == hover) { p.dl().rect_outline(row, pal.accent, 8.0f, 2.0f); }
 
         const bool cut = is_cut(tab, e.name);
         if (cut) { p.dl().push_alpha(0.45f); }
@@ -894,7 +899,7 @@ void FileList::draw_grid(Painter& p, model::Tab& tab, const Geo& g, vec2 origin,
             p.dl().rect_outline(cell, pal.selection_edge, 11.0f, 1.0f);
         }
         if (keyboard_mode_ && L.focus() == i) { p.dl().rect_outline(cell, pal.selection_edge, 11.0f, 1.5f); }
-        if (drop_point_ && e.is_dir() && static_cast<int>(i) == hover) { p.dl().rect_outline(cell, pal.accent, 11.0f, 2.0f); }
+        if (drop_point_ && accepts_drop(e) && static_cast<int>(i) == hover) { p.dl().rect_outline(cell, pal.accent, 11.0f, 2.0f); }
 
         const bool cut = is_cut(tab, e.name);
         if (cut) { p.dl().push_alpha(0.45f); }
@@ -1200,8 +1205,11 @@ void FileList::frame(Painter& p, const rect& area, model::Tab& tab, const FrameI
     int hover = -1;
     if ((cv.hovered || drop_point_) && vp.contains(mp)) { hover = index_at(g, origin, mp, L.rows()); }
     if (cv.hovered && vp.contains(ui.mouse_pos())) {
+        // a double click needs both clicks on the same item: after a delete the next file slides under the pointer
         if (ui.mouse_clicked(mouse_button::left)) {
             keyboard_mode_ = false;
+            prev_click_ = std::move(click_name_);
+            click_name_ = hover >= 0 ? L.at(static_cast<std::size_t>(hover)).name : std::string{};
             env_.right_active = right_;
             if (hover >= 0) {
                 const auto row = static_cast<std::size_t>(hover);
@@ -1230,7 +1238,7 @@ void FileList::frame(Painter& p, const rect& area, model::Tab& tab, const FrameI
                 band_base_   = band_ctrl_ ? L.selected_rows() : std::vector<std::size_t>{};
             }
         }
-        if (dbl && hover >= 0 && !ui.ctrl_down() && !ui.shift_down()) {
+        if (dbl && hover >= 0 && !ui.ctrl_down() && !ui.shift_down() && L.at(static_cast<std::size_t>(hover)).name == prev_click_) {
             collapse_row_ = -1;
             drag_armed_   = false;
             open_row(tab, static_cast<std::size_t>(hover));

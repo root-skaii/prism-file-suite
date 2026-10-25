@@ -34,6 +34,7 @@ public:
     // drag and drop: the folder under a point (logical), "" if the point is outside this pane; and the pointer while
     // a drag from elsewhere is over the window (nullopt: none)
     [[nodiscard]] std::string drop_target_at(strata::vec2 p) const;
+    [[nodiscard]] bool accepts_drop(const core::FileEntry& e) const;
     void set_drop_point(std::optional<strata::vec2> p) { drop_point_ = p; }
     [[nodiscard]] bool contains(strata::vec2 p) const { return area_.contains(p); }
 
@@ -127,6 +128,7 @@ private:
     strata::vec2             band_anchor_{};
     std::vector<std::size_t> band_base_;   // what was selected when it began (kept with Ctrl)
     std::optional<strata::vec2> drop_point_;
+    std::string                 click_name_, prev_click_; // the items the last two left clicks landed on
 };
 
 } // namespace prism::ui

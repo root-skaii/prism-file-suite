@@ -143,6 +143,17 @@ void Listing::replace_entries(std::vector<FileEntry>&& fresh)
     rebuild();
 }
 
+void Listing::remove_names(const std::unordered_set<std::string>& names)
+{
+    if (!finished_ || names.empty()) { return; }
+    std::vector<FileEntry> kept;
+    kept.reserve(entries_.size());
+    for (const FileEntry& e : entries_) {
+        if (names.count(e.name) == 0) { kept.push_back(e); }
+    }
+    if (kept.size() != entries_.size()) { replace_entries(std::move(kept)); }
+}
+
 void Listing::set_sort(SortSpec s)
 {
     if (s == sort_) { return; }

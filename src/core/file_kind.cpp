@@ -45,6 +45,18 @@ const std::unordered_map<std::string_view, FileKind>& table()
 
 } // namespace
 
+bool is_program_name(std::string_view name) noexcept
+{
+    const std::size_t dot = name.find_last_of('.');
+    if (dot == std::string_view::npos || dot + 1 >= name.size()) { return false; }
+    const std::string_view ext = name.substr(dot + 1);
+    if (ext.size() > 3) { return false; }
+    char lower[4]{};
+    for (std::size_t i = 0; i < ext.size(); ++i) { lower[i] = static_cast<char>(ext[i] >= 'A' && ext[i] <= 'Z' ? ext[i] + ('a' - 'A') : ext[i]); }
+    const std::string_view e{lower, ext.size()};
+    return e == "exe" || e == "com" || e == "bat" || e == "cmd" || e == "scr" || e == "lnk";
+}
+
 FileKind classify_extension(std::string_view ext) noexcept
 {
     if (ext.empty()) { return FileKind::other; }
