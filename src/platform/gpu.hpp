@@ -37,6 +37,10 @@ public:
     void wait_for_frame() const;   // returns when the swap chain can take a frame (least input lag)
     // draws `ui`'s last frame over `clear` and presents. false: the device was lost (call recreate)
     [[nodiscard]] bool present(strata::context& ui, strata::color clear);
+    // the same for a frame the caller has already split (see strata::draw_data::head): only these commands go to the window
+    [[nodiscard]] bool present(const strata::draw_data& frame, strata::color clear);
+    [[nodiscard]] ID3D11Device*        device() const noexcept;   // shared with the popup surface
+    [[nodiscard]] ID3D11DeviceContext* context() const noexcept;
     [[nodiscard]] bool recreate(strata::context& ui);
     void update_atlas(strata::context& ui); // after set_scale / glyph-set changes
 

@@ -100,18 +100,8 @@ void Host::apply_background()
 
 int Host::run(const Application::Options& first, bool serve)
 {
-    ui::register_actions(binds_);
-    settings_.binds = &binds_;
-    settings_.load();
-    {
-        const std::string p = ui::Settings::file_path(); // (crash reports go in a folder beside the settings)
-        core::crash::set_directory(core::text::widen(p.substr(0, p.find_last_of('\\') == std::string::npos ? 0 : p.find_last_of('\\') + 1) + "crashes"));
-    }
-    core::i18n::scan(ui::Settings::language_dirs());
-    core::i18n::set_language(settings_.language);
-    if (first.log) { settings_.log_enabled = true; }
-    if (settings_.log_enabled) { Application::start_log(); }
-
+    // the hand-off window comes first: from the moment this process holds the instance, launches find it (they queue until the
+    // first window exists)
     if (serve) {
         platform::instance::Server::Callbacks cb;
         cb.launch = [this](platform::instance::Launch l) {
@@ -130,6 +120,18 @@ int Host::run(const Application::Options& first, bool serve)
         };
         serving_ = server_.create(std::move(cb));
     }
+
+    ui::register_actions(binds_);
+    settings_.binds = &binds_;
+    settings_.load();
+    {
+        const std::string p = ui::Settings::file_path(); // (crash reports go in a folder beside the settings)
+        core::crash::set_directory(core::text::widen(p.substr(0, p.find_last_of('\\') == std::string::npos ? 0 : p.find_last_of('\\') + 1) + "crashes"));
+    }
+    core::i18n::scan(ui::Settings::language_dirs());
+    core::i18n::set_language(settings_.language);
+    if (first.log) { settings_.log_enabled = true; }
+    if (settings_.log_enabled) { Application::start_log(); }
 
     if (!make_window(first)) { return 1; }
 

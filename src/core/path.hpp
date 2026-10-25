@@ -32,6 +32,10 @@ struct Segment {
 [[nodiscard]] bool exists(const std::string& p);
 
 // "1.4 MB" style; folders show nothing
+enum class Kind { missing, folder, file };
+// what is at `p`: one attribute lookup, which can block for seconds on an unreachable network host (workers only for typed paths)
+[[nodiscard]] Kind kind(const std::string& p);
+
 [[nodiscard]] std::string format_size(unsigned long long bytes);
 // "2026-10-18 14:32" in local time from a FILETIME tick count (0: empty)
 [[nodiscard]] std::string format_time(unsigned long long filetime);

@@ -10,6 +10,7 @@
 #include "ui/settings.hpp"
 #include "platform/gpu.hpp"
 #include "platform/image_cache.hpp"
+#include "platform/popup_surface.hpp"
 #include "platform/window.hpp"
 #include "ui/shell.hpp"
 #include "ui/theme.hpp"
@@ -82,6 +83,11 @@ private:
 
     platform::Window               window_;
     platform::Gpu                  gpu_;
+    platform::PopupSurface         popup_;                 // menus drawn past the window edge (Settings::detached_menus)
+    bool                           popup_failed_{};        // it could not be made or drawn: menus stay inside the window
+    strata::rect                   popup_bounds_{};        // the monitor the menu opened on, in ui pixels (kept while it is open)
+    void prepare_popups();                                 // before the frame: where menus may open
+    bool present_frame();                                  // the frame, and the popup layers wherever they belong (false: device lost)
     ui::Theme                      theme_;
     bool                           strings_dirty_{true}; // strata's own words need setting again (language changed, or a new context)
     unsigned                       lang_revision_{0}; // core::i18n::revision() the action descriptions were registered for

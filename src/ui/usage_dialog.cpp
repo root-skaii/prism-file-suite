@@ -2,6 +2,7 @@
 
 #include "core/path.hpp"
 #include "core/shell_ops.hpp"
+#include "ui/menu_parts.hpp"
 #include "core/text.hpp"
 #include "ui/panel.hpp"
 #include "ui/tr.hpp"
@@ -490,7 +491,7 @@ void UsageDialog::draw_tree(Painter& p, const core::UsageNode& cur, float row_h,
                 if (n.is_dir) {
                     if (has_kids) { toggled = ri; } else if (deeper) { activated = pick_at(i); }
                 } else if (!n.lumped) {
-                    (void)core::shell::open(path_of(pick_at(i)));
+                    menus::open_file(env_, path_of(pick_at(i)));
                 }
             }
             if (r.hovered && ui.mouse_clicked(mouse_button::right)) {
@@ -569,7 +570,7 @@ void UsageDialog::tree_keys(context& ui)
         if (!n->lumped) { env_.cmd.open_properties({path_of(pick_)}); ui.close_modal(); }
     } else if (ui.key_pressed(key::enter)) {
         if (has_kids) { toggle(); } else if (deeper) { look_inside(pick_); }
-        else if (!n->is_dir && !n->lumped) { (void)core::shell::open(path_of(pick_)); }
+        else if (!n->is_dir && !n->lumped) { menus::open_file(env_, path_of(pick_)); }
     } else if (ui.key_pressed(key::del) && !n->lumped) {
         cache_.erase(cache_key(base_));
         env_.cmd.request_delete({path_of(pick_)}, false);
@@ -717,17 +718,16 @@ void UsageDialog::frame(Painter& p)
                 dirty_ = true;
             }
             if ((kids || deeper) && ui.menu_item(tr("Look inside"))) { look_inside(ctx_); }
-            if (real && !dir && ui.menu_item(tr("Open"))) { (void)core::shell::open(path); }
+            if (real && !dir && ui.menu_item(tr("Open"))) { menus::open_file(env_, path); }
             if (ui.menu_item(dir ? tr("Show in the file list") : tr("Show its folder in the file list"))) {
                 env_.tab().navigate(folder);
                 ui.close_modal();
             }
-            if (real && ui.menu_item(tr("Show in Explorer"))) { (void)core::shell::reveal_in_explorer(path); }
-            if (ui.menu_item(tr("Open in a new tab"))) { env_.cmd.open_tab(folder, false); } // (the dialog stays: it is the user's place)
-            if (ui.menu_item(tr("Open in a new window"))) { env_.cmd.open_window(folder); }
-            if (ui.menu_item(tr("Open terminal here"))) { (void)core::shell::run_command("cmd", folder); }
+            menus::open_in(ui, env_, folder); // (the dialog stays: it is the user's place)
             ui.menu_separator();
-            if (ui.menu_item(tr("Copy path"))) { (void)core::shell::set_clipboard_text(path); }
+            menus::terminal(ui, env_, folder);
+            ui.menu_separator();
+            if (real) { menus::path_items(ui, env_, {path}); }
             if (real && ui.menu_item(tr("Copy name"))) { (void)core::shell::set_clipboard_text(ctx_.node->name); }
             if (real) {
                 ui.menu_separator();

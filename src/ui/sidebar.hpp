@@ -7,8 +7,10 @@
 #include "core/drive_watcher.hpp"
 #include "core/path_probe.hpp"
 #include "core/places.hpp"
+#include "core/shell_menu.hpp"
 #include "ui/env.hpp"
 #include "ui/painter.hpp"
+#include "ui/shell_page.hpp"
 
 #include <optional>
 #include <functional>
@@ -107,6 +109,8 @@ private:
     unsigned                   drives_rev_{};
     bool                       devices_collapsed_{};
     core::PathProbe            probe_;
+    core::ShellMenu            shell_menu_;                    // Explorer's own entries for the folder menus, read on a worker
+    ShellPage                  shell_page_{env_, shell_menu_};
     strata::rect               area_{};
     std::vector<Row>           rows_;    // this frame's rows, screen space (the drop target reads last frame's)
     std::vector<strata::rect>  blocks_;  // each section from its title to its last row

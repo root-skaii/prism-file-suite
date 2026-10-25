@@ -125,6 +125,7 @@ bool Application::init(const Options& opts)
     drop.hover   = [this](std::optional<strata::vec2> p) { shell_->set_drop_point(p); };
     drop.link    = [](const std::string& dest) { return ui::Sidebar::is_pin_target(dest); };
     drop.dropped = [this](std::vector<std::string> paths, std::string dest, bool move) { shell_->drop_files(std::move(paths), dest, move); };
+    drop.failed  = [this](std::size_t n) { shell_->drop_failed(n); };
     drop.redraw  = [this] { (void)step(true); };
     drop.scale   = [this] { return window_.logical_scale(); };
     (void)platform::attach_drop_target(window_.handle(), std::move(drop));
@@ -225,6 +226,7 @@ bool Application::step(bool force_draw)
             ui_->theme() = theme_.style();
             strings_dirty_ = true;
             images_->forget();
+            popup_.destroy(); // (it lives on the device that is replaced; made again by the next frame)
             if (!gpu_.recreate(*ui_)) {
                 window_.request_close();
                 return false;
@@ -249,6 +251,7 @@ bool Application::step(bool force_draw)
     strata::input_state input = window_.input().new_frame();
     const ui::FrameInput frame_in{std::string_view{input.typed.data(), input.typed_len}, input.delta_time};
     const auto ui_start = std::chrono::steady_clock::now();
+    prepare_popups();
     ui_->begin_frame(input);
     shell_->frame(*ui_, frame_in);
     strata::end_frame(*ui_, window_.input());
@@ -269,7 +272,7 @@ bool Application::step(bool force_draw)
     const auto present_start = std::chrono::steady_clock::now();
     if (!stale_glyphs && (force_draw || !ui_->frame_unchanged())) {
         presented = true;
-        const bool ok = gpu_.present(*ui_, theme_.pal().window);
+        const bool ok = present_frame();
         static bool first_frame = true;
         if (first_frame) {
             first_frame = false;
@@ -281,6 +284,7 @@ bool Application::step(bool force_draw)
         }
         if (!ok) {
             images_->forget(); // (every texture died with the device)
+            popup_.destroy();
             if (!gpu_.recreate(*ui_)) {
                 window_.request_close();
                 return false;
@@ -309,6 +313,92 @@ bool Application::step(bool force_draw)
     return presented;
 }
 
+// menus may reach past the window edge (Settings::detached_menus): they are then placed within the monitor under the pointer
+// instead of the window, and drawn by present_frame into a window of their own. the monitor is looked at while no menu is open,
+// so a menu does not jump to another screen when the pointer crosses over
+void Application::prepare_popups()
+{
+    const auto off = [&] {
+        ui_->set_detach_overlay(false);
+        ui_->clear_popup_bounds();
+    };
+    if (!settings_.detached_menus || popup_failed_) {
+        off();
+        return;
+    }
+    const auto wnd = static_cast<HWND>(window_.handle());
+    if (!popup_.created() && !popup_.create(wnd, gpu_.device())) {
+        core::log::info("menus past the window edge: not available here, menus stay in the window");
+        popup_failed_ = true;
+        off();
+        return;
+    }
+    ui_->set_detach_overlay(true);
+    if (!ui_->menu_open()) {
+        POINT cursor{};
+        ::GetCursorPos(&cursor);
+        MONITORINFO mi{};
+        mi.cbSize = sizeof mi;
+        POINT origin{};
+        ::ClientToScreen(wnd, &origin);
+        if (::GetMonitorInfoW(::MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST), &mi)) {
+            const float s = ui_->scale();
+            popup_bounds_ = {{static_cast<float>(mi.rcWork.left - origin.x) / s, static_cast<float>(mi.rcWork.top - origin.y) / s},
+                             {static_cast<float>(mi.rcWork.right - origin.x) / s, static_cast<float>(mi.rcWork.bottom - origin.y) / s}};
+        } else {
+            popup_bounds_ = {};
+        }
+    }
+    if (popup_bounds_.empty()) { ui_->clear_popup_bounds(); } else { ui_->set_popup_bounds(popup_bounds_); }
+}
+
+bool Application::present_frame()
+{
+    const strata::color clear = theme_.pal().window;
+    const auto          wnd   = static_cast<HWND>(window_.handle());
+    const strata::draw_data frame = ui_->render_data();
+
+    // the popup layers go to a window of their own only when they reach outside this one; inside it they look and behave as ever
+    bool         detach = false;
+    strata::vec2 origin{};
+    int          sx = 0, sy = 0, w = 0, h = 0;
+    if (settings_.detached_menus && !popup_failed_ && popup_.created() && frame.overlay_first < frame.commands.size() && !frame.overlay_bounds.empty()) {
+        const strata::rect& b = frame.overlay_bounds;
+        detach = b.min.x < 0.0f || b.min.y < 0.0f || b.max.x > frame.display_size.x || b.max.y > frame.display_size.y;
+        if (detach) {
+            origin = {std::floor(b.min.x), std::floor(b.min.y)};
+            w      = static_cast<int>(std::ceil(b.max.x - origin.x));
+            h      = static_cast<int>(std::ceil(b.max.y - origin.y));
+            POINT client{};
+            ::ClientToScreen(wnd, &client);
+            sx = client.x + static_cast<int>(origin.x);
+            sy = client.y + static_cast<int>(origin.y);
+        }
+    }
+
+    // the popup first: its present does not wait for the display, the main window's does, so both reach the screen together
+    if (detach && !popup_.show(gpu_.renderer(), frame.tail(frame.overlay_first), origin, sx, sy, w, h)) {
+        core::log::info("menus past the window edge: drawing failed, menus stay in the window");
+        popup_failed_ = true;
+        popup_.destroy();
+        detach = false;
+        ui_->invalidate();
+    }
+    const bool ok = gpu_.present(detach ? frame.head(frame.overlay_first) : frame, clear);
+
+    if (detach) {
+        // the main window keeps the mouse while the menu is out over the desktop: moves and clicks outside it still arrive
+        // (a click away closes the menu), and the menu goes when this window is no longer the active one
+        if (::GetCapture() != wnd) { ::SetCapture(wnd); }
+        if (::GetForegroundWindow() != wnd) { ui_->close_menus(); }
+    } else if (popup_.visible()) {
+        popup_.hide();
+        const bool button = ((::GetAsyncKeyState(VK_LBUTTON) | ::GetAsyncKeyState(VK_RBUTTON) | ::GetAsyncKeyState(VK_MBUTTON)) & 0x8000) != 0;
+        if (!button && ::GetCapture() == wnd) { ::ReleaseCapture(); }
+    }
+    return ok;
+}
+
 void Application::tick()
 {
     if (window_.minimized()) { // (nothing to draw: the next message that matters is the restore)
@@ -318,6 +408,18 @@ void Application::tick()
         return;
     }
     const bool active = window_.take_activity();
+    if (popup_.visible()) {
+        const auto wnd = static_cast<HWND>(window_.handle());
+        if (::GetForegroundWindow() != wnd) {
+            // a click on another program (it gets the click: Windows only routes captured mouse input to our windows) or an
+            // Alt+Tab: the menu is done
+            ui_->close_menus();
+            ui_->invalidate();
+        } else if (::GetCapture() != wnd) {
+            // (strata lets go of the mouse when a button goes up: while a menu is out over the desktop it has to stay captured)
+            ::SetCapture(wnd);
+        }
+    }
     if (!active && !animating_ && std::chrono::steady_clock::now() < due_) { return; }
 
     if (crash_test_window_ && ++frames_ == 30) { *static_cast<volatile int*>(nullptr) = 1; } // (--crash-test-window)

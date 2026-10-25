@@ -10,6 +10,7 @@
 #include "ui/tr.hpp"
 #include "core/shell_ops.hpp"
 #include "ui/tr.hpp"
+#include "ui/menu_parts.hpp"
 #include "ui/new_menu.hpp"
 #include "ui/tr.hpp"
 #include "ui/panel.hpp"
@@ -17,6 +18,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <thread>
 
 namespace prism::ui {
 
@@ -225,18 +227,33 @@ void Toolbar::address(Painter& p, float area_x, float area_y, float width, float
         ui.pop_color();
         ui.pop_var();
         ++edit_age_;
-        if (ui.key_pressed(key::enter)) {
-            const std::string target = core::path::normalize(edit_text_);
-            if (core::path::is_directory(target)) {
-                tab.navigate(target);
+        if (ui.key_pressed(key::enter) && check_ == nullptr) {
+            check_target_ = core::path::normalize(edit_text_);
+            check_        = std::make_shared<PathCheck>();
+            std::thread{[state = check_, target = check_target_, wake = env_.window.waker()] {
+                state->state.store(static_cast<int>(core::path::kind(target)));
+                if (wake) { wake(); }
+            }}.detach();
+        } else if (check_ != nullptr && check_->state.load() >= 0) {
+            const auto found = static_cast<core::path::Kind>(check_->state.load());
+            check_.reset();
+            if (found == core::path::Kind::folder) {
+                tab.navigate(check_target_);
                 editing_ = false;
-            } else if (!tab.path().empty() && !core::path::exists(target)) {
+            } else if (found == core::path::Kind::file) {
+                // a file: show the folder it is in with the file selected
+                tab.reveal_name = core::path::leaf(check_target_);
+                tab.navigate(core::path::parent(check_target_));
+                editing_ = false;
+            } else if (!tab.path().empty()) {
                 // not a place: treat it as a command to run here ("cmd", "code .", "pwsh")
                 if (core::shell::run_command(edit_text_, tab.path())) {
                     editing_ = false;
                 } else {
                     env_.cmd.toast(trf("Not a folder or a command: {}", edit_text_), toast_kind::error);
                 }
+            } else {
+                env_.cmd.toast(trf("Not a folder: {}", edit_text_), toast_kind::error);
             }
         } else if (ui.key_pressed(key::escape) || (edit_age_ >= 3 && !ui.field_focused("##address"))) {
             editing_ = false;
@@ -360,11 +377,14 @@ void Toolbar::crumb_context_menu(Painter& p)
     const std::string& dir = crumb_ctx_path_;
     model::Tab&        tab = env_.tab();
 
+    const bool in_bin = core::recycle::inside(dir);
     if (ui.menu_item(tr("Open"))) { tab.navigate(dir); }
-    if (ui.menu_item(tr("Open in new tab"))) { env_.cmd.open_tab(dir, true); }
-    if (ui.menu_item(tr("Open in new window"))) { env_.cmd.open_window(dir); }
+    menus::open_in(ui, env_, dir);
     ui.menu_separator();
-    if (core::recycle::inside(dir) && ui.menu_item(tr("Empty Recycle Bin"))) { env_.cmd.empty_recycle_bin(core::recycle::drive_of(dir)); }
+    if (in_bin) {
+        if (ui.menu_item(tr("Empty Recycle Bin"))) { env_.cmd.empty_recycle_bin(core::recycle::drive_of(dir)); }
+        return;
+    }
     if (ui.menu_item(tr("New folder here"))) {
         const std::string name = core::FileOps::create_folder(dir);
         if (name.empty()) {
@@ -377,38 +397,20 @@ void Toolbar::crumb_context_menu(Painter& p)
             tab.refresh();
         }
     }
-    if (ui.menu_item(tr("Paste into folder"), "", false, crumb_ctx_paste_)) {
-        std::vector<std::string> paths;
-        bool cut = false;
-        if (core::clipboard_get_files(paths, cut)) { env_.ops.start(cut ? core::OpKind::move : core::OpKind::copy, std::move(paths), dir); }
-    }
-    ui.menu_separator();
-    if (ui.menu_item(env_.layout.find(dir) ? tr("Unpin from sidebar") : tr("Pin to sidebar"))) { env_.cmd.toggle_pin(dir); }
     const bool is_root = dir.size() <= 3; // "C:\"
-    if (!is_root) {
-        if (ui.menu_item(tr("Cut"), env_.binds.text("cut"))) { (void)core::clipboard_set_files({dir}, true); }
-    }
+    if (!is_root && ui.menu_item(tr("Cut"), env_.binds.text("cut"))) { (void)core::clipboard_set_files({dir}, true); }
     if (ui.menu_item(tr("Copy"), env_.binds.text("copy"))) { (void)core::clipboard_set_files({dir}, false); }
+    menus::paste_into(ui, env_, dir, crumb_ctx_paste_);
     if (!is_root && ui.menu_item(tr("Delete"), "Del")) { env_.cmd.request_delete({dir}, false); }
     ui.menu_separator();
-    if (ui.menu_item(tr("Copy path"))) {
-        (void)core::shell::set_clipboard_text(dir);
-        env_.cmd.toast(tr("Path copied"), toast_kind::info);
-    }
-    if (ui.menu_item(tr("Show in File Explorer"))) { (void)core::shell::reveal_in_explorer(dir); }
-    if (ui.menu_item(tr("Open in terminal"))) { (void)core::shell::run_command("wt", dir); }
-    if (ui.menu_item(tr("Properties"), env_.binds.text("properties"))) { env_.cmd.open_properties({dir}); }
-    // Explorer's own entries for the folder itself (7-Zip, Open with Code, Git Bash Here ...)
-    if (env_.settings.shell_menu) {
-        shell_menu_.query({dir}, false);
-        const std::vector<core::ShellMenuItem> shell_items = shell_menu_.items();
-        if (!shell_items.empty()) {
-            if (auto more = ui.menu(tr("More options"))) { shell_page_.draw(ui, shell_items); }
-        }
-    }
+    menus::terminal(ui, env_, dir);
     ui.menu_separator();
-    if (ui.menu_item(tr("Windows properties"))) { (void)core::shell::show_properties(dir); }
-    if (ui.menu_item(tr("Windows options"))) { (void)core::shell::show_native_menu({dir}, env_.window.handle()); }
+    menus::path_items(ui, env_, {dir});
+    menus::pin_item(ui, env_, dir);
+    ui.menu_separator();
+    menus::properties_item(ui, env_, {dir});
+    menus::more_options(ui, env_, shell_page_, shell_menu_, {dir}, false);
+    menus::windows_items(ui, env_, {dir});
 }
 
 void Toolbar::crumb_menu(Painter& p)

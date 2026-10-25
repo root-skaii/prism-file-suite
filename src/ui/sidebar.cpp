@@ -8,6 +8,7 @@
 #include "ui/tr.hpp"
 #include "core/text.hpp"
 #include "ui/tr.hpp"
+#include "ui/menu_parts.hpp"
 #include "ui/panel.hpp"
 #include "ui/tr.hpp"
 
@@ -64,7 +65,7 @@ void insertion_line(Painter& p, const rect& line)
 
 } // namespace
 
-Sidebar::Sidebar(Env& env) : env_{env}, drive_watch_{env.window.waker()}
+Sidebar::Sidebar(Env& env) : env_{env}, drive_watch_{env.window.waker()}, shell_menu_{env.window.waker()}
 {
     drives_     = drive_watch_.list();
     drives_rev_ = drive_watch_.revision();
@@ -381,7 +382,8 @@ void Sidebar::drive_row(Painter& p, const core::Place& place)
         if (ui.mouse_clicked(mouse_button::left)) { press_ = Press{true, false, t, ui.mouse_pos()}; }
         if (ui.mouse_clicked(mouse_button::right)) { menu_ = t; }
         if (ui.mouse_clicked(mouse_button::middle)) {
-            if (place.device) { (void)core::shell::open_device(place.path); } else { env_.cmd.open_tab(place.path, false); }
+            if (!place.device) { env_.cmd.open_tab(place.path, false); }
+            else if (!core::shell::open_device(place.path)) { env_.cmd.toast(tr("Could not open File Explorer"), toast_kind::error); }
         }
         if (place.device) { ui.tooltip(tr("Phones and cameras open in Windows Explorer")); }
     }
@@ -876,12 +878,25 @@ void Sidebar::context_menu(Painter& p)
 {
     context& ui = p.ui();
     const MenuDensity density{ui, env_.settings.compact};
+    shell_page_.begin_frame();
     auto menu = ui.context_menu("##side_ctx", area_);
     if (!menu) { return; }
 
     const Target t = valid(menu_) ? menu_ : Target{};
     const auto&  secs = env_.layout.sections();
     const auto   edit = [&](std::string_view label, const std::function<void(model::SidebarLayout&)>& fn) { (void)env_.cmd.edit_sidebar(label, fn); };
+    // what every folder menu ends with (terminal, path, properties, Explorer's entries)
+    const auto folder_tail = [&](const std::string& folder) {
+        ui.menu_separator();
+        menus::terminal(ui, env_, folder);
+        ui.menu_separator();
+        menus::path_items(ui, env_, {folder});
+        menus::pin_item(ui, env_, folder);
+        ui.menu_separator();
+        menus::properties_item(ui, env_, {folder});
+        menus::more_options(ui, env_, shell_page_, shell_menu_, {folder}, false);
+        menus::windows_items(ui, env_, {folder});
+    };
 
     if (t.kind == Kind::item) {
         // (copies: the edits below change the layout under these references)
@@ -897,8 +912,7 @@ void Sidebar::context_menu(Painter& p)
         const model::ItemPos at{t.section, t.index};
 
         if (ui.menu_item(tr("Open"), "", false, !gone)) { env_.tab().navigate(it.path); }
-        if (ui.menu_item(tr("Open in new tab"), "", false, !gone)) { env_.cmd.open_tab(it.path, true); }
-        if (ui.menu_item(tr("Open in new window"), "", false, !gone)) { env_.cmd.open_window(it.path); }
+        menus::open_in(ui, env_, it.path, !gone);
         ui.menu_separator();
         if (ui.menu_item(tr("Rename"))) { begin_rename(t); }
         if (ui.menu_item(tr("Change icon and colour"))) {
@@ -916,21 +930,20 @@ void Sidebar::context_menu(Painter& p)
         }
         ui.menu_separator();
         if (ui.menu_item(tr("Remove from sidebar"))) { edit("Unpin " + label, [=](model::SidebarLayout& l) { (void)l.remove_item(at); }); }
-        if (ui.menu_item(tr("Properties"), "", false, !gone)) { env_.cmd.open_properties({it.path}); }
+        if (!gone) { folder_tail(it.path); }
         return;
     }
 
     if (t.kind == Kind::drive && core::is_device_path(t.path)) {
         const std::string id = t.path;
-        if (ui.menu_item(tr("Open in Explorer"))) { (void)core::shell::open_device(id); }
+        if (ui.menu_item(tr("Open in File Explorer"))) { (void)core::shell::open_device(id); }
         return;
     }
 
     if (t.kind == Kind::drive && core::recycle::inside(t.path)) { // the Recycle Bin row
         const std::string bin = t.path;
         if (ui.menu_item(tr("Open"))) { env_.tab().navigate(bin); }
-        if (ui.menu_item(tr("Open in new tab"))) { env_.cmd.open_tab(bin, true); }
-        if (ui.menu_item(tr("Open in new window"))) { env_.cmd.open_window(bin); }
+        menus::open_in(ui, env_, bin);
         ui.menu_separator();
         if (ui.menu_item(tr("Empty Recycle Bin"))) { env_.cmd.empty_recycle_bin(core::recycle::drive_of(bin)); }
         return;
@@ -941,26 +954,22 @@ void Sidebar::context_menu(Painter& p)
         const auto        found = std::ranges::find(drives_, root, &core::Place::path);
         const std::string bin   = found != drives_.end() ? found->bin : std::string{};
         if (ui.menu_item(tr("Open"))) { env_.tab().navigate(root); }
-        if (ui.menu_item(tr("Open in new tab"))) { env_.cmd.open_tab(root, true); }
-        if (ui.menu_item(tr("Open in new window"))) { env_.cmd.open_window(root); }
+        menus::open_in(ui, env_, root);
         ui.menu_separator();
         if (ui.menu_item(tr("Open Recycle Bin"), "", false, !bin.empty())) { env_.tab().navigate(bin); }
         if (ui.menu_item(tr("Empty Recycle Bin"), "", false, !bin.empty())) { env_.cmd.empty_recycle_bin(root); }
-        ui.menu_separator();
         if (ui.menu_item(tr("Hide from sidebar"))) { edit("Hide " + root, [=](model::SidebarLayout& l) { (void)l.hide_drive(root); }); }
-        if (ui.menu_item(tr("Properties"))) { env_.cmd.open_properties({root}); }
+        folder_tail(root);
         return;
     }
 
     if (t.kind == Kind::visit) {
         const std::string path = t.path;
         if (ui.menu_item(tr("Open"))) { env_.tab().navigate(path); }
-        if (ui.menu_item(tr("Open in new tab"))) { env_.cmd.open_tab(path, true); }
-        if (ui.menu_item(tr("Open in new window"))) { env_.cmd.open_window(path); }
+        menus::open_in(ui, env_, path);
         ui.menu_separator();
-        if (ui.menu_item(tr("Pin to sidebar"))) { env_.cmd.toggle_pin(path); }
         if (ui.menu_item(tr("Remove from this list"))) { env_.visits.forget(path); }
-        if (ui.menu_item(tr("Properties"))) { env_.cmd.open_properties({path}); }
+        folder_tail(path);
         return;
     }
 

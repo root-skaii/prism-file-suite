@@ -79,6 +79,13 @@ bool is_directory(const std::string& p)
     return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY) != 0;
 }
 
+Kind kind(const std::string& p)
+{
+    const DWORD a = ::GetFileAttributesW(text::widen(p).c_str());
+    if (a == INVALID_FILE_ATTRIBUTES) { return Kind::missing; }
+    return (a & FILE_ATTRIBUTE_DIRECTORY) != 0 ? Kind::folder : Kind::file;
+}
+
 bool exists(const std::string& p)
 {
     return ::GetFileAttributesW(text::widen(p).c_str()) != INVALID_FILE_ATTRIBUTES;

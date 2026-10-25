@@ -2,6 +2,7 @@
 
 #include "core/path.hpp"
 #include "core/text.hpp"
+#include "core/virtual_files.hpp"
 
 #include <windows.h>
 #include <objbase.h>
@@ -49,17 +50,19 @@ public:
     HRESULT STDMETHODCALLTYPE DragEnter(IDataObject* data, DWORD keys, POINTL pt, DWORD* effect) override
     {
         sources_ = read_paths(data);
-        *effect  = sources_.empty() ? DROPEFFECT_NONE : decide(keys, pt, *effect);
+        virtual_ = sources_.empty() && core::offers_virtual_files(data);
+        *effect  = acceptable() ? decide(keys, pt, *effect) : DROPEFFECT_NONE;
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE DragOver(DWORD keys, POINTL pt, DWORD* effect) override
     {
-        *effect = sources_.empty() ? DROPEFFECT_NONE : decide(keys, pt, *effect);
+        *effect = acceptable() ? decide(keys, pt, *effect) : DROPEFFECT_NONE;
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE DragLeave() override
     {
         sources_.clear();
+        virtual_ = false;
         if (cb_.hover) { cb_.hover(std::nullopt); }
         if (cb_.redraw) { cb_.redraw(); }
         return S_OK;
@@ -67,18 +70,52 @@ public:
     HRESULT STDMETHODCALLTYPE Drop(IDataObject* data, DWORD keys, POINTL pt, DWORD* effect) override
     {
         std::vector<std::string> paths = read_paths(data);
+        virtual_ = paths.empty() && core::offers_virtual_files(data);
+        sources_ = paths;
         const std::string dest = resolve(pt);
-        const DWORD eff = paths.empty() ? DROPEFFECT_NONE : decide(keys, pt, *effect);
+        const DWORD eff = acceptable() ? decide(keys, pt, *effect) : DROPEFFECT_NONE;
         if (cb_.hover) { cb_.hover(std::nullopt); }
-        if (eff != DROPEFFECT_NONE && !dest.empty() && cb_.dropped) { cb_.dropped(std::move(paths), dest, eff == DROPEFFECT_MOVE); }
+        if (eff != DROPEFFECT_NONE && !dest.empty()) {
+            if (virtual_) {
+                // the contents come from the other program while we wait (a download, for a remote file): into a staging folder
+                // first, then moved to the destination like any other drop
+                core::ReceivedFiles got = core::receive_virtual_files(data, staging_root());
+                if (got.failed > 0 && cb_.failed) { cb_.failed(got.failed); }
+                if (!got.items.empty() && cb_.dropped) { cb_.dropped(std::move(got.items), dest, true); }
+            } else if (cb_.dropped) {
+                cb_.dropped(std::move(paths), dest, eff == DROPEFFECT_MOVE);
+            }
+        }
         // the work is done here (shell dialogs included): the source must not move or delete anything itself
         *effect = DROPEFFECT_NONE;
         sources_.clear();
+        virtual_ = false;
         if (cb_.redraw) { cb_.redraw(); }
         return S_OK;
     }
 
 private:
+    [[nodiscard]] bool acceptable() const noexcept { return !sources_.empty() || virtual_; }
+
+    // where files without a path on disk are collected; emptied folders from earlier drops are removed on the way
+    [[nodiscard]] static std::string staging_root()
+    {
+        wchar_t tmp[MAX_PATH + 1]{};
+        const DWORD n = ::GetTempPathW(MAX_PATH, tmp);
+        std::wstring root{tmp, n};
+        while (!root.empty() && root.back() == L'\\') { root.pop_back(); }
+        root += L"\\PrismFS\\drop";
+        WIN32_FIND_DATAW fd;
+        if (HANDLE h = ::FindFirstFileExW((root + L"\\*").c_str(), FindExInfoBasic, &fd, FindExSearchNameMatch, nullptr, 0); h != INVALID_HANDLE_VALUE) {
+            do {
+                // (RemoveDirectory refuses a folder that still holds files, e.g. a transfer in progress)
+                if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 && fd.cFileName[0] != L'.') { ::RemoveDirectoryW((root + L"\\" + fd.cFileName).c_str()); }
+            } while (::FindNextFileW(h, &fd));
+            ::FindClose(h);
+        }
+        return core::text::narrow(root);
+    }
+
     static std::vector<std::string> read_paths(IDataObject* data)
     {
         std::vector<std::string> out;
@@ -122,6 +159,10 @@ private:
         const std::string dest = cb_.resolve ? cb_.resolve(logical) : std::string{};
         if (cb_.redraw) { cb_.redraw(); }
         if (dest.empty()) { return DROPEFFECT_NONE; }
+        if (virtual_) {
+            if (cb_.link && cb_.link(dest)) { return DROPEFFECT_NONE; } // (nothing on disk to pin)
+            return (allowed & DROPEFFECT_COPY) != 0 ? DROPEFFECT_COPY : DROPEFFECT_NONE;
+        }
         if (cb_.link && cb_.link(dest)) { return (allowed & DROPEFFECT_LINK) != 0 ? DROPEFFECT_LINK : ((allowed & DROPEFFECT_COPY) != 0 ? DROPEFFECT_COPY : DROPEFFECT_NONE); }
 
         // dropping a folder into itself or a file into the folder it already is in does nothing
@@ -145,6 +186,7 @@ private:
     HWND                     hwnd_;
     DropCallbacks            cb_;
     std::vector<std::string> sources_;
+    bool                     virtual_{}; // the drag offers files with no path on disk (core/virtual_files)
 };
 
 // --- the source ----------------------------------------------------------------------------------------------

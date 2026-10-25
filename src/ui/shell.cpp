@@ -9,6 +9,8 @@
 #include "ui/tr.hpp"
 #include "core/recycle.hpp"
 #include "core/shell_ops.hpp"
+#include "core/terminal.hpp"
+#include "ui/menu_parts.hpp"
 #include "ui/tr.hpp"
 #include "core/text.hpp"
 #include "ui/tr.hpp"
@@ -357,6 +359,11 @@ void Shell::transfer(std::vector<std::string> paths, const std::string& dest, bo
 {
     if (paths.empty() || dest.empty()) { return; }
     ops_.start(move ? core::OpKind::move : core::OpKind::copy, std::move(paths), dest);
+}
+
+void Shell::drop_failed(std::size_t count)
+{
+    toast(trf_n("Could not receive {} file", "Could not receive {} files", static_cast<long long>(count), count), toast_kind::error);
 }
 
 void Shell::drop_files(std::vector<std::string> paths, const std::string& dest, bool move)
@@ -894,12 +901,9 @@ void Shell::run_action(const std::string& name, context& ui)
     else if (name == "address") { focus_address(); }
     else if (name == "filter") { focus_filter(); }
     else if (name == "terminal") {
-        // windows terminal if it is there, otherwise a plain console, started in this folder
-        const std::wstring dir = core::text::widen(tab.path());
-        // (no working directory for wt.exe: as a Store alias it would start nothing; -d carries the folder, doubled slash for a drive root)
-        const std::wstring wt_dir = !dir.empty() && dir.back() == L'\\' ? dir + L"\\" : dir;
-        const auto r = reinterpret_cast<INT_PTR>(::ShellExecuteW(nullptr, L"open", L"wt.exe", (L"-d \"" + wt_dir + L"\"").c_str(), nullptr, SW_SHOWNORMAL));
-        if (r <= 32) { (void)::ShellExecuteW(nullptr, L"open", L"cmd.exe", nullptr, dir.c_str(), SW_SHOWNORMAL); }
+        if (!menus::terminal_target(tab.path()) || !core::terminal::open({core::terminal::Shell::default_terminal, tab.path(), {}, false})) {
+            toast(tr("Could not open the terminal"), toast_kind::error);
+        }
     }
     else if (name == "hidden") { toggle_hidden(); }
     else if (name == "view_grid") { toggle_view(); }

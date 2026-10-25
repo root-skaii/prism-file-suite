@@ -155,7 +155,13 @@ void Gpu::wait_for_frame() const
     if (impl_->latency_wait != nullptr && impl_->first_present_done) { ::WaitForSingleObjectEx(impl_->latency_wait, 100, TRUE); }
 }
 
-bool Gpu::present(strata::context& ui, strata::color clear)
+bool Gpu::present(strata::context& ui, strata::color clear) { return present(ui.render_data(), clear); }
+
+ID3D11Device* Gpu::device() const noexcept { return impl_->device.Get(); }
+
+ID3D11DeviceContext* Gpu::context() const noexcept { return impl_->ctx.Get(); }
+
+bool Gpu::present(const strata::draw_data& frame, strata::color clear)
 {
     Impl& s = *impl_;
     if (s.rtv == nullptr) { return true; }
@@ -163,7 +169,7 @@ bool Gpu::present(strata::context& ui, strata::color clear)
     ID3D11RenderTargetView* t = s.rtv.Get();
     s.ctx->OMSetRenderTargets(1, &t, nullptr);
     s.ctx->ClearRenderTargetView(t, c);
-    s.renderer.render(ui.render_data());
+    s.renderer.render(frame);
     const HRESULT hr = s.immediate ? s.chain->Present(0, s.tearing ? DXGI_PRESENT_ALLOW_TEARING : 0) : s.chain->Present(1, 0);
     s.first_present_done = true;
     return hr != DXGI_ERROR_DEVICE_REMOVED && hr != DXGI_ERROR_DEVICE_RESET;

@@ -16,6 +16,7 @@
 #include "ui/tr.hpp"
 #include "core/text.hpp"
 #include "ui/tr.hpp"
+#include "ui/menu_parts.hpp"
 #include "ui/new_menu.hpp"
 #include "ui/tr.hpp"
 #include "ui/panel.hpp"
@@ -69,11 +70,6 @@ struct Columns {
     c.type_x = c.size_x - w[1] * k;
     c.mod_x  = c.type_x - w[0] * k;
     return c;
-}
-
-[[nodiscard]] std::string plural(std::size_t n, std::string_view one, std::string_view many)
-{
-    return std::format("{} {}", n, n == 1 ? one : many);
 }
 
 // kinds whose icon is worth asking the shell for (their own icon / thumbnail), instead of the coloured tile
@@ -234,8 +230,8 @@ void FileList::open_row(model::Tab& tab, std::size_t row)
         tab.navigate(full);
     } else if (env_.settings.browse_archives && browsable_archive(e)) {
         env_.cmd.open_archive(full);
-    } else if (!core::shell::open(full)) {
-        env_.cmd.toast(trf("Could not open {}", core::path::leaf(e.name)), toast_kind::error);
+    } else {
+        menus::open_file(env_, full);
     }
 }
 
@@ -1018,41 +1014,33 @@ void FileList::context_menu(Painter& p, model::Tab& tab, const rect& area)
         ui.menu_separator();
         sort_menu();
         group_menu();
-        //if (ui.menu_item(env_.settings.grid_view ? "View as list" : "View as thumbnails")) { env_.cmd.toggle_view(); }
         ui.menu_separator();
         if (ui.menu_item(tr("Refresh"), env_.binds.text("refresh"))) { tab.refresh(); }
-        if (ui.menu_item(tr("Copy folder path"))) { (void)core::shell::set_clipboard_text(tab.path()); }
-        if (ui.menu_item(tr("Open in new tab"))) { env_.cmd.open_tab(tab.path(), true); }
-        if (!tab.path().empty() && ui.menu_item(tr("Open in new window"))) { env_.cmd.open_window(tab.path()); }
-        if (!tab.path().empty() && ui.menu_item(env_.layout.find(tab.path()) ? tr("Unpin from sidebar") : tr("Pin to sidebar"), env_.binds.text("pin_folder"))) { env_.cmd.toggle_pin(tab.path()); }
-        if (ui.menu_item(tr("Properties"), env_.binds.text("properties"))) { env_.cmd.open_properties({tab.path()}); }
-        // (one submenu: installed tools add a dozen rows, more than the window is tall)
-        if (!shell_items.empty()) {
-            if (auto more = ui.menu(tr("More options"))) { shell_page_.draw(ui, shell_items); }
-        }
-        if (!tab.path().empty() && !tab.searching()) {
-            ui.menu_separator();
-            if (ui.menu_item(tr("Windows options"))) { (void)core::shell::show_native_menu({tab.path()}, env_.window.handle()); }
-        }
+        if (tab.path().empty()) { return; } // ("This PC": no folder to act on)
+        ui.menu_separator();
+        menus::open_in(ui, env_, tab.path());
+        menus::terminal(ui, env_, tab.path());
+        ui.menu_separator();
+        menus::path_items(ui, env_, {tab.path()});
+        menus::pin_item(ui, env_, tab.path());
+        ui.menu_separator();
+        menus::properties_item(ui, env_, {tab.path()});
+        menus::more_items(ui, shell_page_, shell_items);
+        if (!tab.searching()) { menus::windows_items(ui, env_, {tab.path()}); }
         return;
     }
     const std::size_t row = picked.front();
     const core::FileEntry& e = L.at(row);
     const std::string full = core::path::join(tab.path(), e.name);
 
+    const bool one_folder = picked.size() == 1 && e.is_dir(); // (the folder-only entries need exactly one)
     if (ui.menu_item(tr("Open"), "Enter")) { open_row(tab, row); }
-    if (e.is_dir() && ui.menu_item(tr("Open in new tab"))) { env_.cmd.open_tab(full, false); }
-    if (e.is_dir() && ui.menu_item(tr("Open in new window"))) { env_.cmd.open_window(full); }
+    if (one_folder) { menus::open_in(ui, env_, full); }
     if (picked.size() == 1 && !env_.settings.browse_archives && browsable_archive(e) && ui.menu_item(tr("Browse inside"))) { env_.cmd.open_archive(full); }
-    if (e.is_dir() && picked.size() == 1 && ui.menu_item(env_.layout.find(full) ? tr("Unpin from sidebar") : tr("Pin to sidebar"))) { env_.cmd.toggle_pin(full); }
     ui.menu_separator();
     if (ui.menu_item(tr("Cut"), env_.binds.text("cut"))) { copy_selection(tab, true); }
     if (ui.menu_item(tr("Copy"), env_.binds.text("copy"))) { copy_selection(tab, false); }
-    if (e.is_dir() && ui.menu_item(tr("Paste into folder"), "", false, can_paste)) {
-        std::vector<std::string> paths;
-        bool cut = false;
-        if (core::clipboard_get_files(paths, cut)) { env_.ops.start(cut ? core::OpKind::move : core::OpKind::copy, std::move(paths), full); }
-    }
+    if (one_folder) { menus::paste_into(ui, env_, full, can_paste); }
     if (two_panes) {
         if (ui.menu_item(tr("Copy to other pane"), env_.binds.text("copy_to_pane"))) { to_other_pane(tab, false); }
         if (ui.menu_item(tr("Move to other pane"), env_.binds.text("move_to_pane"))) { to_other_pane(tab, true); }
@@ -1106,22 +1094,17 @@ void FileList::context_menu(Painter& p, model::Tab& tab, const rect& area)
         if (ui.menu_item(tr("Clear labels"), env_.binds.text("tag_clear"), false, some != 0)) { env_.cmd.clear_tags(selected_paths(tab)); }
     }
     ui.menu_separator();
-    if (ui.menu_item(picked.size() > 1 ? tr("Copy paths") : tr("Copy path"))) {
-        std::string all;
-        for (const std::string& s : selected_paths(tab)) {
-            if (!all.empty()) { all += "\r\n"; }
-            all += s;
-        }
-        (void)core::shell::set_clipboard_text(all);
+    if (one_folder) {
+        menus::terminal(ui, env_, full);
+        ui.menu_separator();
     }
-    if (ui.menu_item(tr("Show in File Explorer"))) { (void)core::shell::reveal_in_explorer(full); }
-    if (ui.menu_item(tr("Properties"), env_.binds.text("properties"))) { env_.cmd.open_properties(selected_paths(tab)); }
-    if (!shell_items.empty()) {
-        if (auto more = ui.menu(tr("More options"))) { shell_page_.draw(ui, shell_items); }
-    }
+    const std::vector<std::string> chosen = selected_paths(tab);
+    menus::path_items(ui, env_, chosen);
+    if (one_folder) { menus::pin_item(ui, env_, full); }
     ui.menu_separator();
-    if (ui.menu_item(tr("Windows properties"))) { (void)core::shell::show_properties(full); }
-    if (ui.menu_item(tr("Windows options"))) { (void)core::shell::show_native_menu(selected_paths(tab), env_.window.handle()); }
+    menus::properties_item(ui, env_, chosen);
+    menus::more_items(ui, shell_page_, shell_items);
+    menus::windows_items(ui, env_, chosen);
 }
 
 void FileList::frame(Painter& p, const rect& area, model::Tab& tab, const FrameInput& in, bool active)

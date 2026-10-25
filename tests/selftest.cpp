@@ -24,7 +24,9 @@
 #include "core/default_manager.hpp"
 #include "core/drive_watcher.hpp"
 #include "core/shell_menu.hpp"
+#include "core/terminal.hpp"
 #include "core/text.hpp"
+#include "core/virtual_files.hpp"
 #include "model/folder_sorts.hpp"
 #include "model/listing.hpp"
 #include "model/sessions.hpp"
@@ -38,6 +40,8 @@
 #include <windows.h>
 #include <objbase.h>
 #include <shellapi.h>
+#include <shlobj.h>
+#include <shlwapi.h>
 
 #include <atomic>
 #include <chrono>
@@ -1339,9 +1343,111 @@ static void test_i18n()
     i18n::scan({});
 }
 
+// a drag source that offers files without paths on disk, like MobaXterm's SFTP browser
+class FakeVirtualSource final : public IDataObject {
+public:
+    struct Item {
+        std::wstring name;
+        std::string  data;
+        bool         dir{};
+    };
+    explicit FakeVirtualSource(std::vector<Item> items) : items_{std::move(items)} {}
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id, void** out) override
+    {
+        if (id == IID_IUnknown || id == IID_IDataObject) { *out = static_cast<IDataObject*>(this); return S_OK; }
+        *out = nullptr;
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return 2; }
+    ULONG STDMETHODCALLTYPE Release() override { return 1; }
+    HRESULT STDMETHODCALLTYPE GetData(FORMATETC* f, STGMEDIUM* m) override
+    {
+        *m = {};
+        if (f->cfFormat == group_cf() && (f->tymed & TYMED_HGLOBAL) != 0) {
+            const std::size_t bytes = sizeof(UINT) + items_.size() * sizeof(FILEDESCRIPTORW);
+            HGLOBAL mem = ::GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, bytes);
+            auto* g = static_cast<FILEGROUPDESCRIPTORW*>(::GlobalLock(mem));
+            g->cItems = static_cast<UINT>(items_.size());
+            for (std::size_t i = 0; i < items_.size(); ++i) {
+                g->fgd[i].dwFlags = FD_ATTRIBUTES;
+                g->fgd[i].dwFileAttributes = items_[i].dir ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL;
+                items_[i].name.copy(g->fgd[i].cFileName, MAX_PATH - 1);
+            }
+            ::GlobalUnlock(mem);
+            m->tymed   = TYMED_HGLOBAL;
+            m->hGlobal = mem;
+            return S_OK;
+        }
+        if (f->cfFormat == contents_cf() && (f->tymed & TYMED_ISTREAM) != 0 && f->lindex >= 0 && static_cast<std::size_t>(f->lindex) < items_.size()) {
+            const std::string& d = items_[static_cast<std::size_t>(f->lindex)].data;
+            m->tymed = TYMED_ISTREAM;
+            m->pstm  = ::SHCreateMemStream(reinterpret_cast<const BYTE*>(d.data()), static_cast<UINT>(d.size()));
+            return m->pstm != nullptr ? S_OK : E_OUTOFMEMORY;
+        }
+        return DV_E_FORMATETC;
+    }
+    HRESULT STDMETHODCALLTYPE GetDataHere(FORMATETC*, STGMEDIUM*) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE QueryGetData(FORMATETC* f) override { return f->cfFormat == group_cf() ? S_OK : DV_E_FORMATETC; }
+    HRESULT STDMETHODCALLTYPE GetCanonicalFormatEtc(FORMATETC*, FORMATETC*) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE SetData(FORMATETC*, STGMEDIUM*, BOOL) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE EnumFormatEtc(DWORD, IEnumFORMATETC**) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE DAdvise(FORMATETC*, DWORD, IAdviseSink*, DWORD*) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE DUnadvise(DWORD) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE EnumDAdvise(IEnumSTATDATA**) override { return E_NOTIMPL; }
+
+private:
+    static CLIPFORMAT group_cf() { return static_cast<CLIPFORMAT>(::RegisterClipboardFormatW(CFSTR_FILEDESCRIPTORW)); }
+    static CLIPFORMAT contents_cf() { return static_cast<CLIPFORMAT>(::RegisterClipboardFormatW(CFSTR_FILECONTENTS)); }
+    std::vector<Item> items_;
+};
+
+static void test_virtual_files()
+{
+    CHECK(core::safe_relative_path(L"a.txt") == "a.txt");
+    CHECK(core::safe_relative_path(L"dir/sub\\f.txt") == "dir\\sub\\f.txt");
+    CHECK(!core::safe_relative_path(L"..\\x"));
+    CHECK(!core::safe_relative_path(L"a\\..\\..\\x"));
+    CHECK(!core::safe_relative_path(L"C:\\x"));
+    CHECK(!core::safe_relative_path(L"nul.txt"));
+    CHECK(!core::safe_relative_path(L"a?.txt"));
+    CHECK(!core::safe_relative_path(L"trailing."));
+    CHECK(!core::safe_relative_path(L""));
+
+    wchar_t tmp[MAX_PATH + 1]{};
+    const DWORD n = ::GetTempPathW(MAX_PATH, tmp);
+    std::string root = core::text::narrow(std::wstring{tmp, n}) + "pfs_vf_test";
+    FakeVirtualSource source{{{L"dir", "", true}, {L"dir\\inner.txt", "world", false}, {L"top.txt", "hello", false}, {L"..\\evil.txt", "x", false}}};
+    CHECK(core::offers_virtual_files(&source));
+    const core::ReceivedFiles got = core::receive_virtual_files(&source, root);
+    CHECK(got.failed == 1);          // (the path leaving the staging folder)
+    CHECK(got.items.size() == 2);    // dir, top.txt
+    if (got.items.size() == 2) {
+        CHECK(core::path::is_directory(got.items[0]));
+        CHECK(slurp(got.items[1]) == "hello");
+        CHECK(slurp(got.items[0] + "\\inner.txt") == "world");
+        CHECK(::GetFileAttributesW(core::text::widen(core::path::parent(got.items[0]) + "\\..\\evil.txt").c_str()) == INVALID_FILE_ATTRIBUTES);
+    }
+    CHECK(!core::offers_virtual_files(nullptr));
+    rm_rf(core::text::widen(root));
+}
+
+static void test_terminal()
+{
+    using core::terminal::wt_arguments;
+    CHECK(wt_arguments(L"C:\\Users\\a", L"cmd", L"") == LR"(-d "C:\Users\a" cmd)");
+    CHECK(wt_arguments(L"C:\\", L"powershell", L"-NoExit") == LR"(-d "C:\\" powershell -NoExit)");
+    CHECK(wt_arguments(L"C:\\a;b", L"", L"") == LR"(-d "C:\a\;b")");
+    CHECK(wt_arguments(L"", L"wsl", L"") == L"wsl");
+    CHECK(core::terminal::from_program(L"pwsh") == core::terminal::Shell::pwsh);
+    CHECK(!core::terminal::from_program(L"code"));
+}
+
 int main()
 {
     ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    test_virtual_files();
+    test_terminal();
     test_i18n();
     test_sidebar_layout();
     test_sidebar_phase3();

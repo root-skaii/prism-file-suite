@@ -46,11 +46,14 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
     if (opts.crash_test) { *static_cast<volatile int*>(nullptr) = 1; } // (checks the crash report path: --crash-test)
 
     // one PrismFS process per exe holds every window: a launch hands its command line to the running one and leaves.
-    // when none is there, this one becomes it (a second one starting at the same moment waits for its window, then hands over)
+    // when none is there, this one becomes it. one that finds the instance claimed but not answering yet is still starting:
+    // wait for it. only a host silent for the whole time is given up on; this process then runs alone (no tray icon)
     bool serve = false;
-    for (int attempt = 0; attempt < 40; ++attempt) {
+    const ULONGLONG give_up = ::GetTickCount64() + 15000;
+    for (;;) {
         if (prism::platform::instance::hand_off(::GetCommandLineW())) { return 0; }
         if (prism::platform::instance::claim()) { serve = true; break; }
+        if (::GetTickCount64() >= give_up) { break; }
         ::Sleep(50);
     }
 

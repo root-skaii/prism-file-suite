@@ -41,9 +41,12 @@ void ShellPage::draw(context& ui, const std::vector<core::ShellMenuItem>& root)
         ui.menu_separator();
     }
 
-    const float row_h  = env_.settings.compact ? 26.0f : 30.0f;
+    // the height strata gives the rows: a row is frame_height - 2 plus 1 of spacing, a separator 7 plus 1 (an estimate that counted
+    // separators as rows left a blank strip under the last entry)
+    const float row_h = ui.frame_height() - 1.0f;
+    const auto  seps  = static_cast<float>(std::ranges::count_if(*items, [](const core::ShellMenuItem& i) { return i.separator; }));
     const float room   = std::max(row_h * 6.0f, ui.display_size().y - 110.0f);
-    const float wanted = row_h * static_cast<float>(items->size());
+    const float wanted = row_h * (static_cast<float>(items->size()) - seps) + 8.0f * seps;
     if (wanted <= room) {
         draw_items(ui, *items, true);
     } else if (auto body = ui.child("##shell_more" + std::to_string(depth), {0.0f, room}, child_flags::no_padding)) {

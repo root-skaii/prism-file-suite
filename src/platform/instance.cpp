@@ -4,9 +4,11 @@
 #include <shellapi.h>
 #include <shlobj.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <format>
 #include <memory>
+#include <vector>
 
 namespace prism::platform::instance {
 
@@ -14,7 +16,8 @@ namespace {
 
 constexpr wchar_t     k_class[]      = L"prismfs_instance";
 constexpr wchar_t     k_tray_class[] = L"prismfs_instance_tray";
-constexpr ULONG_PTR   k_launch_id    = 0x50524c43; // WM_COPYDATA id of a launch
+constexpr ULONG_PTR   k_launch_id    = 0x50524c44; // WM_COPYDATA id of a launch: payload is `nonce \0 directory \0 command line`
+constexpr std::size_t k_seen_launches = 32;
 constexpr DWORD       k_timeout_ms   = 2000;
 constexpr UINT        k_tray_msg     = WM_APP + 1;
 constexpr UINT        k_cmd_open = 1, k_cmd_settings = 2, k_cmd_exit = 3;
@@ -44,6 +47,15 @@ struct Server::Impl {
     TrayLabels        labels;
     bool              tray_on{};
     bool              class_registered{};
+    std::vector<std::wstring> seen; // nonces of launches already handled (a launcher whose wait timed out sends the same one again)
+
+    [[nodiscard]] bool remember(const std::wstring& nonce)
+    {
+        if (std::ranges::find(seen, nonce) != seen.end()) { return false; }
+        if (seen.size() >= k_seen_launches) { seen.erase(seen.begin()); }
+        seen.push_back(nonce);
+        return true;
+    }
 
     NOTIFYICONDATAW icon_data() const
     {
@@ -101,8 +113,11 @@ struct Server::Impl {
             const auto* cd = reinterpret_cast<const COPYDATASTRUCT*>(lp);
             if (cd != nullptr && cd->dwData == k_launch_id && cd->lpData != nullptr && s->cb.launch) {
                 const std::wstring payload{static_cast<const wchar_t*>(cd->lpData), cd->cbData / sizeof(wchar_t)};
-                if (const std::size_t cut = payload.find(L'\0'); cut != std::wstring::npos) {
-                    s->cb.launch(Launch{payload.substr(0, cut), payload.substr(cut + 1)}); // (queued by the host: this is a sent message, the launcher waits for it)
+                const std::size_t a = payload.find(L'\0');
+                const std::size_t b = a == std::wstring::npos ? a : payload.find(L'\0', a + 1);
+                if (b != std::wstring::npos) {
+                    // (queued by the host: this is a sent message, the launcher waits for it)
+                    if (s->remember(payload.substr(0, a))) { s->cb.launch(Launch{payload.substr(a + 1, b - a - 1), payload.substr(b + 1)}); }
                     return TRUE;
                 }
             }
@@ -198,15 +213,24 @@ bool hand_off(std::wstring_view command_line)
     ::GetWindowThreadProcessId(running, &pid);
     ::AllowSetForegroundWindow(pid); // (this process was just started by the user: the new window may come to the front)
 
+    // a timed-out SendMessageTimeout may still be delivered later, so a retry carries the same nonce and the host drops the repeat
+    LARGE_INTEGER counter{};
+    ::QueryPerformanceCounter(&counter);
+    std::wstring payload = std::format(L"{:x}-{:x}", ::GetCurrentProcessId(), static_cast<unsigned long long>(counter.QuadPart));
+    payload.push_back(L'\0');
     wchar_t dir[MAX_PATH]{};
     const DWORD n = ::GetCurrentDirectoryW(MAX_PATH, dir);
-    std::wstring payload{dir, n < MAX_PATH ? n : 0};
+    payload.append(dir, n < MAX_PATH ? n : 0);
     payload.push_back(L'\0');
     payload.append(command_line);
     COPYDATASTRUCT cd{k_launch_id, static_cast<DWORD>(payload.size() * sizeof(wchar_t)), payload.data()};
-    DWORD_PTR result = 0;
-    if (::SendMessageTimeoutW(running, WM_COPYDATA, 0, reinterpret_cast<LPARAM>(&cd), SMTO_ABORTIFHUNG | SMTO_BLOCK, k_timeout_ms, &result) == 0) { return false; }
-    return result == TRUE;
+    // (a busy host is given time: giving up here would start a second process)
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        DWORD_PTR result = 0;
+        if (::SendMessageTimeoutW(running, WM_COPYDATA, 0, reinterpret_cast<LPARAM>(&cd), SMTO_ABORTIFHUNG | SMTO_BLOCK, k_timeout_ms, &result) != 0) { return result == TRUE; }
+        if (!::IsWindow(running)) { break; } // (the host went away meanwhile)
+    }
+    return false;
 }
 
 bool claim()

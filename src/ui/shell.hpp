@@ -61,6 +61,8 @@ public:
     void set_dragging(std::vector<std::string> paths) { ghost_paths_ = std::move(paths); }
     void refresh_all();
     void drop_files(std::vector<std::string> paths, const std::string& dest, bool move);
+    // files a drag offered without a path (remote files) that could not be received
+    void drop_failed(std::size_t count);
 
     // writes tabs and window size for the next start
     void save_session(int logical_w, int logical_h);

@@ -161,11 +161,12 @@ void PropertiesDialog::header(Kit& kit)
         (void)core::shell::show_native_menu(all, env_.window.handle());
     }
     kit.hgap(4.0f);
-    if (kit.icon_button("##prop_show", glyph::open_new, tr("Show in Explorer"), true, false, 32.0f)) { (void)core::shell::reveal_in_explorer(path); }
+    if (kit.icon_button("##prop_show", glyph::open_new, tr("Show in File Explorer"), true, false, 32.0f) && !core::shell::reveal_in_explorer(path)) {
+        env_.cmd.toast(tr("Could not open File Explorer"), toast_kind::error);
+    }
     kit.hgap(4.0f);
     if (kit.icon_button("##prop_copy", glyph::copy, tr("Copy path"), true, false, 32.0f)) {
-        (void)core::shell::set_clipboard_text(path);
-        env_.cmd.toast(tr("Path copied"), toast_kind::info);
+        env_.cmd.toast(core::shell::set_clipboard_text(path) ? tr("Path copied") : tr("Could not copy to the clipboard"), toast_kind::info);
     }
     kit.hgap(14.0f);
     if (kit.icon_button("##prop_close", glyph::close, tr("Close  (Esc)"), true, true, 32.0f)) {

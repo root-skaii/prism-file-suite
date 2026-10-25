@@ -5,6 +5,9 @@
 #include "core/query.hpp"
 #include "core/shell_menu.hpp"
 #include "ui/env.hpp"
+
+#include <atomic>
+#include <memory>
 #include "ui/painter.hpp"
 #include "ui/shell_page.hpp"
 
@@ -47,6 +50,12 @@ private:
     bool         want_filter_focus_{};
     int          edit_age_{};
     std::string  edit_text_;
+    // Enter in the address field: what the typed path is, looked up on a worker (a dead network host would stall the ui)
+    struct PathCheck {
+        std::atomic<int> state{-1}; // -1 running, otherwise a core::path::Kind
+    };
+    std::shared_ptr<PathCheck> check_;
+    std::string  check_target_;
     std::string  filter_text_;
     std::string  crumb_parent_, crumb_next_; // the dropdown's folder and the segment the path continues with
     std::string  crumb_ctx_path_;   // the folder the right click menu is about

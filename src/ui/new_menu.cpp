@@ -52,8 +52,9 @@ void new_template_items(strata::context& ui, Env& env)
     ui.menu_separator();
     if (ui.menu_item(tr("Open templates folder"))) {
         const std::string dir = Settings::templates_path();
-        ::CreateDirectoryW(core::text::widen(dir).c_str(), nullptr);
-        (void)::ShellExecuteW(nullptr, L"open", core::text::widen(dir).c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        const bool ready = ::CreateDirectoryW(core::text::widen(dir).c_str(), nullptr) || ::GetLastError() == ERROR_ALREADY_EXISTS;
+        const bool shown = ready && reinterpret_cast<INT_PTR>(::ShellExecuteW(nullptr, L"open", core::text::widen(dir).c_str(), nullptr, nullptr, SW_SHOWNORMAL)) > 32;
+        if (!shown) { env.cmd.toast(tr("Could not open the templates folder"), strata::toast_kind::error); }
     }
 }
 

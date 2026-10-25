@@ -20,6 +20,8 @@ struct DropCallbacks {
     std::function<void(std::vector<std::string>, std::string dest, bool move)>     dropped;
     // true when this destination only records the paths (a pin): the pointer shows "link" and nothing is moved
     std::function<bool(const std::string&)>                                        link;
+    // files offered without a path (remote files from MobaXterm ...) that could not be received: how many
+    std::function<void(std::size_t)>                                               failed;
     // draw a frame now: the drag has its own message loop, so the app loop is not running
     std::function<void()>                                                          redraw;
     // physical pixels per logical pixel of the ui

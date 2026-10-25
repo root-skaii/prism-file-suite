@@ -1,6 +1,7 @@
 #include "core/shell_ops.hpp"
 
 #include "core/path.hpp"
+#include "core/terminal.hpp"
 #include "core/text.hpp"
 
 #include <windows.h>
@@ -249,38 +250,8 @@ bool run_command(const std::string& line, const std::string& folder)
     const std::wstring dir = text::widen(folder);
     const wchar_t*     cwd = dir.empty() ? nullptr : dir.c_str();
 
-    const bool console = name == L"cmd" || name == L"powershell" || name == L"pwsh" || name == L"wsl" || name == L"bash";
-    if (console) {
-        // a shell that is not installed would make Windows Terminal show its own error: look first. PowerShell 7 (pwsh) is not on
-        // every machine, Windows PowerShell stands in for it
-        const auto installed = [](const std::wstring& n) { return ::SearchPathW(nullptr, (n + L".exe").c_str(), nullptr, 0, nullptr, nullptr) > 0; };
-        if (!installed(name)) {
-            if (name == L"pwsh" && installed(L"powershell")) { name = L"powershell"; }
-            else { return false; }
-        }
-        // Windows Terminal hosts the shell when it is installed, a plain console window otherwise
-        // (wt.exe is a Store alias: given a working directory it starts nothing and still reports success, so the folder goes
-        // in -d only. a drive root ends in a backslash, which would escape the closing quote: it is doubled)
-        const std::wstring wt_dir  = !dir.empty() && dir.back() == L'\\' ? dir + L"\\" : dir;
-        const std::wstring wt_args = L"-d \"" + wt_dir + L"\" " + name + (args.empty() ? L"" : L" " + args);
-        if (!dir.empty() && !elevate) {
-            // ShellExecute reports success for the wt.exe alias and starts nothing: CreateProcess on the alias itself works
-            wchar_t local[MAX_PATH]{};
-            if (::GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH) > 0) {
-                const std::wstring exe = std::wstring{local} + L"\\Microsoft\\WindowsApps\\wt.exe";
-                std::wstring cmdline = L"\"" + exe + L"\" " + wt_args;
-                STARTUPINFOW si{};
-                si.cb = sizeof si;
-                PROCESS_INFORMATION pi{};
-                if (::CreateProcessW(exe.c_str(), cmdline.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
-                    ::CloseHandle(pi.hThread);
-                    ::CloseHandle(pi.hProcess);
-                    return true;
-                }
-            }
-        }
-        // elevated: the plain console. `runas` on the wt.exe alias asks for permission and then starts nothing
-        return reinterpret_cast<INT_PTR>(::ShellExecuteW(nullptr, verb, (name + L".exe").c_str(), args.empty() ? nullptr : args.c_str(), cwd, SW_SHOWNORMAL)) > 32;
+    if (const auto shell = terminal::from_program(name)) {
+        return terminal::open({*shell, folder, text::narrow(args), elevate});
     }
     if (reinterpret_cast<INT_PTR>(::ShellExecuteW(nullptr, verb, text::widen(prog).c_str(), args.empty() ? nullptr : args.c_str(), cwd, SW_SHOWNORMAL)) > 32) { return true; }
     if (elevate) { return false; } // (the cmd /c fallback below cannot elevate)
