@@ -259,6 +259,46 @@ void Sidebar::header(Painter& p, std::size_t si, float top_space)
     }
 }
 
+// "Cloud" section under This PC: Google Drive (native or rclone) and any other cloud remotes
+void Sidebar::cloud_header(Painter& p, std::size_t si)
+{
+    context&       ui  = p.ui();
+    const Palette& pal = p.pal();
+    constexpr float top = 14.0f;
+
+    const item_result r   = ui.custom_item("##cloud_sec", {ui.content_width(), top + 26.0f});
+    const rect        hdr{{r.bounds.min.x, r.bounds.min.y + top}, r.bounds.max};
+    const vec2        mp  = ui.mouse_pos();
+    const bool        over = r.hovered && hdr.contains(mp) && !press_.active && !drop_.has_value();
+    const rect        chev = rect::from_size({hdr.max.x - 30.0f, hdr.min.y}, {22.0f, hdr.height()});
+    const rect        plus = rect::from_size({chev.min.x - 24.0f, hdr.min.y + 2.0f}, {22.0f, hdr.height() - 4.0f});
+    const bool        over_plus = over && plus.contains(mp);
+    rows_.push_back({hdr, hdr, Kind::note, si, 0, {}});
+    const color c = over ? pal.text_dim : pal.text_faint;
+    p.text_left(rect{hdr.min, {plus.min.x, hdr.max.y}}, upper(tr("Cloud")), c, env_.fonts.small, 20.0f);
+    p.glyph_center(chev, cloud_collapsed_ ? glyph::chevron_r : glyph::chevron_d, c);
+    if (over) {
+        if (over_plus) { p.dl().rect_filled(plus, pal.hover, 6.0f); }
+        p.glyph_center(plus, glyph::add, over_plus ? pal.text : pal.text_dim);
+        if (over_plus) { ui.tooltip(tr("Connect Google Drive (rclone)")); }
+    }
+    if (over && ui.mouse_clicked(mouse_button::left)) {
+        if (over_plus) {
+            auto op = std::make_shared<DriveOp>();
+            drive_op_ = op;
+            std::thread{[op, wake = env_.window.waker()] {
+                std::string msg;
+                op->ok  = core::rclone::connect_google_drive(msg);
+                op->msg = msg;
+                op->done.store(true, std::memory_order_release);
+                if (wake) { wake(); }
+            }}.detach();
+        } else {
+            cloud_collapsed_ = !cloud_collapsed_;
+        }
+    }
+}
+
 // "Devices" title under the drives while a phone / camera is connected: collapses like a section, but is not part of the layout
 void Sidebar::devices_header(Painter& p, std::size_t si)
 {
@@ -337,7 +377,11 @@ void Sidebar::drive_row(Painter& p, const core::Place& place)
 
     const item_result r   = ui.custom_item(key, {ui.content_width(), h});
     const rect        row = inset(r.bounds);
-    rows_.push_back({r.bounds, row, Kind::drive, 0, 0, place.path});
+    const float tile_pre  = short_row ? (compact ? 26.0f : 30.0f) : compact ? 30.0f : 34.0f;
+    const float lbl_x     = row.min.x + 12.0f + tile_pre + 12.0f;
+    const rect  lbl_rect  = place.total <= 0 ? rect{{lbl_x - 6.0f, row.min.y + 4.0f}, {row.max.x - 8.0f, row.max.y - 4.0f}}
+                                             : rect{{lbl_x - 6.0f, row.min.y + 3.0f}, {row.max.x - 8.0f, row.min.y + (compact ? 25.0f : 27.0f)}};
+    rows_.push_back({r.bounds, lbl_rect, Kind::drive, 0, 0, place.path});
 
     const std::string& current = env_.tab().path();
     // (a drive lights up for anything on it, except the bin that lives on it: that has a row of its own)
@@ -384,15 +428,16 @@ void Sidebar::drive_row(Painter& p, const core::Place& place)
     const float y0    = row.center().y - block * 0.5f - 1.0f;
     const float bar_y = compact ? 22.0f : 25.0f;
     const float free_y = compact ? 27.0f : 31.0f;
+    const bool renaming = rename_.active && rename_.target.kind == Kind::drive && rename_.target.path == place.path;
     if (place.total <= 0) {
         // no bar: the name (and a device's second line) sits centred in the row instead of at the top of the bar layout
         const float cy  = row.center().y;
         const float gap = compact ? 8.0f : 9.0f;
         const bool  two = place.device;
-        p.text_left(rect{{tx, cy - (two ? gap : 0.0f) - 9.0f}, {right, cy - (two ? gap : 0.0f) + 9.0f}}, place.name, pal.text, f.body);
+        if (!renaming) { p.text_left(rect{{tx, cy - (two ? gap : 0.0f) - 9.0f}, {right, cy - (two ? gap : 0.0f) + 9.0f}}, place.name, pal.text, f.body); }
         if (two) { p.text_left(rect{{tx, cy + gap - 9.0f}, {right, cy + gap + 9.0f}}, tr("Opens in Explorer"), pal.text_dim, f.small); }
     } else {
-        p.text_left(rect{{tx, y0}, {right, y0 + (compact ? 18.0f : 20.0f)}}, place.name, pal.text, f.body);
+        if (!renaming) { p.text_left(rect{{tx, y0}, {right, y0 + (compact ? 18.0f : 20.0f)}}, place.name, pal.text, f.body); }
         const float used = std::clamp(1.0f - static_cast<float>(place.free) / static_cast<float>(place.total), 0.0f, 1.0f);
         const rect  bar{{tx, y0 + bar_y}, {right, y0 + bar_y + 4.0f}};
         p.dl().rect_filled(bar, pal.text_faint.scaled_alpha(0.30f), 2.0f);
@@ -524,7 +569,20 @@ void Sidebar::frame(Painter& p, const rect& area, const FrameInput& in)
             if (!sec.collapsed) {
                 if (sec.drives) {
                     for (const core::Place& pl : drives_) {
-                        if (!pl.device && !env_.layout.drive_hidden(pl.path)) { drive_row(p, pl); }
+                        if (!pl.device && !pl.cloud && !env_.layout.drive_hidden(pl.path)) { drive_row(p, pl); }
+                    }
+                    const bool has_cloud = std::ranges::any_of(drives_, [&](const core::Place& pl) { return pl.cloud && !env_.layout.drive_hidden(pl.path); });
+                    if (has_cloud || core::rclone::available()) {
+                        cloud_header(p, si);
+                        if (!cloud_collapsed_) {
+                            if (has_cloud) {
+                                for (const core::Place& pl : drives_) {
+                                    if (pl.cloud && !env_.layout.drive_hidden(pl.path)) { drive_row(p, pl); }
+                                }
+                            } else {
+                                note_row(p, si, tr("Click + to connect Google Drive"));
+                            }
+                        }
                     }
                     if (std::ranges::any_of(drives_, [](const core::Place& pl) { return pl.device; })) {
                         devices_header(p, si);
@@ -756,7 +814,11 @@ void Sidebar::begin_rename(const Target& t)
     rename_.active = true;
     rename_.target = t;
     const auto& secs = env_.layout.sections();
-    rename_.text = t.kind == Kind::item ? secs[t.section].items[t.index].label() : secs[t.section].title;
+    if (t.kind == Kind::drive && core::rclone::is_path(t.path)) {
+        rename_.text = core::rclone::split(t.path).remote;
+    } else {
+        rename_.text = t.kind == Kind::item ? secs[t.section].items[t.index].label() : secs[t.section].title;
+    }
 }
 
 // the label turns into a text field right where it is
@@ -805,6 +867,19 @@ void Sidebar::draw_rename(Painter& p)
     if (t.kind == Kind::item) {
         (void)env_.cmd.edit_sidebar(trf("Rename {}", env_.layout.sections()[t.section].items[t.index].label()),
                                     [&](model::SidebarLayout& l) { (void)l.rename_item({t.section, t.index}, text); });
+    } else if (t.kind == Kind::drive && core::rclone::is_path(t.path) && !text.empty()) {
+        const std::string old_remote = core::rclone::split(t.path).remote;
+        if (text != old_remote) {
+            auto op = std::make_shared<DriveOp>();
+            drive_op_ = op;
+            std::thread{[op, old_remote, text, wake = env_.window.waker()] {
+                std::string err;
+                op->ok  = core::rclone::rename_remote(old_remote, text, err);
+                op->msg = op->ok ? trf("Renamed to {}", text) : err;
+                op->done.store(true, std::memory_order_release);
+                if (wake) { wake(); }
+            }}.detach();
+        }
     } else if (!text.empty()) {
         (void)env_.cmd.edit_sidebar(tr("Rename section"), [&](model::SidebarLayout& l) { (void)l.rename_section(t.section, text); });
     }
@@ -985,9 +1060,26 @@ void Sidebar::context_menu(Painter& p)
         const std::string bin       = found != drives_.end() ? found->bin : std::string{};
         const bool        removable = found != drives_.end() && found->removable;
         const bool        network   = found != drives_.end() && found->network;
+        const bool        is_rclone = core::rclone::is_path(root);
         if (ui.menu_item(tr("Open"))) { env_.tab().navigate(root); }
         menus::open_in(ui, env_, root);
         ui.menu_separator();
+        if (is_rclone) {
+            if (ui.menu_item(tr("Rename"))) { begin_rename(t); }
+            if (ui.menu_item(tr("Disconnect"))) {
+                const std::string remote = core::rclone::split(root).remote;
+                auto op = std::make_shared<DriveOp>();
+                drive_op_ = op;
+                std::thread{[op, remote, wake = env_.window.waker()] {
+                    std::string err;
+                    op->ok  = core::rclone::delete_remote(remote, err);
+                    op->msg = op->ok ? trf("Disconnected {}", remote) : err;
+                    op->done.store(true, std::memory_order_release);
+                    if (wake) { wake(); }
+                }}.detach();
+            }
+            ui.menu_separator();
+        }
         if (removable && ui.menu_item(tr("Eject"))) {
             auto op = std::make_shared<DriveOp>();
             drive_op_ = op;

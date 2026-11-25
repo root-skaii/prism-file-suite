@@ -3,6 +3,7 @@
 
 #include "core/file_kind.hpp"
 #include "core/path.hpp"
+#include "core/rclone.hpp"
 #include "core/text.hpp"
 
 #ifdef _WIN32
@@ -394,6 +395,37 @@ FileInfo query_file_info(const std::string& p)
     FileInfo f;
     f.path = p;
     f.name = path::leaf(p);
+    if (rclone::is_path(p)) {
+        const rclone::SplitPath sp = rclone::split(p);
+        f.exists       = true;
+        f.volume       = rclone::make_root(sp.remote);
+        f.volume_label = sp.remote;
+        f.filesystem   = "Cloud";
+        if (sp.rel_unix.empty()) {
+            f.is_dir   = true;
+            f.is_drive = true;
+            f.type     = "Cloud drive";
+            (void)rclone::about(sp.remote, f.drive_total, f.drive_free);
+        } else {
+            FileEntry entry;
+            std::string err;
+            if (rclone::stat(p, entry, err)) {
+                f.is_dir       = entry.is_dir();
+                f.size         = entry.size;
+                f.size_on_disk = entry.size;
+                f.modified     = entry.modified;
+                if (f.is_dir) {
+                    f.type = "File folder";
+                } else {
+                    const std::string ext = text::lower_ascii(entry.ext());
+                    f.type = type_label(entry.kind, ext);
+                }
+            } else {
+                f.type = "Cloud item";
+            }
+        }
+        return f;
+    }
     const std::wstring w = path::long_wide(p);
 
     WIN32_FILE_ATTRIBUTE_DATA d{};
@@ -576,6 +608,17 @@ void FolderScan::start(const std::string& root)
     s_ = std::make_shared<State>();
     std::thread{[s = s_, root] {
         lower_thread_priority();
+        if (rclone::is_path(root)) {
+            std::uint64_t count = 0, bytes = 0;
+            std::string err;
+            if (rclone::dir_size(root, count, bytes, err) && !s->cancel.load(std::memory_order_relaxed)) {
+                s->files.store(count, std::memory_order_relaxed);
+                s->bytes.store(bytes, std::memory_order_relaxed);
+                s->disk.store(bytes, std::memory_order_relaxed);
+            }
+            s->done.store(true);
+            return;
+        }
         std::vector<std::wstring> stack{path::long_wide(root)};
         std::uint64_t cl = cluster_size(stack.back());
         while (!stack.empty() && !s->cancel.load(std::memory_order_relaxed)) {
@@ -700,6 +743,18 @@ FileInfo query_file_info(const std::string& path)
     FileInfo info;
     info.path = path;
     info.name = path::leaf(path);
+    if (rclone::is_path(path)) {
+        const rclone::SplitPath sp = rclone::split(path);
+        info.exists   = true;
+        info.is_dir   = sp.rel_unix.empty();
+        info.is_drive = sp.rel_unix.empty();
+        info.type     = sp.rel_unix.empty() ? "Cloud drive" : "Cloud item";
+        if (sp.rel_unix.empty()) {
+            info.volume_label = sp.remote;
+            (void)rclone::about(sp.remote, info.drive_total, info.drive_free);
+        }
+        return info;
+    }
     struct stat lst{}, st{};
     if (::lstat(path.c_str(), &lst) != 0) { return info; }
     const bool is_link = S_ISLNK(lst.st_mode);

@@ -25,46 +25,54 @@ namespace {
 
 } // namespace
 
-DriveWatcher::DriveWatcher(std::function<void()> on_change) : on_change_{std::move(on_change)}
+DriveWatcher::DriveWatcher(std::function<void()> on_change) : state_{std::make_shared<State>()}
 {
+    state_->on_change = std::move(on_change);
+    state_->interval  = interval;
     // local drives only on startup so an unreachable mapped network share never stalls the first frame;
-    // the worker immediately fills in network shares, Recycle Bin and portable devices
-    drives_ = core::drives(false);
-    revision_.store(1);
-    poked_ = true;
-    thread_ = std::jthread{[this](std::stop_token st) { run(st); }};
+    // the worker immediately fills in network shares, Recycle Bin, portable devices, WSL, and cloud drives
+    state_->drives = core::drives(false);
+    state_->revision.store(1);
+    state_->poked = true;
+    // detached: never block window close on a slow network drive / cloud RPC
+    std::thread{&DriveWatcher::run, state_}.detach();
 }
 
 DriveWatcher::~DriveWatcher()
 {
-    thread_.request_stop();
-    wake_.notify_all();
+    {
+        std::lock_guard lock{state_->mutex};
+        state_->stop = true;
+        state_->on_change = {};
+    }
+    state_->wake.notify_all();
 }
 
 std::vector<Place> DriveWatcher::list() const
 {
-    std::lock_guard lock{mutex_};
-    return drives_;
+    std::lock_guard lock{state_->mutex};
+    return state_->drives;
 }
 
 void DriveWatcher::poke()
 {
     {
-        std::lock_guard lock{mutex_};
-        poked_ = true;
+        std::lock_guard lock{state_->mutex};
+        state_->poked    = true;
+        state_->interval = interval;
     }
-    wake_.notify_all();
+    state_->wake.notify_all();
 }
 
-void DriveWatcher::run(std::stop_token st)
+void DriveWatcher::run(std::shared_ptr<State> s)
 {
-    while (!st.stop_requested()) {
+    for (;;) {
         {
-            std::unique_lock lock{mutex_};
-            wake_.wait_for(lock, st, interval, [this] { return poked_; });
-            poked_ = false;
+            std::unique_lock lock{s->mutex};
+            s->wake.wait_for(lock, s->interval, [&] { return s->stop || s->poked; });
+            if (s->stop) { return; }
+            s->poked = false;
         }
-        if (st.stop_requested()) { return; }
         std::vector<Place> now = core::drives(); // (may take seconds: no lock held)
         if (!recycle::folders().empty()) { // (one row for every drive's bin)
             Place p;
@@ -97,15 +105,18 @@ void DriveWatcher::run(std::stop_token st)
             now.push_back(std::move(p));
         }
         bool changed = false;
+        std::function<void()> cb;
         {
-            std::lock_guard lock{mutex_};
-            changed = !same(drives_, now);
+            std::lock_guard lock{s->mutex};
+            if (s->stop) { return; }
+            changed = !same(s->drives, now);
             if (changed) {
-                drives_ = std::move(now);
-                revision_.fetch_add(1);
+                s->drives = std::move(now);
+                s->revision.fetch_add(1);
+                cb = s->on_change;
             }
         }
-        if (changed && on_change_) { on_change_(); }
+        if (changed && cb) { cb(); }
     }
 }
 

@@ -2,14 +2,20 @@
 
 #include "core/log.hpp"
 
+#ifdef _WIN32
 #include <windows.h>
 #include <dwmapi.h>
 
 #include <d3d11.h>
 #include <dxgi1_5.h>
 #include <wrl/client.h>
+#else
+#include <GLFW/glfw3.h>
+#endif
 
 namespace prism::platform {
+
+#ifdef _WIN32
 
 using Microsoft::WRL::ComPtr;
 
@@ -216,6 +222,92 @@ void Gpu::update_atlas(strata::context& ui)
     if (!ui.font().dynamic()) { ui.release_font_pixels(); }
 }
 
-strata::d3d11_renderer& Gpu::renderer() noexcept { return impl_->renderer; }
+Gpu::Renderer& Gpu::renderer() noexcept { return impl_->renderer; }
+#else
+struct Gpu::SharedDevice {};
+
+struct Gpu::Impl {
+    GLFWwindow*         win{};
+    bool                immediate{};
+    strata::gl_renderer renderer;
+};
+
+Gpu::Gpu() : impl_{std::make_unique<Impl>()} {}
+Gpu::~Gpu()
+{
+    if (impl_ && impl_->win != nullptr) {
+        ::glfwMakeContextCurrent(impl_->win);
+        impl_->renderer.destroy();
+    }
+}
+
+bool Gpu::create(void* hwnd, strata::context& ui) { return create_device() && create_swap_chain(hwnd) && create_renderer(ui); }
+bool Gpu::create_device() { return true; }
+bool Gpu::use_shared_device(const std::shared_ptr<SharedDevice>&) { return true; }
+std::shared_ptr<Gpu::SharedDevice> Gpu::shared_device() const { return std::make_shared<SharedDevice>(); }
+
+bool Gpu::create_swap_chain(void* hwnd)
+{
+    impl_->win = static_cast<GLFWwindow*>(hwnd);
+    if (impl_->win == nullptr) { return false; }
+    ::glfwMakeContextCurrent(impl_->win);
+    ::glfwSwapInterval(1);
+    return true;
+}
+
+bool Gpu::create_renderer(strata::context& ui)
+{
+    if (impl_->win == nullptr) { return false; }
+    ::glfwMakeContextCurrent(impl_->win);
+    const auto loader = [](const char* name) -> void* { return reinterpret_cast<void*>(::glfwGetProcAddress(name)); };
+    const bool ok = impl_->renderer.create(ui.font(), loader);
+    if (ok && !ui.font().dynamic()) { ui.release_font_pixels(); }
+    return ok;
+}
+
+void Gpu::resize() {}
+
+void Gpu::set_immediate(bool on) noexcept
+{
+    impl_->immediate = on;
+    if (impl_->win != nullptr) {
+        ::glfwMakeContextCurrent(impl_->win);
+        ::glfwSwapInterval(on ? 0 : 1);
+    }
+}
+
+void Gpu::pace_to_display() const noexcept {}
+void Gpu::wait_for_frame() const {}
+
+bool Gpu::present(strata::context& ui, strata::color clear) { return present(ui.frame(), clear); }
+
+bool Gpu::present(const strata::draw_data& frame, strata::color clear)
+{
+    if (impl_->win == nullptr) { return false; }
+    ::glfwMakeContextCurrent(impl_->win);
+    int w = 0, h = 0;
+    ::glfwGetFramebufferSize(impl_->win, &w, &h);
+    if (w <= 0 || h <= 0) { return true; }
+    ::glViewport(0, 0, w, h);
+    ::glClearColor(clear.r / 255.0f, clear.g / 255.0f, clear.b / 255.0f, clear.a / 255.0f);
+    ::glClear(GL_COLOR_BUFFER_BIT);
+    impl_->renderer.render(frame);
+    ::glfwSwapBuffers(impl_->win);
+    return !impl_->renderer.device_lost();
+}
+
+ID3D11Device*        Gpu::device() const noexcept { return nullptr; }
+ID3D11DeviceContext* Gpu::context() const noexcept { return nullptr; }
+bool Gpu::recreate(strata::context& ui) { return create_renderer(ui); }
+
+void Gpu::update_atlas(strata::context& ui)
+{
+    if (impl_->win != nullptr) { ::glfwMakeContextCurrent(impl_->win); }
+    (void)impl_->renderer.update_atlas(ui.font());
+    if (!ui.font().dynamic()) { ui.release_font_pixels(); }
+}
+
+Gpu::Renderer& Gpu::renderer() noexcept { return impl_->renderer; }
+#endif
 
 } // namespace prism::platform

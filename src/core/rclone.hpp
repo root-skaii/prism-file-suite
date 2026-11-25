@@ -36,18 +36,28 @@ struct SplitPath {
 [[nodiscard]] std::vector<Remote> list_remotes();
 // storage quota for a remote (worker threads only); returns false if unsupported or unavailable
 [[nodiscard]] bool about(const std::string& remote, std::uint64_t& total, std::uint64_t& free);
-// lists one directory on a remote (worker threads only)
-[[nodiscard]] bool list_dir(const std::string& rclone_path, std::vector<FileEntry>& out, std::string& error);
+// metadata for a single remote file or folder (checks dir cache first, then operations/stat)
+[[nodiscard]] bool stat(const std::string& rclone_path, FileEntry& out, std::string& error);
+// total file count and byte size under a remote folder (operations/size)
+[[nodiscard]] bool dir_size(const std::string& rclone_path, std::uint64_t& count, std::uint64_t& bytes, std::string& error);
+// lists one directory on a remote (worker threads only; cached briefly in memory for instant Back/Forward)
+[[nodiscard]] bool list_dir(const std::string& rclone_path, std::vector<FileEntry>& out, std::string& error, bool force_refresh = false);
+// drops cached directory listing (empty = drop all cached listings)
+void invalidate_cache(std::string_view rclone_path = {});
 
 // file & folder operations (worker threads only)
 [[nodiscard]] bool download_to_cache(const std::string& rclone_path, std::string& local_path, std::string& error);
 [[nodiscard]] bool copy_or_move(bool move, const std::string& src, const std::string& dst_dir, std::string& error);
 [[nodiscard]] bool mkdir(const std::string& rclone_path, std::string& error);
+[[nodiscard]] bool create_empty_file(const std::string& rclone_path, std::string& error);
 [[nodiscard]] bool rename(const std::string& rclone_path, const std::string& new_name, std::string& error);
 [[nodiscard]] bool remove(const std::string& rclone_path, std::string& error);
 
-// launches interactive Google Drive OAuth setup via rclone.exe (opens browser); returns false with message if unavailable
+// launches interactive Google Drive OAuth setup via rclone; returns false with message if unavailable
 [[nodiscard]] bool connect_google_drive(std::string& message);
+// disconnects (deletes from rclone.conf) or renames a configured remote (worker threads only)
+[[nodiscard]] bool delete_remote(const std::string& remote, std::string& error);
+[[nodiscard]] bool rename_remote(const std::string& old_name, const std::string& new_name, std::string& error);
 
 // shuts down any running rclone daemon / library cleanly on app exit
 void shutdown();

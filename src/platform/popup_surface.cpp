@@ -2,16 +2,20 @@
 
 #include "core/log.hpp"
 
+#ifdef _WIN32
 #include <windows.h>
 
 #include <d3d11.h>
 #include <dcomp.h>
 #include <dxgi1_2.h>
 #include <wrl/client.h>
+#endif
 
 #include <algorithm>
 
 namespace prism::platform {
+
+#ifdef _WIN32
 
 using Microsoft::WRL::ComPtr;
 
@@ -177,5 +181,16 @@ bool PopupSurface::show(strata::d3d11_renderer& renderer, strata::draw_data over
     // (no vertical sync wait: the main window's present already paces the frame, and the compositor shows the newest one)
     return SUCCEEDED(s.chain->Present(0, 0));
 }
+#else
+struct PopupSurface::Impl {};
+PopupSurface::PopupSurface() = default;
+PopupSurface::~PopupSurface() = default;
+bool PopupSurface::create(void*, ID3D11Device*) { return false; }
+void PopupSurface::destroy() noexcept {}
+bool PopupSurface::created() const noexcept { return false; }
+bool PopupSurface::show(Renderer&, strata::draw_data, strata::vec2, int, int, int, int) { return false; }
+void PopupSurface::hide() noexcept {}
+bool PopupSurface::visible() const noexcept { return false; }
+#endif
 
 } // namespace prism::platform

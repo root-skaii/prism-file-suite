@@ -5,17 +5,21 @@
 #include "core/text.hpp"
 #include "core/thread_priority.hpp"
 
+#ifdef _WIN32
 #include <windows.h>
 #include <objbase.h>
 #include <shobjidl.h>
 #include <shlguid.h>
 #include <wrl/client.h>
+#endif
 
 #include <algorithm>
 
 namespace prism::platform {
 
+#ifdef _WIN32
 using Microsoft::WRL::ComPtr;
+#endif
 
 namespace {
 
@@ -98,7 +102,7 @@ Image ImageCache::raw(const std::string& key, int w, int h, const std::vector<un
     return {};
 }
 
-bool ImageCache::poll(strata::d3d11_renderer& renderer)
+bool ImageCache::poll(Renderer& renderer)
 {
     ++tick_;
     std::vector<Result> batch;
@@ -158,6 +162,7 @@ void ImageCache::forget()
 void ImageCache::worker()
 {
     core::lower_thread_priority();
+#ifdef _WIN32
     const bool com = SUCCEEDED(::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED));
     for (;;) {
         Request req;
@@ -203,6 +208,25 @@ void ImageCache::worker()
         if (wake_) { wake_(); }
     }
     if (com) { ::CoUninitialize(); }
+#else
+    for (;;) {
+        Request req;
+        {
+            std::unique_lock g{lock_};
+            cv_.wait(g, [this] { return quit_ || !pending_.empty(); });
+            if (quit_) { break; }
+            req = std::move(pending_.front());
+            pending_.pop_front();
+        }
+        Result res;
+        res.key = std::move(req.key);
+        {
+            std::lock_guard g{lock_};
+            results_.push_back(std::move(res));
+        }
+        if (wake_) { wake_(); }
+    }
+#endif
 }
 
 } // namespace prism::platform

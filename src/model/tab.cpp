@@ -109,6 +109,7 @@ bool Tab::up()
 void Tab::refresh()
 {
     if (path().empty()) { return; }
+    if (core::rclone::is_path(path())) { core::rclone::invalidate_cache(path()); }
     if (searching()) { search(search_); return; }
     remember_view();
     load(true);

@@ -81,6 +81,7 @@ private:
     void header(Painter& p, std::size_t si, float top_space);
     void item_row(Painter& p, std::size_t si, std::size_t ii);
     void drive_row(Painter& p, const core::Place& place);
+    void cloud_header(Painter& p, std::size_t si);
     void devices_header(Painter& p, std::size_t si);
     void empty_row(Painter& p, std::size_t si);
     void visit_row(Painter& p, std::size_t si, const std::string& path);
@@ -109,6 +110,7 @@ private:
     std::vector<core::Place>   drives_;
     core::DriveWatcher         drive_watch_;   // (the drive list is read on a worker: a slow disk must not stall a frame)
     unsigned                   drives_rev_{};
+    bool                       cloud_collapsed_{};
     bool                       devices_collapsed_{};
     core::PathProbe            probe_;
     core::ShellMenu            shell_menu_;                    // Explorer's own entries for the folder menus, read on a worker

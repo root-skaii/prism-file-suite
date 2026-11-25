@@ -239,7 +239,11 @@ private:
         const std::string num_s{s_.substr(start, pos_ - start)};
         out.type = JsonValue::Type::number;
         out.num  = std::strtod(num_s.c_str(), nullptr);
-        out.i64  = std::strtoll(num_s.c_str(), nullptr, 10);
+        if (num_s.find_first_of(".eE") != std::string::npos) {
+            out.i64 = static_cast<std::int64_t>(out.num);
+        } else {
+            out.i64 = std::strtoll(num_s.c_str(), nullptr, 10);
+        }
         return true;
     }
 
@@ -331,7 +335,11 @@ public:
     {
         std::lock_guard lock{mu_};
         if (dll_ != nullptr || proc_ != nullptr) { return true; }
-        return !find_binary(L"librclone.dll").empty() || !find_binary(L"rclone.exe").empty();
+        if (!probed_) {
+            probed_ = true;
+            has_bin_ = !find_binary(L"librclone.dll").empty() || !find_binary(L"rclone.exe").empty();
+        }
+        return has_bin_;
     }
 
     std::string backend_name()
@@ -360,15 +368,13 @@ public:
     void shutdown()
     {
         std::lock_guard lock{mu_};
-        if (dll_ != nullptr) {
-            if (fn_fin_ != nullptr) { fn_fin_(); }
-            ::FreeLibrary(dll_);
-            dll_ = nullptr;
-            fn_init_ = nullptr;
-            fn_fin_  = nullptr;
-            fn_rpc_  = nullptr;
-            fn_free_ = nullptr;
-        }
+        // Never call FreeLibrary() on Go's c-shared librclone.dll: Go's runtime threads do not support
+        // DLL unloading and FreeLibrary deadlocks inside the Windows loader lock. OS process exit cleans it up.
+        dll_     = nullptr;
+        fn_init_ = nullptr;
+        fn_fin_  = nullptr;
+        fn_rpc_  = nullptr;
+        fn_free_ = nullptr;
         if (proc_ != nullptr) {
             ::TerminateProcess(proc_, 0);
             ::CloseHandle(proc_);
@@ -398,17 +404,31 @@ private:
         if (const std::wstring dll_path = find_binary(L"librclone.dll"); !dll_path.empty()) {
             HMODULE m = ::LoadLibraryW(dll_path.c_str());
             if (m != nullptr) {
-                auto init = reinterpret_cast<FnInit>(::GetProcAddress(m, "RcloneInitialize"));
-                auto fin  = reinterpret_cast<FnFin>(::GetProcAddress(m, "RcloneFinalize"));
-                auto rpc  = reinterpret_cast<FnRpc>(::GetProcAddress(m, "RcloneRPC"));
-                auto free = reinterpret_cast<FnFree>(::GetProcAddress(m, "RcloneFreeString"));
+                auto init = reinterpret_cast<FnInit>(reinterpret_cast<void*>(::GetProcAddress(m, "RcloneInitialize")));
+                auto fin  = reinterpret_cast<FnFin>(reinterpret_cast<void*>(::GetProcAddress(m, "RcloneFinalize")));
+                auto rpc  = reinterpret_cast<FnRpc>(reinterpret_cast<void*>(::GetProcAddress(m, "RcloneRPC")));
+                auto free = reinterpret_cast<FnFree>(reinterpret_cast<void*>(::GetProcAddress(m, "RcloneFreeString")));
                 if (init != nullptr && rpc != nullptr) {
+                    if (free == nullptr) {
+                        // librclone.dll built with MinGW allocates C.CString via msvcrt.dll malloc;
+                        // never call prismfs's static UCRT std::free() on a foreign DLL heap pointer!
+                        if (HMODULE crt = ::GetModuleHandleW(L"msvcrt.dll")) {
+                            free = reinterpret_cast<FnFree>(reinterpret_cast<void*>(::GetProcAddress(crt, "free")));
+                        }
+                    }
                     init();
                     dll_     = m;
                     fn_init_ = init;
                     fn_fin_  = fin;
                     fn_rpc_  = rpc;
                     fn_free_ = free;
+                    // Tune rclone for responsive interactive browsing (10s connect, 20s I/O, 2 low-level retries)
+                    {
+                        std::string m_opt = "options/set";
+                        std::string b_opt = R"json({"main":{"Contimeout":10000000000,"Timeout":20000000000,"LowLevelRetries":2}})json";
+                        RcloneRPCResult r = rpc(m_opt.data(), b_opt.data());
+                        if (r.Output != nullptr && free != nullptr) { free(r.Output); }
+                    }
                     log::info("rclone: loaded in-process librclone.dll");
                     return true;
                 }
@@ -462,14 +482,21 @@ private:
 
     bool rpc_dll(const std::string& method, const std::string& body, std::string& response, int& status)
     {
+        FnRpc  rpc_fn{};
+        FnFree free_fn{};
+        {
+            std::lock_guard lock{mu_};
+            rpc_fn  = fn_rpc_;
+            free_fn = fn_free_;
+        }
+        if (rpc_fn == nullptr) { status = 503; return false; }
         std::string m = method;
         std::string b = body.empty() ? std::string{"{}"} : body;
-        RcloneRPCResult res = fn_rpc_(m.data(), b.data());
+        RcloneRPCResult res = rpc_fn(m.data(), b.data());
         status = res.Status;
         if (res.Output != nullptr) {
             response = res.Output;
-            if (fn_free_ != nullptr) { fn_free_(res.Output); }
-            else { std::free(res.Output); }
+            if (free_fn != nullptr) { free_fn(res.Output); }
         }
         return status >= 200 && status < 300;
     }
@@ -537,6 +564,8 @@ private:
     HANDLE         proc_{};
     HANDLE         job_{};
     unsigned short port_{};
+    bool           probed_{};
+    bool           has_bin_{};
 };
 #else
 class Client {
@@ -570,12 +599,9 @@ public:
     void shutdown()
     {
         std::lock_guard lock{mu_};
-        if (so_ != nullptr) {
-            if (fn_fin_ != nullptr) { fn_fin_(); }
-            ::dlclose(so_);
-            so_ = nullptr;
-            fn_init_ = nullptr; fn_fin_ = nullptr; fn_rpc_ = nullptr; fn_free_ = nullptr;
-        }
+        // Never dlclose() Go's c-shared librclone.so; OS process exit tears it down cleanly.
+        so_ = nullptr;
+        fn_init_ = nullptr; fn_fin_ = nullptr; fn_rpc_ = nullptr; fn_free_ = nullptr;
     }
 private:
     static std::string find_so()
@@ -606,6 +632,15 @@ private:
         if (init == nullptr || rpc == nullptr) { ::dlclose(h); return false; }
         init();
         so_ = h; fn_init_ = init; fn_fin_ = fin; fn_rpc_ = rpc; fn_free_ = free;
+        {
+            std::string m_opt = "options/set";
+            std::string b_opt = R"json({"main":{"Contimeout":10000000000,"Timeout":20000000000,"LowLevelRetries":2}})json";
+            RcloneRPCResult r = rpc(m_opt.data(), b_opt.data());
+            if (r.Output != nullptr) {
+                if (free != nullptr) { free(r.Output); }
+                else { std::free(r.Output); }
+            }
+        }
         return true;
     }
     std::mutex mu_;
@@ -730,10 +765,50 @@ bool available() { return client().available(); }
 std::string backend_name() { return client().backend_name(); }
 void shutdown() { client().shutdown(); }
 
+namespace {
+
+struct DirCacheEntry {
+    std::vector<FileEntry>                entries;
+    std::chrono::steady_clock::time_point at{};
+};
+std::mutex                                         g_dir_cache_mu;
+std::unordered_map<std::string, DirCacheEntry>     g_dir_cache;
+
+std::mutex                                         g_rem_cache_mu;
+std::vector<Remote>                                g_rem_cache;
+std::chrono::steady_clock::time_point              g_rem_cache_at{};
+bool                                               g_rem_cache_valid{};
+
+void invalidate_remotes_cache()
+{
+    std::lock_guard g{g_rem_cache_mu};
+    g_rem_cache_valid = false;
+}
+
+} // namespace
+
+void invalidate_cache(std::string_view rclone_path)
+{
+    std::lock_guard g{g_dir_cache_mu};
+    if (rclone_path.empty()) {
+        g_dir_cache.clear();
+        return;
+    }
+    const std::string key = text::lower_ascii(normalize_path(rclone_path));
+    g_dir_cache.erase(key);
+}
+
 std::vector<Remote> list_remotes()
 {
+    if (!available()) { return {}; }
+    const auto now = std::chrono::steady_clock::now();
+    {
+        std::lock_guard g{g_rem_cache_mu};
+        if (g_rem_cache_valid && now - g_rem_cache_at < std::chrono::seconds{30}) {
+            return g_rem_cache;
+        }
+    }
     std::vector<Remote> out;
-    if (!available()) { return out; }
     std::string resp;
     int status = 0;
     if (!client().rpc("config/dump", "{}", resp, status)) { return out; }
@@ -747,6 +822,12 @@ std::vector<Remote> list_remotes()
         out.push_back(std::move(r));
     }
     std::ranges::sort(out, [](const Remote& a, const Remote& b) { return text::compare_natural(a.name, b.name) < 0; });
+    {
+        std::lock_guard g{g_rem_cache_mu};
+        g_rem_cache       = out;
+        g_rem_cache_at    = now;
+        g_rem_cache_valid = true;
+    }
     return out;
 }
 
@@ -754,32 +835,152 @@ bool about(const std::string& remote, std::uint64_t& total, std::uint64_t& free)
 {
     total = free = 0;
     if (!available() || remote.empty()) { return false; }
+    // cache quota for 60s so DriveWatcher's 3s poll never hammers Google Drive over the network
+    struct QuotaCache {
+        std::uint64_t total{}, free{};
+        std::chrono::steady_clock::time_point at{};
+        bool ok{};
+    };
+    static std::mutex cache_mu;
+    static std::unordered_map<std::string, QuotaCache> cache;
+    const auto now = std::chrono::steady_clock::now();
+    {
+        std::lock_guard g{cache_mu};
+        if (const auto it = cache.find(remote); it != cache.end()) {
+            const auto ttl = it->second.ok ? std::chrono::seconds{300} : std::chrono::seconds{10};
+            if (now - it->second.at < ttl) {
+                total = it->second.total;
+                free  = it->second.free;
+                return it->second.ok;
+            }
+        }
+    }
     std::string resp;
     int status = 0;
     const std::string body = "{\"fs\":" + json_escape(remote + ":") + "}";
-    if (!client().rpc("operations/about", body, resp, status)) { return false; }
-    JsonValue root;
-    if (!JsonParser{resp}.parse(root) || root.type != JsonValue::Type::object) { return false; }
-    if (const JsonValue* t = root.find("total"); t != nullptr && t->i64 > 0) { total = static_cast<std::uint64_t>(t->i64); }
-    if (const JsonValue* f = root.find("free"); f != nullptr && f->i64 >= 0) { free = static_cast<std::uint64_t>(f->i64); }
-    else if (total > 0) {
-        if (const JsonValue* u = root.find("used"); u != nullptr && u->i64 >= 0 && static_cast<std::uint64_t>(u->i64) <= total) {
-            free = total - static_cast<std::uint64_t>(u->i64);
+    const bool ok = client().rpc("operations/about", body, resp, status);
+    if (ok) {
+        JsonValue root;
+        if (JsonParser{resp}.parse(root) && root.type == JsonValue::Type::object) {
+            if (const JsonValue* t = root.find("total"); t != nullptr && t->i64 > 0) { total = static_cast<std::uint64_t>(t->i64); }
+            if (const JsonValue* f = root.find("free"); f != nullptr && f->i64 >= 0) { free = static_cast<std::uint64_t>(f->i64); }
+            else if (total > 0) {
+                if (const JsonValue* u = root.find("used"); u != nullptr && u->i64 >= 0 && static_cast<std::uint64_t>(u->i64) <= total) {
+                    free = total - static_cast<std::uint64_t>(u->i64);
+                } else {
+                    free = total;
+                }
+            }
         }
+    } else {
+        log::info("rclone: about({}) failed ({}): {}", remote, status, extract_error(resp));
+    }
+    {
+        std::lock_guard g{cache_mu};
+        cache[remote] = QuotaCache{total, free, now, total > 0};
     }
     return total > 0;
 }
 
-bool list_dir(const std::string& rclone_path, std::vector<FileEntry>& out, std::string& error)
+bool stat(const std::string& rclone_path, FileEntry& out, std::string& error)
+{
+    out = {};
+    const SplitPath sp = split(rclone_path);
+    if (sp.remote.empty()) { error = "Invalid remote path"; return false; }
+    if (sp.rel_unix.empty()) {
+        out.name       = sp.remote;
+        out.attributes = attr::directory;
+        out.kind       = FileKind::folder;
+        out.ext_offset = static_cast<std::uint16_t>(out.name.size());
+        return true;
+    }
+    // fast path: check cached parent directory listing first (zero network calls)
+    {
+        const std::string parent_key = text::lower_ascii(normalize_path(path::parent(rclone_path)));
+        const std::string leaf_l     = text::lower_ascii(path::leaf(rclone_path));
+        const auto now               = std::chrono::steady_clock::now();
+        std::lock_guard g{g_dir_cache_mu};
+        if (const auto it = g_dir_cache.find(parent_key); it != g_dir_cache.end() && now - it->second.at < std::chrono::seconds{180}) {
+            for (const FileEntry& e : it->second.entries) {
+                if (text::lower_ascii(e.name) == leaf_l) {
+                    out = e;
+                    return true;
+                }
+            }
+        }
+    }
+    const std::string body = "{\"fs\":" + json_escape(sp.remote + ":") + ",\"remote\":" + json_escape(sp.rel_unix) + "}";
+    std::string resp;
+    int status = 0;
+    if (!client().rpc("operations/stat", body, resp, status)) {
+        error = extract_error(resp);
+        return false;
+    }
+    JsonValue root;
+    if (!JsonParser{resp}.parse(root) || root.type != JsonValue::Type::object) { error = "Invalid JSON from rclone"; return false; }
+    const JsonValue* item = root.find("item");
+    if (item == nullptr || item->type != JsonValue::Type::object) { error = "Item not found"; return false; }
+    if (const JsonValue* n = item->find("Name")) { out.name = n->as_string(); }
+    if (out.name.empty()) { out.name = path::leaf(rclone_path); }
+    const bool is_dir = item->find("IsDir") != nullptr && item->find("IsDir")->as_bool();
+    if (is_dir) {
+        out.attributes = attr::directory;
+        out.kind       = FileKind::folder;
+        out.ext_offset = static_cast<std::uint16_t>(out.name.size());
+    } else {
+        if (const JsonValue* sz = item->find("Size"); sz != nullptr && sz->i64 >= 0) { out.size = static_cast<std::uint64_t>(sz->i64); }
+        const std::size_t dot = out.name.rfind('.');
+        out.ext_offset = (dot == std::string::npos || dot == 0 || dot + 1 >= out.name.size())
+                             ? static_cast<std::uint16_t>(out.name.size())
+                             : static_cast<std::uint16_t>(dot + 1);
+        out.kind = classify_extension(text::lower_ascii(out.ext()));
+    }
+    if (const JsonValue* mt = item->find("ModTime")) { out.modified = parse_rfc3339_filetime(mt->as_string()); }
+    return true;
+}
+
+bool dir_size(const std::string& rclone_path, std::uint64_t& count, std::uint64_t& bytes, std::string& error)
+{
+    count = bytes = 0;
+    const SplitPath sp = split(rclone_path);
+    if (sp.remote.empty()) { error = "Invalid remote path"; return false; }
+    const std::string fs_str = sp.rel_unix.empty() ? (sp.remote + ":") : (sp.remote + ":" + sp.rel_unix);
+    const std::string body   = "{\"fs\":" + json_escape(fs_str) + "}";
+    std::string resp;
+    int status = 0;
+    if (!client().rpc("operations/size", body, resp, status)) {
+        error = extract_error(resp);
+        return false;
+    }
+    JsonValue root;
+    if (!JsonParser{resp}.parse(root) || root.type != JsonValue::Type::object) { error = "Invalid JSON from rclone"; return false; }
+    if (const JsonValue* c = root.find("count"); c != nullptr && c->i64 >= 0) { count = static_cast<std::uint64_t>(c->i64); }
+    if (const JsonValue* b = root.find("bytes"); b != nullptr && b->i64 >= 0) { bytes = static_cast<std::uint64_t>(b->i64); }
+    return true;
+}
+
+bool list_dir(const std::string& rclone_path, std::vector<FileEntry>& out, std::string& error, bool force_refresh)
 {
     out.clear();
     const SplitPath sp = split(rclone_path);
     if (sp.remote.empty()) { error = "Invalid remote path"; return false; }
-    const std::string body = "{\"fs\":" + json_escape(sp.remote + ":") + ",\"remote\":" + json_escape(sp.rel_unix) + "}";
+    const std::string cache_key = text::lower_ascii(normalize_path(rclone_path));
+    const auto now = std::chrono::steady_clock::now();
+    if (!force_refresh) {
+        std::lock_guard g{g_dir_cache_mu};
+        if (const auto it = g_dir_cache.find(cache_key); it != g_dir_cache.end() && now - it->second.at < std::chrono::seconds{180}) {
+            out = it->second.entries;
+            return true;
+        }
+    }
+    const std::string body = "{\"fs\":" + json_escape(sp.remote + ":") +
+                             ",\"remote\":" + json_escape(sp.rel_unix) +
+                             ",\"opt\":{\"noMimeType\":true,\"showHash\":false,\"showOrigIDs\":false}}";
     std::string resp;
     int status = 0;
     if (!client().rpc("operations/list", body, resp, status)) {
         error = extract_error(resp);
+        log::info("rclone: list_dir({}) failed ({}): {}", rclone_path, status, error);
         return false;
     }
     JsonValue root;
@@ -810,6 +1011,11 @@ bool list_dir(const std::string& rclone_path, std::vector<FileEntry>& out, std::
         }
         if (const JsonValue* mt = item.find("ModTime")) { e.modified = parse_rfc3339_filetime(mt->as_string()); }
         out.push_back(std::move(e));
+    }
+    {
+        std::lock_guard g{g_dir_cache_mu};
+        if (g_dir_cache.size() > 256) { g_dir_cache.clear(); }
+        g_dir_cache[cache_key] = DirCacheEntry{out, std::chrono::steady_clock::now()};
     }
     return true;
 }
@@ -875,11 +1081,16 @@ bool copy_or_move(bool move, const std::string& src, const std::string& dst_dir,
         const std::string dst_fs = dst_rc
             ? (split(dst_dir).remote + ":" + (split(dst_dir).rel_unix.empty() ? leaf : split(dst_dir).rel_unix + "/" + leaf))
             : path::join(dst_dir, leaf);
-        const std::string body = "{\"srcFs\":" + json_escape(src_fs) + ",\"dstFs\":" + json_escape(dst_fs) + "}";
+        const std::string body = move
+            ? ("{\"srcFs\":" + json_escape(src_fs) + ",\"dstFs\":" + json_escape(dst_fs) + ",\"deleteEmptySrcDirs\":true}")
+            : ("{\"srcFs\":" + json_escape(src_fs) + ",\"dstFs\":" + json_escape(dst_fs) + "}");
         if (!client().rpc(move ? "sync/move" : "sync/copy", body, resp, status)) {
             error = extract_error(resp);
+            log::info("rclone: {} dir {} -> {} failed ({}): {}", move ? "move" : "copy", src, dst_dir, status, error);
             return false;
         }
+        if (src_rc && move) { invalidate_cache(path::parent(src)); }
+        if (dst_rc) { invalidate_cache(dst_dir); }
         return true;
     }
 
@@ -895,8 +1106,11 @@ bool copy_or_move(bool move, const std::string& src, const std::string& dst_dir,
                              ",\"dstRemote\":" + json_escape(dst_remote) + "}";
     if (!client().rpc(move ? "operations/movefile" : "operations/copyfile", body, resp, status)) {
         error = extract_error(resp);
+        log::info("rclone: {} file {} -> {} failed ({}): {}", move ? "move" : "copy", src, dst_dir, status, error);
         return false;
     }
+    if (src_rc && move) { invalidate_cache(path::parent(src)); }
+    if (dst_rc) { invalidate_cache(dst_dir); }
     return true;
 }
 
@@ -909,8 +1123,41 @@ bool mkdir(const std::string& rclone_path, std::string& error)
     int status = 0;
     if (!client().rpc("operations/mkdir", body, resp, status)) {
         error = extract_error(resp);
+        log::info("rclone: mkdir({}) failed ({}): {}", rclone_path, status, error);
         return false;
     }
+    invalidate_cache(path::parent(rclone_path));
+    return true;
+}
+
+bool create_empty_file(const std::string& rclone_path, std::string& error)
+{
+    const SplitPath sp = split(rclone_path);
+    if (sp.remote.empty() || sp.rel_unix.empty()) { error = "Invalid file path"; return false; }
+    const std::string stage_dir = cache_root() + "\\_new";
+    ensure_dirs(stage_dir);
+    const std::string tmp_name = "empty_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    const std::string tmp_path = path::join(stage_dir, tmp_name);
+    if (std::FILE* f = std::fopen(tmp_path.c_str(), "wb")) {
+        std::fclose(f);
+    } else {
+        error = "Could not create staging file";
+        return false;
+    }
+    const std::string body = "{\"srcFs\":" + json_escape(stage_dir) +
+                             ",\"srcRemote\":" + json_escape(tmp_name) +
+                             ",\"dstFs\":" + json_escape(sp.remote + ":") +
+                             ",\"dstRemote\":" + json_escape(sp.rel_unix) + "}";
+    std::string resp;
+    int status = 0;
+    const bool ok = client().rpc("operations/copyfile", body, resp, status);
+    std::remove(tmp_path.c_str());
+    if (!ok) {
+        error = extract_error(resp);
+        log::info("rclone: create_empty_file({}) failed ({}): {}", rclone_path, status, error);
+        return false;
+    }
+    invalidate_cache(path::parent(rclone_path));
     return true;
 }
 
@@ -925,10 +1172,10 @@ bool rename(const std::string& rclone_path, const std::string& new_name, std::st
     int status = 0;
     const std::string file_body = "{\"srcFs\":" + json_escape(sp.remote + ":") + ",\"srcRemote\":" + json_escape(sp.rel_unix) +
                                   ",\"dstFs\":" + json_escape(sp.remote + ":") + ",\"dstRemote\":" + json_escape(dst_rel) + "}";
-    if (client().rpc("operations/movefile", file_body, resp, status)) { return true; }
+    if (client().rpc("operations/movefile", file_body, resp, status)) { invalidate_cache(path::parent(rclone_path)); return true; }
     const std::string dir_body = "{\"srcFs\":" + json_escape(sp.remote + ":" + sp.rel_unix) +
                                  ",\"dstFs\":" + json_escape(sp.remote + ":" + dst_rel) + "}";
-    if (client().rpc("sync/move", dir_body, resp, status)) { return true; }
+    if (client().rpc("sync/move", dir_body, resp, status)) { invalidate_cache(path::parent(rclone_path)); return true; }
     error = extract_error(resp);
     return false;
 }
@@ -940,18 +1187,16 @@ bool remove(const std::string& rclone_path, std::string& error)
     std::string resp;
     int status = 0;
     const std::string body = "{\"fs\":" + json_escape(sp.remote + ":") + ",\"remote\":" + json_escape(sp.rel_unix) + "}";
-    if (client().rpc("operations/deletefile", body, resp, status)) { return true; }
-    if (client().rpc("operations/purge", body, resp, status)) { return true; }
+    if (client().rpc("operations/deletefile", body, resp, status)) { invalidate_cache(path::parent(rclone_path)); return true; }
+    if (client().rpc("operations/purge", body, resp, status)) { invalidate_cache(path::parent(rclone_path)); return true; }
     error = extract_error(resp);
     return false;
 }
 
 bool connect_google_drive(std::string& message)
 {
-#ifdef _WIN32
-    const std::wstring exe = find_binary(L"rclone.exe");
-    if (exe.empty()) {
-        message = "Place rclone.exe (or librclone.dll) beside prismfs.exe or on PATH to connect Google Drive";
+    if (!available()) {
+        message = "Place librclone.dll or rclone.exe beside prismfs.exe or on PATH to connect Google Drive";
         return false;
     }
     // pick a unique remote name ("gdrive", "gdrive2", ...)
@@ -962,22 +1207,122 @@ bool connect_google_drive(std::string& message)
         if (!used) { break; }
         name = "gdrive" + std::to_string(i);
     }
-    std::wstring cmd = L"\"" + exe + L"\" config create " + text::widen(name) + L" drive";
-    STARTUPINFOW si{};
-    si.cb = sizeof si;
-    PROCESS_INFORMATION pi{};
-    if (!::CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, CREATE_NEW_CONSOLE, nullptr, nullptr, &si, &pi)) {
-        message = "Could not launch rclone.exe";
+
+    // Drive rclone's built-in OAuth state machine directly through RPC (works with librclone.dll, librclone.so, and rclone.exe)
+    std::string resp;
+    int status = 0;
+    const std::string create_body = "{\"name\":" + json_escape(name) +
+                                    ",\"type\":\"drive\",\"parameters\":{},\"opt\":{\"nonInteractive\":true}}";
+    if (!client().rpc("config/create", create_body, resp, status)) {
+        message = extract_error(resp);
         return false;
     }
-    ::CloseHandle(pi.hThread);
-    ::CloseHandle(pi.hProcess);
-    message = "Finish signing in to Google Drive in your browser";
+
+    for (int step = 0; step < 12; ++step) {
+        JsonValue root;
+        if (!JsonParser{resp}.parse(root) || root.type != JsonValue::Type::object) { break; }
+        const JsonValue* st = root.find("State");
+        if (st == nullptr || st->type != JsonValue::Type::string || st->str.empty()) {
+            invalidate_remotes_cache();
+            message = "Google Drive connected";
+            return true;
+        }
+        const std::string state = st->str;
+        std::string answer;
+        if (state.find("oauth-islocal") != std::string::npos || state.find("oauth-confirm") != std::string::npos) {
+            answer = "true"; // opens the default browser for Google sign-in
+        } else if (state.find("teamdrive") != std::string::npos || state.find("team_drive") != std::string::npos) {
+            answer = "false";
+        } else if (const JsonValue* opt = root.find("Option"); opt != nullptr) {
+            if (const JsonValue* def = opt->find("DefaultStr"); def != nullptr) { answer = def->as_string(); }
+        }
+        const std::string upd_body = "{\"name\":" + json_escape(name) +
+                                     ",\"parameters\":{},\"opt\":{\"nonInteractive\":true,\"state\":" + json_escape(state) +
+                                     ",\"result\":" + json_escape(answer) + "}}";
+        if (!client().rpc("config/update", upd_body, resp, status)) {
+            message = extract_error(resp);
+            return false;
+        }
+    }
+    message = "Google Drive connected";
     return true;
-#else
-    message = "Run 'rclone config create gdrive drive' in a terminal to connect Google Drive";
-    return false;
-#endif
+}
+
+bool delete_remote(const std::string& remote, std::string& error)
+{
+    if (remote.empty()) { error = "Invalid remote name"; return false; }
+    std::string resp;
+    int status = 0;
+    const std::string body = "{\"name\":" + json_escape(remote) + "}";
+    if (!client().rpc("config/delete", body, resp, status)) {
+        error = extract_error(resp);
+        return false;
+    }
+    invalidate_remotes_cache();
+    invalidate_cache();
+    return true;
+}
+
+bool rename_remote(const std::string& old_name, const std::string& new_name, std::string& error)
+{
+    if (old_name.empty() || new_name.empty()) { error = "Remote name cannot be empty"; return false; }
+    if (new_name.find_first_of(":/\\") != std::string::npos) {
+        error = "Remote name cannot contain : / \\";
+        return false;
+    }
+    if (old_name == new_name) { return true; }
+
+    std::string dump_resp;
+    int status = 0;
+    if (!client().rpc("config/dump", "{}", dump_resp, status)) {
+        error = extract_error(dump_resp);
+        return false;
+    }
+    JsonValue root;
+    if (!JsonParser{dump_resp}.parse(root) || root.type != JsonValue::Type::object) {
+        error = "Could not read rclone configuration";
+        return false;
+    }
+    if (root.find(new_name) != nullptr) {
+        error = "A cloud drive with that name already exists";
+        return false;
+    }
+    const JsonValue* src = root.find(old_name);
+    if (src == nullptr || src->type != JsonValue::Type::object) {
+        error = "Cloud drive not found";
+        return false;
+    }
+    const JsonValue* type_v = src->find("type");
+    const std::string type = type_v != nullptr ? type_v->as_string() : std::string{};
+    if (type.empty()) {
+        error = "Invalid remote configuration";
+        return false;
+    }
+
+    // rebuild parameters JSON preserving every existing key (token, scope, team_drive, etc.)
+    std::string params = "{";
+    bool first = true;
+    for (const auto& [k, v] : src->obj) {
+        if (k == "type" || v.type != JsonValue::Type::string) { continue; }
+        if (!first) { params.push_back(','); }
+        first = false;
+        params += json_escape(k) + ":" + json_escape(v.str);
+    }
+    params.push_back('}');
+
+    const std::string create_body = "{\"name\":" + json_escape(new_name) +
+                                    ",\"type\":" + json_escape(type) +
+                                    ",\"parameters\":" + params +
+                                    ",\"opt\":{\"nonInteractive\":true,\"noObscure\":true}}";
+    std::string resp;
+    if (!client().rpc("config/create", create_body, resp, status)) {
+        error = extract_error(resp);
+        return false;
+    }
+    if (!delete_remote(old_name, error)) {
+        return false;
+    }
+    return true;
 }
 
 } // namespace prism::core::rclone

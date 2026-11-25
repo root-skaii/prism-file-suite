@@ -4,6 +4,7 @@
 #include "core/git_status.hpp"
 #include "core/image_tools.hpp"
 #include "core/path.hpp"
+#include "core/rclone.hpp"
 #include "core/recycle.hpp"
 #include "core/shell_ops.hpp"
 #include "core/templates.hpp"
@@ -449,7 +450,10 @@ void FileList::new_folder(model::Tab& tab)
         const std::string made = core::path::join(tab.path(), name);
         env_.history.push({trf("New folder {}", name),
                            [made] { return core::FileOps::remove_empty_folder(made); },
-                           [made] { return ::CreateDirectoryW(core::text::widen(made).c_str(), nullptr) != FALSE; }});
+                           [made] {
+                               if (core::rclone::is_path(made)) { std::string e; return core::rclone::mkdir(made, e); }
+                               return ::CreateDirectoryW(core::text::widen(made).c_str(), nullptr) != FALSE;
+                           }});
     }
     pending_rename_ = name;
     tab.reveal_name = name;
@@ -468,6 +472,7 @@ void FileList::new_file(model::Tab& tab, const std::string& stem, const std::str
     env_.history.push({trf("New file {}", name),
                        [made] { return core::FileOps::remove_empty_file(made); },
                        [made] {
+                           if (core::rclone::is_path(made)) { std::string e; return core::rclone::create_empty_file(made, e); }
                            HANDLE h = ::CreateFileW(core::text::widen(made).c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
                            if (h == INVALID_HANDLE_VALUE) { return false; }
                            ::CloseHandle(h);
@@ -1012,7 +1017,8 @@ void FileList::draw_details(Painter& p, model::Tab& tab, const Geo& g, vec2 orig
     }
 
     // git: the folder's repository (looked up off the ui thread; null when none) and this folder's place in it
-    const std::shared_ptr<const core::GitRepo> git = env_.settings.git_badges && !tab.searching() ? env_.git.lookup(tab.path()) : nullptr;
+    const bool is_cloud = core::rclone::is_path(tab.path());
+    const std::shared_ptr<const core::GitRepo> git = env_.settings.git_badges && !tab.searching() && !is_cloud ? env_.git.lookup(tab.path()) : nullptr;
     const std::string git_base = git ? git->relative(tab.path()) : std::string{};
     std::string git_key;
     const float icon = m.icon;
@@ -1045,7 +1051,7 @@ void FileList::draw_details(Painter& p, model::Tab& tab, const Geo& g, vec2 orig
         if (cut) { p.dl().push_alpha(0.45f); }
         const rect ibox = rect::from_size({row.min.x + 12.0f, y + (rh - icon) * 0.5f}, {icon, icon});
         bool drawn = false;
-        if (shell_icon_kind(e.kind)) {
+        if (!is_cloud && shell_icon_kind(e.kind)) {
             const platform::Image img = env_.images.get(core::path::join(tab.path(), e.name), icon_px, platform::ImageKind::icon);
             if (img.id != 0) { p.image_fit(ibox, img, 0.0f); drawn = true; }
         }
@@ -1165,7 +1171,7 @@ void FileList::draw_grid(Painter& p, model::Tab& tab, const Geo& g, vec2 origin,
         const float edge = cell.width() - 16.0f;
         const rect  thumb = rect::from_size({cell.min.x + 8.0f, cell.min.y + 8.0f}, {edge, cell.height() - 16.0f - 24.0f});
         bool drawn = false;
-        if (thumbnail_kind(e.kind) && !e.is_dir()) {
+        if (!core::rclone::is_path(tab.path()) && thumbnail_kind(e.kind) && !e.is_dir()) {
             const platform::Image img = env_.images.get(core::path::join(tab.path(), e.name), static_cast<int>(std::ceil(edge * ui.scale())), platform::ImageKind::thumbnail);
             if (img.id != 0) {
                 p.image_fit(thumb, img, 6.0f);
@@ -1244,7 +1250,7 @@ void FileList::context_menu(Painter& p, model::Tab& tab, const rect& area)
 
     // Explorer's own entries (Open with Code, 7-Zip ...), when the setting is on and the worker has them
     std::vector<core::ShellMenuItem> shell_items;
-    if (env_.settings.shell_menu && !tab.path().empty() && !tab.searching()) {
+    if (env_.settings.shell_menu && !tab.path().empty() && !tab.searching() && !core::rclone::is_path(tab.path())) {
         if (picked.empty()) {
             shell_menu_.query({tab.path()}, true);
         } else {

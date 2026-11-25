@@ -1,6 +1,7 @@
 #include "core/folder_sizes.hpp"
 
 #include "core/path.hpp"
+#include "core/rclone.hpp"
 #include "core/text.hpp"
 
 #include <windows.h>
@@ -43,6 +44,7 @@ FolderSizes::~FolderSizes()
 
 std::optional<unsigned long long> FolderSizes::lookup(const std::string& path)
 {
+    if (rclone::is_path(path)) { return std::nullopt; }
     const std::lock_guard lock{mutex_};
     Entry& e = entries_[path];
     const bool stale = e.have && std::chrono::steady_clock::now() - e.at > max_age;

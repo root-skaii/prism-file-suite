@@ -143,7 +143,10 @@ void FileOps::run(OpKind kind, std::vector<std::string> sources, std::string des
             } else {
                 ok = rclone::remove(s, err);
             }
-            if (!ok) { all_ok = false; }
+            if (!ok) {
+                all_ok = false;
+                if (res.message.empty() && !err.empty()) { res.message = err; }
+            }
         }
         res.ok = all_ok;
     } else {
@@ -231,9 +234,20 @@ bool FileOps::rename(const std::string& path, const std::string& new_name)
 std::string FileOps::create_folder(const std::string& dir)
 {
     if (rclone::is_path(dir)) {
-        const std::string name = "New folder";
-        std::string err;
-        return rclone::mkdir(path::join(dir, name), err) ? name : std::string{};
+        std::vector<FileEntry> cur;
+        std::string list_err;
+        (void)rclone::list_dir(dir, cur, list_err);
+        auto exists = [&](const std::string& n) {
+            const std::string nl = text::lower_ascii(n);
+            return std::ranges::any_of(cur, [&](const FileEntry& e) { return text::lower_ascii(e.name) == nl; });
+        };
+        for (int i = 1; i < 1000; ++i) {
+            const std::string name = i == 1 ? "New folder" : "New folder (" + std::to_string(i) + ")";
+            if (exists(name)) { continue; }
+            std::string err;
+            return rclone::mkdir(path::join(dir, name), err) ? name : std::string{};
+        }
+        return {};
     }
     for (int i = 1; i < 1000; ++i) {
         const std::string name = i == 1 ? "New folder" : "New folder (" + std::to_string(i) + ")";
@@ -250,6 +264,22 @@ std::string FileOps::create_folder(const std::string& dir)
 
 std::string FileOps::create_file(const std::string& dir, const std::string& stem, const std::string& ext)
 {
+    if (rclone::is_path(dir)) {
+        std::vector<FileEntry> cur;
+        std::string list_err;
+        (void)rclone::list_dir(dir, cur, list_err);
+        auto exists = [&](const std::string& n) {
+            const std::string nl = text::lower_ascii(n);
+            return std::ranges::any_of(cur, [&](const FileEntry& e) { return text::lower_ascii(e.name) == nl; });
+        };
+        for (int i = 1; i < 1000; ++i) {
+            const std::string name = (i == 1 ? stem : stem + " (" + std::to_string(i) + ")") + ext;
+            if (exists(name)) { continue; }
+            std::string err;
+            return rclone::create_empty_file(path::join(dir, name), err) ? name : std::string{};
+        }
+        return {};
+    }
     for (int i = 1; i < 1000; ++i) {
         const std::string name = (i == 1 ? stem : stem + " (" + std::to_string(i) + ")") + ext;
 #ifdef _WIN32
@@ -273,6 +303,10 @@ std::string FileOps::create_file(const std::string& dir, const std::string& stem
 
 bool FileOps::remove_empty_file(const std::string& p)
 {
+    if (rclone::is_path(p)) {
+        std::string err;
+        return rclone::remove(p, err);
+    }
 #ifdef _WIN32
     const std::wstring w = path::long_wide(p);
     WIN32_FILE_ATTRIBUTE_DATA d{};
@@ -287,6 +321,10 @@ bool FileOps::remove_empty_file(const std::string& p)
 
 bool FileOps::remove_empty_folder(const std::string& p)
 {
+    if (rclone::is_path(p)) {
+        std::string err;
+        return rclone::remove(p, err);
+    }
 #ifdef _WIN32
     return ::RemoveDirectoryW(path::long_wide(p).c_str()) != FALSE;
 #else

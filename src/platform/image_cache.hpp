@@ -3,7 +3,11 @@
 // shell icons and thumbnails: decoded on a worker thread (IShellItemImageFactory, so every installed codec / handler
 // works), uploaded as gpu textures on the ui thread. nothing here ever blocks a frame
 
+#ifdef _WIN32
 #include "strata/backend/d3d11.hpp"
+#else
+#include "strata/backend/opengl.hpp"
+#endif
 
 #include <condition_variable>
 #include <deque>
@@ -25,6 +29,11 @@ struct Image {
 
 class ImageCache {
 public:
+#ifdef _WIN32
+    using Renderer = strata::d3d11_renderer;
+#else
+    using Renderer = strata::gl_renderer;
+#endif
     // `wake` runs on the worker when images are ready
     explicit ImageCache(std::function<void()> wake);
     ~ImageCache();
@@ -38,7 +47,7 @@ public:
     [[nodiscard]] Image raw(const std::string& key, int w, int h, const std::vector<unsigned char>& bgra);
 
     // uploads what the worker finished (a few per frame); true if any texture is new
-    bool poll(strata::d3d11_renderer& renderer);
+    bool poll(Renderer& renderer);
     // the device was lost: every texture is gone with it
     void forget();
 

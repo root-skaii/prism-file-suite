@@ -2,6 +2,7 @@
 
 #include "core/path.hpp"
 #include "core/process.hpp"
+#include "core/rclone.hpp"
 #include "core/text.hpp"
 
 #include <windows.h>
@@ -123,7 +124,7 @@ GitStatus::~GitStatus()
 
 std::shared_ptr<const GitRepo> GitStatus::lookup(const std::string& folder)
 {
-    if (folder.empty()) { return nullptr; }
+    if (folder.empty() || rclone::is_path(folder)) { return nullptr; }
     const std::lock_guard lock{mutex_};
     FolderInfo& f = folders_[folder];
     if (!f.resolved) {

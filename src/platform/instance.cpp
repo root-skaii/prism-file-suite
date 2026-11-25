@@ -1,8 +1,21 @@
 #include "platform/instance.hpp"
 
+#ifdef _WIN32
 #include <windows.h>
 #include <shellapi.h>
 #include <shlobj.h>
+#else
+#include "core/text.hpp"
+#include <atomic>
+#include <cstring>
+#include <fcntl.h>
+#include <limits.h>
+#include <sys/file.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <thread>
+#include <unistd.h>
+#endif
 
 #include <algorithm>
 #include <cstdint>
@@ -11,6 +24,8 @@
 #include <vector>
 
 namespace prism::platform::instance {
+
+#ifdef _WIN32
 
 namespace {
 
@@ -247,5 +262,113 @@ bool claim()
     }
     return true;
 }
+#else
+namespace {
+int g_lock_fd = -1;
+
+std::string sock_path()
+{
+    return "/tmp/prismfs-" + std::to_string(::getuid()) + ".sock";
+}
+
+std::string lock_path()
+{
+    return "/tmp/prismfs-" + std::to_string(::getuid()) + ".lock";
+}
+} // namespace
+
+struct Server::Impl {
+    Callbacks         cb;
+    int               fd{-1};
+    std::atomic<bool> stop{false};
+    std::thread       thread;
+};
+
+Server::~Server()
+{
+    if (impl_ == nullptr) { return; }
+    impl_->stop.store(true, std::memory_order_relaxed);
+    if (impl_->fd >= 0) {
+        ::shutdown(impl_->fd, SHUT_RDWR);
+        ::close(impl_->fd);
+        impl_->fd = -1;
+    }
+    if (impl_->thread.joinable()) { impl_->thread.join(); }
+    ::unlink(sock_path().c_str());
+    delete impl_;
+    impl_ = nullptr;
+}
+
+bool Server::create(Callbacks callbacks)
+{
+    const std::string sp = sock_path();
+    ::unlink(sp.c_str());
+    const int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) { return false; }
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    std::strncpy(addr.sun_path, sp.c_str(), sizeof(addr.sun_path) - 1);
+    if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof addr) != 0 || ::listen(fd, 8) != 0) {
+        ::close(fd);
+        return false;
+    }
+    impl_ = new Impl{std::move(callbacks), fd, false, {}};
+    impl_->thread = std::thread{[this] {
+        while (!impl_->stop.load(std::memory_order_relaxed)) {
+            const int c = ::accept(impl_->fd, nullptr, nullptr);
+            if (c < 0) { break; }
+            std::string data;
+            char buf[2048];
+            while (const ssize_t n = ::read(c, buf, sizeof buf)) {
+                if (n <= 0) { break; }
+                data.append(buf, static_cast<std::size_t>(n));
+            }
+            ::close(c);
+            const std::size_t sep = data.find('\0');
+            if (sep != std::string::npos && impl_->cb.launch) {
+                Launch l;
+                l.directory    = core::text::widen(data.substr(0, sep));
+                l.command_line = core::text::widen(data.substr(sep + 1));
+                impl_->cb.launch(std::move(l));
+            }
+        }
+    }};
+    return true;
+}
+
+void Server::set_tray(const TrayLabels*) {}
+
+bool hand_off(std::wstring_view command_line)
+{
+    const int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) { return false; }
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    std::strncpy(addr.sun_path, sock_path().c_str(), sizeof(addr.sun_path) - 1);
+    if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof addr) != 0) {
+        ::close(fd);
+        return false;
+    }
+    char cwd[PATH_MAX]{};
+    std::string payload = ::getcwd(cwd, sizeof cwd) != nullptr ? std::string{cwd} : std::string{};
+    payload.push_back('\0');
+    payload += core::text::narrow(command_line);
+    const ssize_t wrote = ::write(fd, payload.data(), payload.size());
+    ::close(fd);
+    return wrote == static_cast<ssize_t>(payload.size());
+}
+
+bool claim()
+{
+    g_lock_fd = ::open(lock_path().c_str(), O_CREAT | O_RDWR, 0600);
+    if (g_lock_fd < 0) { return true; }
+    if (::flock(g_lock_fd, LOCK_EX | LOCK_NB) != 0) {
+        ::close(g_lock_fd);
+        g_lock_fd = -1;
+        return false;
+    }
+    return true;
+}
+#endif
 
 } // namespace prism::platform::instance

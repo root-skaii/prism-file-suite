@@ -90,5 +90,4 @@ Released under the [MIT License](LICENSE) © 2026 skaii.
 
 ## Acknowledgements
 
-Built with the help of [Claude](https://www.anthropic.com/claude) by Anthropic, using the
-[strata UI framework](https://github.com/root-skaii/strata-ui-framework).
+Built with the help of Claude (Anthropic), Gemini (Google), using the [strata UI framework](https://github.com/root-skaii/strata-ui-framework).

@@ -2,7 +2,11 @@
 
 // direct3d 11 device, flip-model swap chain and strata's renderer for one window
 
+#ifdef _WIN32
 #include "strata/backend/d3d11.hpp"
+#else
+#include "strata/backend/opengl.hpp"
+#endif
 #include "strata/context.hpp"
 
 #include <memory>
@@ -14,6 +18,11 @@ namespace prism::platform {
 
 class Gpu {
 public:
+#ifdef _WIN32
+    using Renderer = strata::d3d11_renderer;
+#else
+    using Renderer = strata::gl_renderer;
+#endif
     // opaque handle to a D3D11 device + immediate context that multiple windows on the ui thread can share
     // (avoids repeating the ~180 ms D3D11CreateDevice call for every new window or Properties window)
     struct SharedDevice;
@@ -51,7 +60,7 @@ public:
     [[nodiscard]] bool recreate(strata::context& ui);
     void update_atlas(strata::context& ui); // after set_scale / glyph-set changes
 
-    [[nodiscard]] strata::d3d11_renderer& renderer() noexcept;
+    [[nodiscard]] Renderer& renderer() noexcept;
 
 private:
     struct Impl;

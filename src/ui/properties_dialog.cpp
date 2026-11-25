@@ -2,6 +2,7 @@
 
 #include "core/file_ops.hpp"
 #include "core/path.hpp"
+#include "core/rclone.hpp"
 #include "core/shell_ops.hpp"
 #include "core/text.hpp"
 #include "ui/tr.hpp"
@@ -168,7 +169,8 @@ void PropertiesDialog::header(Kit& kit)
     const float tile_s  = dense ? 46.0f : 60.0f;
     const float gap_x   = dense ? 12.0f : 16.0f;
     const float btn_s   = 32.0f;
-    const float actions_w = 4.0f * btn_s + 3.0f * 4.0f + 16.0f + btn_s + 8.0f;
+    const bool  is_cloud = core::rclone::is_path(first.path);
+    const float actions_w = (is_cloud ? (btn_s + 14.0f + btn_s + 8.0f) : (4.0f * btn_s + 3.0f * 4.0f + 16.0f + btn_s + 8.0f));
 
     const item_result r = ui.custom_item("##prop_head", {std::max(120.0f, ui.content_width() - actions_w), head_h});
     drag_zone_ = rect{{0.0f, 0.0f}, {r.bounds.max.x, r.bounds.max.y + 8.0f}};
@@ -184,7 +186,7 @@ void PropertiesDialog::header(Kit& kit)
     p.dl().shape(tile, ts);
 
     bool drawn = false;
-    if (single && !first.is_dir && (kind == core::FileKind::image || kind == core::FileKind::video || kind == core::FileKind::pdf)) {
+    if (single && !is_cloud && !first.is_dir && (kind == core::FileKind::image || kind == core::FileKind::video || kind == core::FileKind::pdf)) {
         const platform::Image img = env_.images.get(first.path, static_cast<int>(std::ceil(tile_s * ui.scale())), platform::ImageKind::thumbnail);
         if (img.id != 0) {
             p.image_fit(tile.expanded(-4.0f), img, 10.0f);
@@ -211,7 +213,8 @@ void PropertiesDialog::header(Kit& kit)
     std::string title;
     if (bin_) { title = core::path::leaf(bin_->original); }
     else if (single && first.is_drive) {
-        title = first.volume_label.empty() ? first.path : std::format("{} ({})", first.volume_label, first.path.substr(0, 2));
+        if (is_cloud) { title = first.volume_label.empty() ? first.path : first.volume_label; }
+        else { title = first.volume_label.empty() ? first.path : std::format("{} ({})", first.volume_label, first.path.substr(0, 2)); }
     } else if (single) {
         title = first.name;
     } else {
@@ -269,18 +272,20 @@ void PropertiesDialog::header(Kit& kit)
         return hot && ui.mouse_released(mouse_button::left);
     };
     ui.same_line();
-    if (header_btn("##prop_winprops", glyph::info, tr("Windows properties"))) { (void)core::shell::show_properties(path); }
-    kit.hgap(4.0f);
-    if (header_btn("##prop_winopts", glyph::list, tr("Windows options"))) {
-        std::vector<std::string> all;
-        for (const core::FileInfo& i : infos_) { all.push_back(i.path); }
-        (void)core::shell::show_native_menu(all, env_.window.handle());
+    if (!is_cloud) {
+        if (header_btn("##prop_winprops", glyph::info, tr("Windows properties"))) { (void)core::shell::show_properties(path); }
+        kit.hgap(4.0f);
+        if (header_btn("##prop_winopts", glyph::list, tr("Windows options"))) {
+            std::vector<std::string> all;
+            for (const core::FileInfo& i : infos_) { all.push_back(i.path); }
+            (void)core::shell::show_native_menu(all, env_.window.handle());
+        }
+        kit.hgap(4.0f);
+        if (header_btn("##prop_show", glyph::open_new, tr("Show in File Explorer")) && !core::shell::reveal_in_explorer(path)) {
+            env_.cmd.toast(tr("Could not open File Explorer"), toast_kind::error);
+        }
+        kit.hgap(4.0f);
     }
-    kit.hgap(4.0f);
-    if (header_btn("##prop_show", glyph::open_new, tr("Show in File Explorer")) && !core::shell::reveal_in_explorer(path)) {
-        env_.cmd.toast(tr("Could not open File Explorer"), toast_kind::error);
-    }
-    kit.hgap(4.0f);
     if (header_btn("##prop_copy", glyph::copy, single ? tr("Copy path") : tr("Copy paths"))) {
         std::string all;
         for (const core::FileInfo& i : infos_) {

@@ -1,6 +1,7 @@
 #include "core/templates.hpp"
 
 #include "core/path.hpp"
+#include "core/rclone.hpp"
 #include "core/text.hpp"
 
 #include <windows.h>
@@ -41,6 +42,32 @@ std::vector<Template> user_templates(const std::string& folder)
 
 std::string create_from_template(const std::string& dir, const Template& t)
 {
+    if (rclone::is_path(dir)) {
+        std::vector<FileEntry> cur;
+        std::string list_err;
+        (void)rclone::list_dir(dir, cur, list_err);
+        auto exists = [&](const std::string& n) {
+            const std::string nl = text::lower_ascii(n);
+            return std::ranges::any_of(cur, [&](const FileEntry& e) { return text::lower_ascii(e.name) == nl; });
+        };
+        for (int i = 1; i < 1000; ++i) {
+            const std::string name = (i == 1 ? t.stem : t.stem + " (" + std::to_string(i) + ")") + t.ext;
+            if (exists(name)) { continue; }
+            std::string err;
+            if (!t.source.empty()) {
+                if (rclone::copy_or_move(false, t.source, dir, err)) {
+                    const std::string uploaded = path::leaf(t.source);
+                    if (text::lower_ascii(uploaded) != text::lower_ascii(name)) {
+                        (void)rclone::rename(path::join(dir, uploaded), name, err);
+                    }
+                    return name;
+                }
+                return {};
+            }
+            return rclone::create_empty_file(path::join(dir, name), err) ? name : std::string{};
+        }
+        return {};
+    }
     for (int i = 1; i < 1000; ++i) {
         const std::string name   = (i == 1 ? t.stem : t.stem + " (" + std::to_string(i) + ")") + t.ext;
         const std::wstring target = text::widen(path::join(dir, name));

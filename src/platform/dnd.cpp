@@ -4,19 +4,28 @@
 #include "core/i18n.hpp"
 #include "core/log.hpp"
 #include "core/path.hpp"
+#include "core/rclone.hpp"
 #include "core/text.hpp"
 #include "core/virtual_files.hpp"
 
+#ifdef _WIN32
 #include <windows.h>
 #include <objbase.h>
 #include <oleidl.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <wrl/client.h>
+#else
+#include <GLFW/glfw3.h>
+#include <mutex>
+#include <unordered_map>
+#endif
 
 #include <atomic>
 
 namespace prism::platform {
+
+#ifdef _WIN32
 
 using Microsoft::WRL::ComPtr;
 
@@ -327,6 +336,51 @@ private:
     DWORD              button_{MK_LBUTTON};
 };
 
+// Minimal IDataObject for in-app drags of virtual/cloud paths (rclone:) that Windows Shell cannot SHParseDisplayName.
+class VirtualDragDataObject final : public IDataObject {
+public:
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id, void** out) override
+    {
+        if (id == IID_IUnknown || id == IID_IDataObject) {
+            *out = static_cast<IDataObject*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *out = nullptr;
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return ++refs_; }
+    ULONG STDMETHODCALLTYPE Release() override
+    {
+        const ULONG r = --refs_;
+        if (r == 0) { delete this; }
+        return r;
+    }
+    HRESULT STDMETHODCALLTYPE GetData(FORMATETC*, STGMEDIUM*) override { return DV_E_FORMATETC; }
+    HRESULT STDMETHODCALLTYPE GetDataHere(FORMATETC*, STGMEDIUM*) override { return DV_E_FORMATETC; }
+    HRESULT STDMETHODCALLTYPE QueryGetData(FORMATETC*) override { return DV_E_FORMATETC; }
+    HRESULT STDMETHODCALLTYPE GetCanonicalFormatEtc(FORMATETC*, FORMATETC* out) override
+    {
+        if (out != nullptr) { out->ptd = nullptr; }
+        return E_NOTIMPL;
+    }
+    HRESULT STDMETHODCALLTYPE SetData(FORMATETC*, STGMEDIUM*, BOOL) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE EnumFormatEtc(DWORD, IEnumFORMATETC** out) override
+    {
+        if (out != nullptr) { *out = nullptr; }
+        return E_NOTIMPL;
+    }
+    HRESULT STDMETHODCALLTYPE DAdvise(FORMATETC*, DWORD, IAdviseSink*, DWORD*) override { return OLE_E_ADVISENOTSUPPORTED; }
+    HRESULT STDMETHODCALLTYPE DUnadvise(DWORD) override { return OLE_E_ADVISENOTSUPPORTED; }
+    HRESULT STDMETHODCALLTYPE EnumDAdvise(IEnumSTATDATA** out) override
+    {
+        if (out != nullptr) { *out = nullptr; }
+        return OLE_E_ADVISENOTSUPPORTED;
+    }
+private:
+    std::atomic<ULONG> refs_{1};
+};
+
 } // namespace
 
 bool attach_drop_target(void* hwnd, DropCallbacks callbacks)
@@ -351,6 +405,18 @@ bool run_drag(const std::vector<std::string>& paths)
         if (SUCCEEDED(::SHParseDisplayName(core::text::widen(p).c_str(), nullptr, &id, 0, nullptr)) && id != nullptr) { ids.push_back(id); }
     }
     bool dropped = false;
+    if (ids.empty() && std::ranges::any_of(paths, [](const std::string& p) { return core::rclone::is_path(p); })) {
+        const DWORD btn = (::GetKeyState(VK_RBUTTON) & 0x8000) != 0 && (::GetKeyState(VK_LBUTTON) & 0x8000) == 0 ? MK_RBUTTON : MK_LBUTTON;
+        auto* data = new VirtualDragDataObject{};
+        auto* source = new DropSource{btn};
+        DWORD effect = DROPEFFECT_NONE;
+        g_own_drag = paths;
+        const HRESULT hr = ::DoDragDrop(data, source, DROPEFFECT_COPY | DROPEFFECT_MOVE, &effect);
+        g_own_drag.clear();
+        source->Release();
+        data->Release();
+        return hr == DRAGDROP_S_DROP;
+    }
     if (!ids.empty()) {
         // check whether all items share one parent folder (fast path: SHCreateDataObject gives Explorer full CF_HDROP + shell metadata);
         // otherwise bind an IShellItemArray across folders so drags from search results / unified Recycle Bin keep every item
@@ -393,5 +459,56 @@ bool run_drag(const std::vector<std::string>& paths)
     for (PIDLIST_ABSOLUTE id : ids) { ::CoTaskMemFree(id); }
     return dropped;
 }
+#else
+namespace {
+std::mutex g_drop_mu;
+std::unordered_map<GLFWwindow*, DropCallbacks> g_drops;
+
+void on_glfw_drop(GLFWwindow* win, int count, const char** paths)
+{
+    DropCallbacks cb;
+    {
+        std::lock_guard g{g_drop_mu};
+        auto it = g_drops.find(win);
+        if (it == g_drops.end()) { return; }
+        cb = it->second;
+    }
+    if (!cb.dropped || count <= 0) { return; }
+    std::vector<std::string> list;
+    list.reserve(static_cast<std::size_t>(count));
+    for (int i = 0; i < count; ++i) {
+        if (paths[i] != nullptr) { list.emplace_back(paths[i]); }
+    }
+    double mx = 0.0, my = 0.0;
+    ::glfwGetCursorPos(win, &mx, &my);
+    const std::string dest = cb.resolve ? cb.resolve({static_cast<float>(mx), static_cast<float>(my)}) : std::string{};
+    if (!dest.empty() && !list.empty()) { cb.dropped(std::move(list), dest, DropAction::copy); }
+    if (cb.redraw) { cb.redraw(); }
+}
+} // namespace
+
+bool attach_drop_target(void* hwnd, DropCallbacks callbacks)
+{
+    auto* win = static_cast<GLFWwindow*>(hwnd);
+    if (win == nullptr) { return false; }
+    {
+        std::lock_guard g{g_drop_mu};
+        g_drops[win] = std::move(callbacks);
+    }
+    ::glfwSetDropCallback(win, on_glfw_drop);
+    return true;
+}
+
+void detach_drop_target(void* hwnd)
+{
+    auto* win = static_cast<GLFWwindow*>(hwnd);
+    if (win == nullptr) { return; }
+    ::glfwSetDropCallback(win, nullptr);
+    std::lock_guard g{g_drop_mu};
+    g_drops.erase(win);
+}
+
+bool run_drag(const std::vector<std::string>&) { return false; }
+#endif
 
 } // namespace prism::platform

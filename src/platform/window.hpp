@@ -3,7 +3,12 @@
 // the top-level window: borderless (the title bar is drawn by the ui) but still a real resizable, snappable, shadowed
 // window. owns the strata input translation. windows.h stays out of this header.
 
+#ifdef _WIN32
 #include "strata/platform/win32.hpp"
+#else
+#include <GLFW/glfw3.h>
+#include "strata/platform/glfw.hpp"
+#endif
 
 #include <cstdint>
 #include <functional>
@@ -64,8 +69,13 @@ public:
     // the same as a free-standing callable (copies the handle: safe on a worker thread that outlives the window)
     [[nodiscard]] std::function<void()> waker() const;
 
+#ifdef _WIN32
+    using Platform = strata::win32_platform;
+#else
+    using Platform = strata::glfw_platform;
+#endif
     [[nodiscard]] void*                  handle() const noexcept { return hwnd_; }
-    [[nodiscard]] strata::win32_platform& input() noexcept { return platform_; }
+    [[nodiscard]] Platform&              input() noexcept { return platform_; }
     [[nodiscard]] float                  dpi_scale() const noexcept { return platform_.dpi_scale(); }
     [[nodiscard]] bool                   minimized() const noexcept { return minimized_; }
     // physical pixels per ui pixel (dpi scale x the interface-size setting): the ui's hit rectangles are in ui pixels
@@ -126,7 +136,7 @@ private:
     std::vector<std::string> incoming_;
     bool                  drop_hint_{};
     void*                 hwnd_{};
-    strata::win32_platform platform_;
+    Platform              platform_;
     bool                  quit_{};
     bool                  faulted_{};   // a fault hit this window: messages are ignored from then on
     bool                  activity_{true};

@@ -4,16 +4,22 @@
 #include "core/text.hpp"
 #include "platform/instance.hpp"
 
+#ifdef _WIN32
 #include <windows.h>
 #include <windowsx.h>
 #include <dwmapi.h>
 #include <shellapi.h>
 #include <shellscalingapi.h>
+#else
+#include <GLFW/glfw3.h>
+#endif
 
 #include <algorithm>
 #include <cmath>
 
 namespace prism::platform {
+
+#ifdef _WIN32
 
 namespace {
 
@@ -675,5 +681,181 @@ std::intptr_t Window::handle_message(void* hwnd, std::uint32_t msg, std::uintptr
     }
     return ::DefWindowProcW(h, msg, wparam, lparam);
 }
+#else
+namespace {
+bool ensure_glfw()
+{
+    static const bool ok = ::glfwInit() == GLFW_TRUE;
+    return ok;
+}
+} // namespace
+
+Window::~Window()
+{
+    if (hwnd_ != nullptr) {
+        platform_.detach();
+        ::glfwDestroyWindow(static_cast<GLFWwindow*>(hwnd_));
+        hwnd_ = nullptr;
+    }
+}
+
+bool Window::create(const Config& cfg)
+{
+    if (!ensure_glfw()) { return false; }
+    ::glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    ::glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+    ::glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    ::glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+    const std::string title{cfg.title};
+    GLFWwindow* win = ::glfwCreateWindow(cfg.width, cfg.height, title.c_str(), nullptr, nullptr);
+    if (win == nullptr) { return false; }
+    hwnd_ = win;
+    ::glfwSetWindowUserPointer(win, this);
+    platform_.attach(win);
+
+    ::glfwSetKeyCallback(win, [](GLFWwindow* w, int key, int sc, int act, int mods) {
+        auto* self = static_cast<Window*>(::glfwGetWindowUserPointer(w));
+        self->activity_ = true;
+        self->platform_.on_key(key, sc, act, mods);
+    });
+    ::glfwSetCharCallback(win, [](GLFWwindow* w, unsigned int cp) {
+        auto* self = static_cast<Window*>(::glfwGetWindowUserPointer(w));
+        self->activity_ = true;
+        self->platform_.on_char(cp);
+    });
+    ::glfwSetCursorPosCallback(win, [](GLFWwindow* w, double x, double y) {
+        auto* self = static_cast<Window*>(::glfwGetWindowUserPointer(w));
+        self->activity_ = true;
+        self->platform_.on_cursor_pos(x, y);
+    });
+    ::glfwSetMouseButtonCallback(win, [](GLFWwindow* w, int btn, int act, int mods) {
+        auto* self = static_cast<Window*>(::glfwGetWindowUserPointer(w));
+        self->activity_ = true;
+        self->platform_.on_mouse_button(btn, act, mods);
+    });
+    ::glfwSetScrollCallback(win, [](GLFWwindow* w, double x, double y) {
+        auto* self = static_cast<Window*>(::glfwGetWindowUserPointer(w));
+        self->activity_ = true;
+        self->platform_.on_scroll(x, y);
+    });
+    ::glfwSetFramebufferSizeCallback(win, [](GLFWwindow* w, int width, int height) {
+        auto* self = static_cast<Window*>(::glfwGetWindowUserPointer(w));
+        self->activity_  = true;
+        self->resized_   = true;
+        self->minimized_ = (width == 0 || height == 0);
+    });
+    ::glfwSetWindowFocusCallback(win, [](GLFWwindow* w, int focused) {
+        auto* self = static_cast<Window*>(::glfwGetWindowUserPointer(w));
+        self->activity_ = true;
+        self->active_   = focused == GLFW_TRUE;
+    });
+    ::glfwSetWindowCloseCallback(win, [](GLFWwindow* w) {
+        auto* self = static_cast<Window*>(::glfwGetWindowUserPointer(w));
+        if (self->on_close_request && !self->on_close_request()) {
+            ::glfwSetWindowShouldClose(w, GLFW_FALSE);
+            return;
+        }
+        self->quit_ = true;
+    });
+    if (cfg.has_at) { ::glfwSetWindowPos(win, cfg.at_x, cfg.at_y); }
+    return true;
+}
+
+void Window::show()
+{
+    if (hwnd_ != nullptr) { ::glfwShowWindow(static_cast<GLFWwindow*>(hwnd_)); }
+}
+
+void Window::show_blank(std::uint32_t) { show(); }
+
+bool Window::pump_messages()
+{
+    ::glfwPollEvents();
+    return true;
+}
+
+void Window::wait_messages(std::uint32_t timeout_ms)
+{
+    if (timeout_ms == 0xffffffffu) { ::glfwWaitEvents(); }
+    else { ::glfwWaitEventsTimeout(static_cast<double>(timeout_ms) / 1000.0); }
+}
+
+void Window::abandon() noexcept
+{
+    faulted_ = true;
+    quit_    = true;
+    if (hwnd_ != nullptr) { ::glfwHideWindow(static_cast<GLFWwindow*>(hwnd_)); }
+}
+
+void Window::wake() const noexcept { ::glfwPostEmptyEvent(); }
+void Window::wake_handle(void*) noexcept { ::glfwPostEmptyEvent(); }
+std::function<void()> Window::waker() const { return [] { ::glfwPostEmptyEvent(); }; }
+
+bool Window::maximized() const noexcept
+{
+    return hwnd_ != nullptr && ::glfwGetWindowAttrib(static_cast<GLFWwindow*>(hwnd_), GLFW_MAXIMIZED) == GLFW_TRUE;
+}
+
+bool Window::take_resized() noexcept { return std::exchange(resized_, false); }
+float Window::take_dpi_change() noexcept { return std::exchange(pending_dpi_, 0.0f); }
+
+void Window::minimize() const noexcept
+{
+    if (hwnd_ != nullptr) { ::glfwIconifyWindow(static_cast<GLFWwindow*>(hwnd_)); }
+}
+
+void Window::toggle_maximize() const noexcept
+{
+    if (hwnd_ == nullptr) { return; }
+    auto* w = static_cast<GLFWwindow*>(hwnd_);
+    if (maximized()) { ::glfwRestoreWindow(w); } else { ::glfwMaximizeWindow(w); }
+}
+
+void Window::request_close() const noexcept
+{
+    if (hwnd_ != nullptr) { ::glfwSetWindowShouldClose(static_cast<GLFWwindow*>(hwnd_), GLFW_TRUE); }
+}
+
+void Window::set_title(std::string_view utf8) const
+{
+    if (hwnd_ != nullptr) { ::glfwSetWindowTitle(static_cast<GLFWwindow*>(hwnd_), std::string{utf8}.c_str()); }
+}
+
+void Window::set_dark_frame(bool) const noexcept {}
+void* Window::prism_window_at(int, int) const { return nullptr; }
+bool Window::send_folder_to_window_at(int, int, std::string_view) const { return false; }
+bool Window::contains_screen_point(int, int) const noexcept { return false; }
+
+Window::Placement Window::cascaded_placement() const
+{
+    Placement p{80, 80, 1360, 840};
+    if (hwnd_ != nullptr) {
+        auto* w = static_cast<GLFWwindow*>(hwnd_);
+        ::glfwGetWindowPos(w, &p.x, &p.y);
+        ::glfwGetWindowSize(w, &p.w, &p.h);
+        p.x += 32; p.y += 32;
+    }
+    return p;
+}
+
+Window::Placement Window::placement_at(int screen_x, int screen_y) const
+{
+    Placement p{screen_x, screen_y, 1360, 840};
+    if (hwnd_ != nullptr) { ::glfwGetWindowSize(static_cast<GLFWwindow*>(hwnd_), &p.w, &p.h); }
+    return p;
+}
+
+std::pair<int, int> Window::logical_size() const
+{
+    int w = 1360, h = 840;
+    if (hwnd_ != nullptr) { ::glfwGetWindowSize(static_cast<GLFWwindow*>(hwnd_), &w, &h); }
+    return {w, h};
+}
+
+void Window::show_drag_ghost(std::string_view, std::string_view, int, int, std::uint32_t, bool) const {}
+void Window::hide_drag_ghost() const {}
+bool Window::hint_window_at(int, int) const { return false; }
+void Window::clear_window_hint() const {}
+#endif
 
 } // namespace prism::platform
