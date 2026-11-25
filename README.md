@@ -25,7 +25,7 @@
 - **Batch rename** (`F2` on several files), links (symbolic, hard, junction), picture tools (rotate, resize, JPEG / PNG), zip / extract
 
 **Tools**
-- **Disk usage** (`Ctrl+Shift+U`) – sortable folder tree beside a treemap, one selection; double click looks insid
+- **Disk usage** (`Ctrl+Shift+U`) – sortable folder tree beside a treemap, one selection; double click looks inside
 - **Folder compare and sync** (`Ctrl+Shift+E`, two panes) – see what differs, pick a direction per row, copy; nothing is deleted
 - **Duplicate finder**, **empty-folder cleaner**, folder sizes in the size column (View options)
 
@@ -40,7 +40,7 @@
 | `Ctrl+T` / `Ctrl+W` / `Ctrl+Tab` | new / close / next tab |
 | `Ctrl+Shift+T` · `Ctrl+Shift+D` · `Ctrl+N` | reopen closed tab · duplicate tab · new window |
 | `Ctrl+L` · `Alt+←/→/↑` · `Alt+Home` | path bar · back, forward, up · home |
-| `Ctrl+F` · `Ctrl+Enter` | filter · search subfolders |''
+| `Ctrl+F` · `Ctrl+Enter` | filter · search subfolders |
 | `Ctrl+Shift+F` | search everywhere |
 | `Ctrl+G` | go to a pinned folder or drive |
 | `Space` | Quick Look |
@@ -68,9 +68,8 @@ portable install (labels, sessions and the sidebar are stored beside it too).
 
 ## Build
 
-Needs CMake 4.3+, Visual Studio 2022 (C++ workload and the LLVM / clang-cl component) and a checkout of the
-[strata UI framework](https://github.com/root-skaii/strata-ui-framework) next to this folder
-(`../DxStrataFramework`, or `-DPRISM_STRATA_DIR=...`).
+Needs CMake 3.28+ and Visual Studio 2022 (C++ workload + LLVM / `clang-cl` component).
+The [strata UI framework](https://github.com/root-skaii/strata-ui-framework) is fetched automatically via CMake `FetchContent` (if you already have a local checkout at `../DxStrataFramework` or pass `-DPRISM_STRATA_DIR=...`, it reuses that directly with no download).
 
 **Visual Studio Code:** open the folder and press `Ctrl+Shift+B` → *PrismFS: build release*.
 
@@ -82,7 +81,7 @@ build\release\bin\prismfs.exe
 build\release\bin\prismfs_selftest.exe    # logic tests
 ```
 
-Architecture notes are in [CLAUDE.md](CLAUDE.md). `tools\make_screenshots.ps1` regenerates the images from a made-up demo folder.
+`tools\make_screenshots.ps1` regenerates the screenshots from a demo folder.
 
 ## License
 

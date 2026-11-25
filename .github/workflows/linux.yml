@@ -1,4 +1,4 @@
-name: Linux Core Build & Selftest
+name: CI
 
 on:
   push:
@@ -11,32 +11,16 @@ jobs:
     steps:
       - name: Checkout PrismFS
         uses: actions/checkout@v4
-        with:
-          path: prism-file-suite
 
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build clang-18 libgl-dev libglfw3-dev
-
-      - name: Check Strata checkout
-        id: strata
-        run: |
-          if [ -f DxStrataFramework/strata/CMakeLists.txt ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "Note: place DxStrataFramework beside prism-file-suite (or pass -DPRISM_STRATA_DIR=...)"
-          fi
+          sudo apt-get install -y ninja-build cmake clang-18 libgl-dev libglfw3-dev fonts-dejavu-core
 
       - name: Configure & Build prismfs_selftest
-        if: steps.strata.outputs.present == 'true'
-        working-directory: prism-file-suite
         run: |
           cmake --preset linux-dev -DCMAKE_CXX_COMPILER=clang++-18 -DCMAKE_C_COMPILER=clang-18
           cmake --build --preset linux-dev --target prismfs_selftest
 
       - name: Run prismfs_selftest
-        if: steps.strata.outputs.present == 'true'
-        working-directory: prism-file-suite
         run: ./build/linux-dev/bin/prismfs_selftest
