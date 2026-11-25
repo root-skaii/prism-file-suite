@@ -12,6 +12,7 @@
 - **Sidebar you control** – pinned folders, saved searches, drives with free space, Recent / Frequent
 - **Path bar** – click a segment, or its arrow for sibling folders; type a program (`cmd`, `pwsh`, `code .`) and press Enter to run it in this folder; add `admin` (`cmd admin`) to run it elevated
 - **Archives open like folders** – Enter on a zip / 7z / tar shows what is inside (a temporary copy)
+- **Cloud remotes (optional)** – browse configured [rclone](https://rclone.org/) remotes (Google Drive, OneDrive, Dropbox, SFTP, S3, etc.) using `librclone.dll` beside the exe or `rclone.exe` on `PATH`
 - **Colour labels** – `Alt+1`…`Alt+8` toggle, `Alt+0` clears; filter with `tag:red`
 - **Git badges** – `M` `A` `D` `?` `R` `!` on changed files, branch in the status bar (needs git)
 
@@ -89,4 +90,4 @@ Released under the [MIT License](LICENSE) © 2026 skaii.
 
 ## Acknowledgements
 
-Built with the help of Claude (Anthropic), Gemini (Google), using the [strata UI framework](https://github.com/root-skaii/strata-ui-framework).
+Built with the help of Claude (Anthropic) and Gemini (Google), app icon generated with ChatGPT (OpenAI), using the [strata UI framework](https://github.com/root-skaii/strata-ui-framework) and [rclone](https://rclone.org/) (MIT License) for optional cloud storage remotes.
