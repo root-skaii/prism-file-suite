@@ -2,7 +2,12 @@
 
 #include "core/text.hpp"
 
+#ifdef _WIN32
 #include <windows.h>
+#else
+#include <chrono>
+#include <ctime>
+#endif
 
 #include <algorithm>
 #include <iterator>
@@ -105,7 +110,6 @@ void Listing::append(std::vector<FileEntry>&& more)
     sel_.resize(entries_.size(), 0);
     row_of_.resize(entries_.size(), npos);
     for (std::size_t i = first; i < entries_.size(); ++i) {
-        core::text::note_codepoints(entries_[i].display());
         if (!visible(entries_[i])) { continue; }
         row_of_[i] = static_cast<std::uint32_t>(order_.size());
         order_.push_back(static_cast<std::uint32_t>(i));
@@ -133,7 +137,6 @@ void Listing::replace_entries(std::vector<FileEntry>&& fresh)
     focus_  = npos;
     anchor_ = npos;
     for (std::size_t i = 0; i < entries_.size(); ++i) {
-        core::text::note_codepoints(entries_[i].display());
         if (chosen.count(entries_[i].name) != 0) { sel_[i] = 1; }
         if (!focus_name.empty() && entries_[i].name == focus_name) { focus_ = static_cast<std::uint32_t>(i); }
         if (!anchor_name.empty() && entries_[i].name == anchor_name) { anchor_ = static_cast<std::uint32_t>(i); }
@@ -148,10 +151,124 @@ void Listing::remove_names(const std::unordered_set<std::string>& names)
     if (!finished_ || names.empty()) { return; }
     std::vector<FileEntry> kept;
     kept.reserve(entries_.size());
-    for (const FileEntry& e : entries_) {
-        if (names.count(e.name) == 0) { kept.push_back(e); }
+    for (FileEntry& e : entries_) {
+        if (names.count(e.name) == 0) { kept.push_back(std::move(e)); }
     }
     if (kept.size() != entries_.size()) { replace_entries(std::move(kept)); }
+}
+
+bool Listing::upsert_entry(FileEntry&& entry)
+{
+    if (!finished_) { return false; }
+    // locate existing entry (case-insensitive)
+    std::size_t idx = entries_.size();
+    for (std::size_t i = 0; i < entries_.size(); ++i) {
+        if (core::text::compare_plain(entries_[i].name, entry.name) == 0) {
+            idx = i;
+            break;
+        }
+    }
+    if (idx < entries_.size()) {
+        // update existing entry in place, preserving its selection and tags
+        const bool          was_vis = row_of_[idx] != npos;
+        const bool          was_dir = entries_[idx].is_dir();
+        const std::uint64_t old_sz  = entries_[idx].size;
+        const std::uint16_t tags    = entries_[idx].tags;
+        entry.tags                  = tags;
+        entries_[idx]               = std::move(entry);
+        const bool now_vis          = visible(entries_[idx]);
+        if (sel_[idx] != 0) {
+            if (!now_vis) {
+                sel_[idx] = 0;
+                --sel_count_;
+                sel_bytes_ -= old_sz;
+            } else {
+                sel_bytes_ = sel_bytes_ - old_sz + entries_[idx].size;
+            }
+        }
+        if (group_ != GroupBy::none || was_vis != now_vis) {
+            rebuild();
+            return true;
+        }
+        if (!now_vis) { return true; }
+        if (was_dir != entries_[idx].is_dir()) { folder_count_ += entries_[idx].is_dir() ? 1 : static_cast<std::size_t>(-1); }
+        // check if the updated entry is still in sorted position relative to its neighbors
+        const std::size_t r = row_of_[idx];
+        const bool ok_left  = r == 0 || !less(static_cast<std::uint32_t>(idx), order_[r - 1]);
+        const bool ok_right = r + 1 >= order_.size() || !less(order_[r + 1], static_cast<std::uint32_t>(idx));
+        if (!ok_left || !ok_right) {
+            const auto id = static_cast<std::uint32_t>(idx);
+            order_.erase(order_.begin() + static_cast<std::ptrdiff_t>(r));
+            const auto pos = std::lower_bound(order_.begin(), order_.end(), id, [this](std::uint32_t a, std::uint32_t b) { return less(a, b); });
+            const std::size_t nr = static_cast<std::size_t>(pos - order_.begin());
+            order_.insert(pos, id);
+            const std::size_t lo = std::min(r, nr), hi = std::max(r, nr);
+            for (std::size_t k = lo; k <= hi; ++k) { row_of_[order_[k]] = static_cast<std::uint32_t>(k); }
+        }
+        return true;
+    }
+
+    // new entry: append to entries_, insert into sorted order_ in O(log N) comparison + O(N) shift
+    const auto id = static_cast<std::uint32_t>(entries_.size());
+    entries_.push_back(std::move(entry));
+    sel_.push_back(0);
+    row_of_.push_back(npos);
+    tag_token_ = ~std::uint64_t{0};
+    if (group_ != GroupBy::none) {
+        rebuild();
+        return true;
+    }
+    if (!visible(entries_[id])) { return true; }
+    if (entries_[id].is_dir()) { ++folder_count_; }
+    const auto pos = std::lower_bound(order_.begin(), order_.end(), id, [this](std::uint32_t a, std::uint32_t b) { return less(a, b); });
+    const std::size_t r = static_cast<std::size_t>(pos - order_.begin());
+    order_.insert(pos, id);
+    for (std::size_t k = r; k < order_.size(); ++k) { row_of_[order_[k]] = static_cast<std::uint32_t>(k); }
+    return true;
+}
+
+bool Listing::remove_name(std::string_view name)
+{
+    if (!finished_) { return false; }
+    std::size_t idx = entries_.size();
+    for (std::size_t i = 0; i < entries_.size(); ++i) {
+        if (core::text::compare_plain(entries_[i].name, name) == 0) {
+            idx = i;
+            break;
+        }
+    }
+    if (idx >= entries_.size()) { return false; }
+
+    const std::uint32_t r = row_of_[idx];
+    if (r != npos) {
+        if (entries_[idx].is_dir()) { --folder_count_; }
+        if (sel_[idx] != 0) {
+            --sel_count_;
+            sel_bytes_ -= entries_[idx].size;
+        }
+        order_.erase(order_.begin() + static_cast<std::ptrdiff_t>(r));
+        for (std::size_t k = r; k < order_.size(); ++k) { row_of_[order_[k]] = static_cast<std::uint32_t>(k); }
+    }
+    if (focus_ == idx)  { focus_  = npos; }
+    if (anchor_ == idx) { anchor_ = npos; }
+
+    // swap-pop from entries_ so removing one entry never shifts 200k FileEntry structs
+    const std::size_t last = entries_.size() - 1;
+    if (idx != last) {
+        entries_[idx] = std::move(entries_[last]);
+        sel_[idx]     = sel_[last];
+        row_of_[idx]  = row_of_[last];
+        if (!rank_.empty() && last < rank_.size()) { rank_[idx] = rank_[last]; }
+        if (row_of_[idx] != npos) { order_[row_of_[idx]] = static_cast<std::uint32_t>(idx); }
+        if (focus_ == last)  { focus_  = static_cast<std::uint32_t>(idx); }
+        if (anchor_ == last) { anchor_ = static_cast<std::uint32_t>(idx); }
+    }
+    entries_.pop_back();
+    sel_.pop_back();
+    row_of_.pop_back();
+    if (!rank_.empty()) { rank_.pop_back(); }
+    if (group_ != GroupBy::none) { index_rows(); }
+    return true;
 }
 
 void Listing::set_sort(SortSpec s)
@@ -223,7 +340,14 @@ bool Listing::less(std::uint32_t ia, std::uint32_t ib) const noexcept
     case SortKey::modified: c = a.modified < b.modified ? -1 : (a.modified > b.modified ? 1 : 0); break;
     case SortKey::size:     c = a.size < b.size ? -1 : (a.size > b.size ? 1 : 0); break;
     case SortKey::type:
-        if (a.kind != b.kind) {
+        if (!a.original_path().empty() || !b.original_path().empty()) {
+            // Recycle Bin's third column displays Original location, so sort by parent folder instead of file type
+            const auto dir_of = [](std::string_view p) noexcept {
+                const std::size_t cut = p.rfind('\\');
+                return cut == std::string_view::npos ? p : p.substr(0, cut);
+            };
+            c = core::text::compare_natural(dir_of(a.original_path()), dir_of(b.original_path()));
+        } else if (a.kind != b.kind) {
             c = a.kind < b.kind ? -1 : 1;
         } else {
             c = core::text::compare_natural(a.ext(), b.ext());
@@ -240,16 +364,16 @@ void Listing::rebuild()
     order_.reserve(entries_.size());
     folder_count_ = 0;
     for (std::size_t i = 0; i < entries_.size(); ++i) {
-        if (!visible(entries_[i])) { continue; }
+        if (!visible(entries_[i])) {
+            sel_[i] = 0; // (selection of entries that just became hidden is dropped: it could no longer be seen or acted on)
+            continue;
+        }
         order_.push_back(static_cast<std::uint32_t>(i));
         if (entries_[i].is_dir()) { ++folder_count_; }
     }
-    // (selection of entries that just became hidden is dropped: it could no longer be seen or acted on)
-    for (std::size_t i = 0; i < entries_.size(); ++i) {
-        if (sel_[i] != 0 && !visible(entries_[i])) { sel_[i] = 0; }
-    }
     if (group_ != GroupBy::none) {
         // local day number of now, and the shift that turns an entry's UTC time into local time (current offset)
+#ifdef _WIN32
         FILETIME ft{};
         ::GetSystemTimeAsFileTime(&ft);
         TIME_ZONE_INFORMATION tz{};
@@ -257,6 +381,13 @@ void Listing::rebuild()
         const LONG  bias = tz.Bias + (id == TIME_ZONE_ID_DAYLIGHT ? tz.DaylightBias : tz.StandardBias);
         const std::int64_t utc_to_local = -static_cast<std::int64_t>(bias) * 600000000ll;
         const std::uint64_t now = (static_cast<std::uint64_t>(ft.dwHighDateTime) << 32 | ft.dwLowDateTime);
+#else
+        const std::time_t now_t = std::time(nullptr);
+        std::tm local_tm{};
+        ::localtime_r(&now_t, &local_tm);
+        const std::int64_t utc_to_local = static_cast<std::int64_t>(local_tm.tm_gmtoff) * 10000000ll;
+        const std::uint64_t now = (static_cast<std::uint64_t>(now_t) + 11644473600ull) * 10000000ull;
+#endif
         const std::uint64_t today = static_cast<std::uint64_t>(static_cast<std::int64_t>(now) + utc_to_local) / k_ticks_per_day;
         rank_.assign(entries_.size(), 0);
         for (const std::uint32_t e : order_) { rank_[e] = rank_of(group_, entries_[e], today, utc_to_local); }
@@ -311,18 +442,9 @@ std::optional<std::size_t> Listing::find_prefix(std::string_view prefix, std::si
 {
     const std::size_t n = order_.size();
     if (n == 0 || prefix.empty()) { return std::nullopt; }
-    const std::string p = core::text::lower_ascii(prefix);
     for (std::size_t k = 0; k < n; ++k) {
         const std::size_t r = (from + k) % n;
-        const std::string_view name = entries_[order_[r]].display();
-        if (name.size() < p.size()) { continue; }
-        std::size_t i = 0;
-        for (; i < p.size(); ++i) {
-            char c = name[i];
-            if (c >= 'A' && c <= 'Z') { c = static_cast<char>(c + 32); }
-            if (c != p[i]) { break; }
-        }
-        if (i == p.size()) { return r; }
+        if (core::text::starts_with_icase(entries_[order_[r]].display(), prefix)) { return r; }
     }
     return std::nullopt;
 }
@@ -340,38 +462,89 @@ std::vector<std::size_t> Listing::selected_rows() const
 void Listing::select_only(std::size_t row)
 {
     std::fill(sel_.begin(), sel_.end(), std::uint8_t{0});
-    if (row < order_.size()) { sel_[order_[row]] = 1; }
-    recount();
+    sel_count_ = 0;
+    sel_bytes_ = 0;
+    if (row < order_.size()) {
+        const std::uint32_t e = order_[row];
+        sel_[e]    = 1;
+        sel_count_ = 1;
+        sel_bytes_ = entries_[e].size;
+    }
 }
 
 void Listing::toggle(std::size_t row)
 {
     if (row >= order_.size()) { return; }
-    sel_[order_[row]] ^= 1;
-    recount();
+    const std::uint32_t e = order_[row];
+    if (sel_[e] != 0) {
+        sel_[e] = 0;
+        --sel_count_;
+        sel_bytes_ -= entries_[e].size;
+    } else {
+        sel_[e] = 1;
+        ++sel_count_;
+        sel_bytes_ += entries_[e].size;
+    }
 }
 
 void Listing::set_selected(std::size_t row, bool on)
 {
     if (row >= order_.size()) { return; }
-    sel_[order_[row]] = on ? 1 : 0;
-    recount();
+    const std::uint32_t e = order_[row];
+    const std::uint8_t  v = on ? 1 : 0;
+    if (sel_[e] == v) { return; }
+    sel_[e] = v;
+    if (on) {
+        ++sel_count_;
+        sel_bytes_ += entries_[e].size;
+    } else {
+        --sel_count_;
+        sel_bytes_ -= entries_[e].size;
+    }
 }
 
 void Listing::select_range(std::size_t a, std::size_t b, bool keep_existing)
 {
     if (order_.empty()) { return; }
-    if (!keep_existing) { std::fill(sel_.begin(), sel_.end(), std::uint8_t{0}); }
+    if (!keep_existing) {
+        std::fill(sel_.begin(), sel_.end(), std::uint8_t{0});
+        sel_count_ = 0;
+        sel_bytes_ = 0;
+    }
     const std::size_t lo = std::min(std::min(a, b), order_.size() - 1);
     const std::size_t hi = std::min(std::max(a, b), order_.size() - 1);
-    for (std::size_t r = lo; r <= hi; ++r) { sel_[order_[r]] = 1; }
-    recount();
+    for (std::size_t r = lo; r <= hi; ++r) {
+        const std::uint32_t e = order_[r];
+        if (sel_[e] == 0) {
+            sel_[e] = 1;
+            ++sel_count_;
+            sel_bytes_ += entries_[e].size;
+        }
+    }
 }
 
 void Listing::select_all()
 {
-    for (const std::uint32_t e : order_) { sel_[e] = 1; }
-    recount();
+    sel_count_ = 0;
+    sel_bytes_ = 0;
+    for (const std::uint32_t e : order_) {
+        sel_[e] = 1;
+        ++sel_count_;
+        sel_bytes_ += entries_[e].size;
+    }
+}
+
+void Listing::invert_selection()
+{
+    sel_count_ = 0;
+    sel_bytes_ = 0;
+    for (const std::uint32_t e : order_) {
+        sel_[e] ^= 1;
+        if (sel_[e] != 0) {
+            ++sel_count_;
+            sel_bytes_ += entries_[e].size;
+        }
+    }
 }
 
 void Listing::clear_selection()

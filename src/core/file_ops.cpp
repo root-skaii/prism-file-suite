@@ -1,8 +1,11 @@
 #include "core/file_ops.hpp"
 
 #include "core/path.hpp"
+#include "core/rclone.hpp"
+#include "core/shell_ops.hpp"
 #include "core/text.hpp"
 
+#ifdef _WIN32
 #include <windows.h>
 #include <objbase.h>
 #include <shellapi.h>
@@ -10,11 +13,18 @@
 #include <shlwapi.h>
 #include <shobjidl.h>
 #include <wrl/client.h>
+#else
+#include <errno.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 #include <cstring>
 
 namespace prism::core {
 
+#ifdef _WIN32
 using Microsoft::WRL::ComPtr;
 
 namespace {
@@ -30,11 +40,24 @@ struct ComScope {
 };
 
 } // namespace
+#endif
 
 FileOps::~FileOps()
 {
-    for (std::thread& t : threads_) {
-        if (t.joinable()) { t.join(); }
+    for (auto& w : workers_) {
+        if (w->thread.joinable()) { w->thread.join(); }
+    }
+}
+
+void FileOps::reap_finished()
+{
+    for (std::size_t i = 0; i < workers_.size();) {
+        if (workers_[i]->done.load(std::memory_order_acquire)) {
+            if (workers_[i]->thread.joinable()) { workers_[i]->thread.join(); }
+            workers_.erase(workers_.begin() + static_cast<std::ptrdiff_t>(i));
+        } else {
+            ++i;
+        }
     }
 }
 
@@ -47,7 +70,32 @@ bool FileOps::busy() const
 
 bool FileOps::poll(OpResult& out)
 {
-    if (transfers_.poll(out)) { return true; }
+    reap_finished();
+    if (transfers_.poll(out)) {
+        // if a built-in transfer hit Access Denied while running unelevated, hand the failed items to IFileOperation
+        // so Windows shows its standard UAC elevation prompt (only with an owner window, never during headless tests)
+        if (!out.ok && !out.aborted && out.access_denied && owner_ != nullptr && !shell::is_elevated() &&
+            (out.kind == OpKind::copy || out.kind == OpKind::move)) {
+            std::vector<std::string> retry;
+            for (std::size_t i = 0; i < out.sources.size(); ++i) {
+                if (i >= out.made.size() || out.made[i].empty()) { retry.push_back(out.sources[i]); }
+            }
+            if (!retry.empty()) {
+                {
+                    std::lock_guard g{lock_};
+                    ++running_;
+                }
+                auto w = std::make_unique<Worker>();
+                Worker* raw = w.get();
+                w->thread = std::thread([this, kind = out.kind, silent = out.silent, raw, s = std::move(retry), d = out.dest]() mutable {
+                    run(kind, std::move(s), std::move(d), silent, raw);
+                });
+                workers_.push_back(std::move(w));
+                return false;
+            }
+        }
+        return true;
+    }
     std::lock_guard g{lock_};
     if (results_.empty()) { return false; }
     out = std::move(results_.front());
@@ -58,18 +106,24 @@ bool FileOps::poll(OpResult& out)
 void FileOps::start(OpKind kind, std::vector<std::string> sources, std::string dest_dir, bool silent)
 {
     if (sources.empty()) { return; }
-    if (builtin_ && (kind == OpKind::copy || kind == OpKind::move) && !dest_dir.empty()) {
+    const bool any_rclone = rclone::is_path(dest_dir) ||
+                            std::ranges::any_of(sources, [](const std::string& s) { return rclone::is_path(s); });
+    if (!any_rclone && builtin_ && (kind == OpKind::copy || kind == OpKind::move) && !dest_dir.empty()) {
         transfers_.add(kind, std::move(sources), std::move(dest_dir), silent);
         return;
     }
+    reap_finished();
     {
         std::lock_guard g{lock_};
         ++running_;
     }
-    threads_.emplace_back([this, kind, silent, s = std::move(sources), d = std::move(dest_dir)]() mutable { run(kind, std::move(s), std::move(d), silent); });
+    auto w = std::make_unique<Worker>();
+    Worker* raw = w.get();
+    w->thread = std::thread([this, kind, silent, raw, s = std::move(sources), d = std::move(dest_dir)]() mutable { run(kind, std::move(s), std::move(d), silent, raw); });
+    workers_.push_back(std::move(w));
 }
 
-void FileOps::run(OpKind kind, std::vector<std::string> sources, std::string dest, bool silent)
+void FileOps::run(OpKind kind, std::vector<std::string> sources, std::string dest, bool silent, Worker* w)
 {
     OpResult res;
     res.kind    = kind;
@@ -77,7 +131,23 @@ void FileOps::run(OpKind kind, std::vector<std::string> sources, std::string des
     res.count   = sources.size();
     res.sources = sources;
     res.dest    = dest.empty() ? path::parent(sources.front()) : dest;
-    {
+    const bool any_rclone = rclone::is_path(dest) ||
+                            std::ranges::any_of(sources, [](const std::string& s) { return rclone::is_path(s); });
+    if (any_rclone) {
+        bool all_ok = true;
+        for (const std::string& s : sources) {
+            std::string err;
+            bool ok = false;
+            if (kind == OpKind::copy || kind == OpKind::move) {
+                ok = rclone::copy_or_move(kind == OpKind::move, s, dest, err);
+            } else {
+                ok = rclone::remove(s, err);
+            }
+            if (!ok) { all_ok = false; }
+        }
+        res.ok = all_ok;
+    } else {
+#ifdef _WIN32
         ComScope com;
         ComPtr<IFileOperation> op;
         if (com.ok && SUCCEEDED(::CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_ALL, IID_PPV_ARGS(&op)))) {
@@ -86,7 +156,7 @@ void FileOps::run(OpKind kind, std::vector<std::string> sources, std::string des
             // deleting is confirmed by our own dialog (or by the user pressing Del), not twice
             if (kind == OpKind::erase || kind == OpKind::recycle) { flags |= FOF_NOCONFIRMATION; }
             // a copy into the folder it came from keeps both: "name - Copy"
-            if (kind == OpKind::copy && !sources.empty() && path::parent(sources.front()) == dest) { flags |= FOF_RENAMEONCOLLISION; }
+            if (kind == OpKind::copy && !sources.empty() && text::lower_ascii(path::normalize(path::parent(sources.front()))) == text::lower_ascii(path::normalize(dest))) { flags |= FOF_RENAMEONCOLLISION; }
             op->SetOperationFlags(flags);
             if (owner_ != nullptr) { op->SetOwnerWindow(static_cast<HWND>(owner_)); }
 
@@ -113,21 +183,44 @@ void FileOps::run(OpKind kind, std::vector<std::string> sources, std::string des
                 res.ok      = SUCCEEDED(hr) && !res.aborted;
             }
         }
+#else
+        bool all_ok = true;
+        for (const std::string& s : sources) {
+            if (kind == OpKind::erase || kind == OpKind::recycle) {
+                if (::unlink(s.c_str()) != 0 && ::rmdir(s.c_str()) != 0) { all_ok = false; }
+            } else if (kind == OpKind::move && !dest.empty()) {
+                const std::string to = path::join(dest, path::leaf(s));
+                if (::rename(s.c_str(), to.c_str()) != 0) { all_ok = false; }
+            } else {
+                all_ok = false;
+            }
+        }
+        res.ok = all_ok;
+#endif
     }
     {
         std::lock_guard g{lock_};
         results_.push_back(std::move(res));
         --running_;
     }
+    if (w != nullptr) { w->done.store(true, std::memory_order_release); }
     if (wake_) { wake_(); }
 }
 
 bool FileOps::rename(const std::string& path, const std::string& new_name)
 {
     if (new_name.empty() || new_name.find_first_of("\\/:*?\"<>|") != std::string::npos) { return false; }
+    if (rclone::is_path(path)) {
+        std::string err;
+        return rclone::rename(path, new_name, err);
+    }
     const std::string target = path::join(path::parent(path), new_name);
+#ifdef _WIN32
     // (case-only renames are allowed: MoveFileEx treats them as a rename of the same file)
-    const bool ok = ::MoveFileExW(text::widen(path).c_str(), text::widen(target).c_str(), 0) != FALSE;
+    const bool ok = ::MoveFileExW(path::long_wide(path).c_str(), path::long_wide(target).c_str(), 0) != FALSE;
+#else
+    const bool ok = ::rename(path.c_str(), target.c_str()) == 0;
+#endif
     if (ok) {
         const auto hooks = rename_hooks(); // (a copy: a hook may close its window)
         for (const auto& h : hooks) { if (h.second) { h.second(path, target); } }
@@ -137,10 +230,20 @@ bool FileOps::rename(const std::string& path, const std::string& new_name)
 
 std::string FileOps::create_folder(const std::string& dir)
 {
+    if (rclone::is_path(dir)) {
+        const std::string name = "New folder";
+        std::string err;
+        return rclone::mkdir(path::join(dir, name), err) ? name : std::string{};
+    }
     for (int i = 1; i < 1000; ++i) {
         const std::string name = i == 1 ? "New folder" : "New folder (" + std::to_string(i) + ")";
-        if (::CreateDirectoryW(text::widen(path::join(dir, name)).c_str(), nullptr)) { return name; }
+#ifdef _WIN32
+        if (::CreateDirectoryW(path::long_wide(path::join(dir, name)).c_str(), nullptr)) { return name; }
         if (::GetLastError() != ERROR_ALREADY_EXISTS) { return {}; }
+#else
+        if (::mkdir(path::join(dir, name).c_str(), 0755) == 0) { return name; }
+        if (errno != EEXIST) { return {}; }
+#endif
     }
     return {};
 }
@@ -149,31 +252,56 @@ std::string FileOps::create_file(const std::string& dir, const std::string& stem
 {
     for (int i = 1; i < 1000; ++i) {
         const std::string name = (i == 1 ? stem : stem + " (" + std::to_string(i) + ")") + ext;
-        HANDLE h = ::CreateFileW(text::widen(path::join(dir, name)).c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+#ifdef _WIN32
+        HANDLE h = ::CreateFileW(path::long_wide(path::join(dir, name)).c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (h != INVALID_HANDLE_VALUE) {
             ::CloseHandle(h);
             return name;
         }
         if (::GetLastError() != ERROR_FILE_EXISTS && ::GetLastError() != ERROR_ALREADY_EXISTS) { return {}; }
+#else
+        const int fd = ::open(path::join(dir, name).c_str(), O_WRONLY | O_CREAT | O_EXCL, 0644);
+        if (fd >= 0) {
+            ::close(fd);
+            return name;
+        }
+        if (errno != EEXIST) { return {}; }
+#endif
     }
     return {};
 }
 
 bool FileOps::remove_empty_file(const std::string& p)
 {
+#ifdef _WIN32
+    const std::wstring w = path::long_wide(p);
     WIN32_FILE_ATTRIBUTE_DATA d{};
-    if (!::GetFileAttributesExW(text::widen(p).c_str(), GetFileExInfoStandard, &d) || d.nFileSizeLow != 0 || d.nFileSizeHigh != 0) { return false; }
-    return ::DeleteFileW(text::widen(p).c_str()) != FALSE;
+    if (!::GetFileAttributesExW(w.c_str(), GetFileExInfoStandard, &d) || d.nFileSizeLow != 0 || d.nFileSizeHigh != 0) { return false; }
+    return ::DeleteFileW(w.c_str()) != FALSE;
+#else
+    struct stat st{};
+    if (::stat(p.c_str(), &st) != 0 || st.st_size != 0) { return false; }
+    return ::unlink(p.c_str()) == 0;
+#endif
 }
 
 bool FileOps::remove_empty_folder(const std::string& p)
 {
-    return ::RemoveDirectoryW(text::widen(p).c_str()) != FALSE;
+#ifdef _WIN32
+    return ::RemoveDirectoryW(path::long_wide(p).c_str()) != FALSE;
+#else
+    return ::rmdir(p.c_str()) == 0;
+#endif
 }
 
 bool FileOps::restore_from_recycle(const std::vector<std::string>& originals)
 {
+#ifndef _WIN32
+    (void)originals;
+    return false;
+#else
     if (originals.empty()) { return false; }
+    ComScope com;
     ComPtr<IShellFolder> desktop;
     if (FAILED(::SHGetDesktopFolder(&desktop))) { return false; }
     PIDLIST_ABSOLUTE bin_id = nullptr;
@@ -226,9 +354,12 @@ bool FileOps::restore_from_recycle(const std::vector<std::string>& originals)
     }
     for (PITEMID_CHILD p : all) { ::CoTaskMemFree(p); }
     return restored;
+#endif
 }
 
 // --- clipboard -----------------------------------------------------------------------------------------------
+
+#ifdef _WIN32
 
 namespace {
 
@@ -238,7 +369,35 @@ namespace {
     return f;
 }
 
+[[nodiscard]] bool open_clipboard_retry()
+{
+    for (int i = 0; i < 5; ++i) {
+        if (::OpenClipboard(nullptr) != FALSE) { return true; }
+        ::Sleep(4);
+    }
+    return false;
+}
+
 } // namespace
+
+unsigned long clipboard_sequence() noexcept
+{
+    return ::GetClipboardSequenceNumber();
+}
+
+void clipboard_clear_cut()
+{
+    if (!::IsClipboardFormatAvailable(CF_HDROP) || !open_clipboard_retry()) { return; }
+    bool is_cut = false;
+    if (HANDLE h = ::GetClipboardData(drop_effect_format())) {
+        if (const auto* e = static_cast<const DWORD*>(::GlobalLock(h))) {
+            is_cut = (*e & DROPEFFECT_MOVE) != 0 && (*e & DROPEFFECT_COPY) == 0;
+            ::GlobalUnlock(h);
+        }
+    }
+    if (is_cut) { ::EmptyClipboard(); }
+    ::CloseClipboard();
+}
 
 bool clipboard_set_files(const std::vector<std::string>& paths, bool cut)
 {
@@ -269,7 +428,7 @@ bool clipboard_set_files(const std::vector<std::string>& paths, bool cut)
         ::GlobalUnlock(effect);
     }
     bool ok = false;
-    if (::OpenClipboard(nullptr)) {
+    if (open_clipboard_retry()) {
         ::EmptyClipboard();
         ok = ::SetClipboardData(CF_HDROP, files) != nullptr;
         if (ok) { files = nullptr; }
@@ -290,7 +449,8 @@ bool clipboard_get_files(std::vector<std::string>& paths, bool& cut)
 {
     paths.clear();
     cut = false;
-    if (!::OpenClipboard(nullptr)) { return false; }
+    // passive read (called from ui thread on clipboard change): never Sleep() here if another app holds the clipboard
+    if (!::IsClipboardFormatAvailable(CF_HDROP) || !::OpenClipboard(nullptr)) { return false; }
     if (HANDLE h = ::GetClipboardData(CF_HDROP)) {
         auto* drop = static_cast<HDROP>(h);
         const UINT n = ::DragQueryFileW(drop, 0xffffffffu, nullptr, 0);
@@ -310,5 +470,12 @@ bool clipboard_get_files(std::vector<std::string>& paths, bool& cut)
     ::CloseClipboard();
     return !paths.empty();
 }
+#else
+unsigned long clipboard_sequence() noexcept { return 0; }
+void clipboard_clear_cut() {}
+bool clipboard_set_files(const std::vector<std::string>&, bool) { return false; }
+bool clipboard_has_files() { return false; }
+bool clipboard_get_files(std::vector<std::string>& paths, bool& cut) { paths.clear(); cut = false; return false; }
+#endif
 
 } // namespace prism::core

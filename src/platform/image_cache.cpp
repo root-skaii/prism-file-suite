@@ -19,12 +19,24 @@ using Microsoft::WRL::ComPtr;
 
 namespace {
 
-constexpr std::size_t k_max_entries = 700;
-constexpr int         k_uploads_per_poll = 12;
+constexpr std::size_t k_max_entries    = 700;
+constexpr int         k_uploads_per_poll = 16;
+constexpr std::size_t k_worker_count   = 4;
+
+#ifndef FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS
+#define FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS 0x00400000
+#endif
+#ifndef FILE_ATTRIBUTE_RECALL_ON_OPEN
+#define FILE_ATTRIBUTE_RECALL_ON_OPEN 0x00040000
+#endif
 
 } // namespace
 
-ImageCache::ImageCache(std::function<void()> wake) : wake_{std::move(wake)}, thread_{[this] { worker(); }} {}
+ImageCache::ImageCache(std::function<void()> wake) : wake_{std::move(wake)}
+{
+    workers_.reserve(k_worker_count);
+    for (std::size_t i = 0; i < k_worker_count; ++i) { workers_.emplace_back([this] { worker(); }); }
+}
 
 ImageCache::~ImageCache()
 {
@@ -33,12 +45,16 @@ ImageCache::~ImageCache()
         quit_ = true;
     }
     cv_.notify_all();
-    if (thread_.joinable()) { thread_.join(); }
+    for (std::thread& t : workers_) {
+        if (t.joinable()) { t.join(); }
+    }
 }
 
 Image ImageCache::get(const std::string& path, int px, ImageKind kind)
 {
-    std::string key = path;
+    std::string key;
+    key.reserve(path.size() + 12);
+    key += path;
     key.push_back('|');
     key += std::to_string(px);
     key.push_back(kind == ImageKind::icon ? 'i' : 't');
@@ -49,10 +65,18 @@ Image ImageCache::get(const std::string& path, int px, ImageKind kind)
         return it->second.image;
     }
     entries_[key] = Entry{{}, true, tick_};
+    std::string dropped_key;
     {
         std::lock_guard g{lock_};
         queue_.push_front({key, path, px, kind});
-        if (queue_.size() > 400) { queue_.pop_back(); }
+        if (queue_.size() > 400) {
+            dropped_key = std::move(queue_.back().key);
+            queue_.pop_back();
+        }
+    }
+    // dropped requests must leave entries_, else they stay loading=true forever and leak past LRU eviction
+    if (!dropped_key.empty()) {
+        if (const auto dit = entries_.find(dropped_key); dit != entries_.end() && dit->second.loading) { entries_.erase(dit); }
     }
     cv_.notify_one();
     return {};
@@ -78,11 +102,16 @@ bool ImageCache::poll(strata::d3d11_renderer& renderer)
 {
     ++tick_;
     std::vector<Result> batch;
+    bool more = false;
     {
         std::lock_guard g{lock_};
         const std::size_t n = std::min<std::size_t>(results_.size(), k_uploads_per_poll);
-        batch.assign(std::make_move_iterator(results_.begin()), std::make_move_iterator(results_.begin() + static_cast<std::ptrdiff_t>(n)));
-        results_.erase(results_.begin(), results_.begin() + static_cast<std::ptrdiff_t>(n));
+        batch.reserve(n);
+        for (std::size_t i = 0; i < n; ++i) {
+            batch.push_back(std::move(results_.front()));
+            results_.pop_front();
+        }
+        more = !results_.empty();
     }
     bool any = false;
     for (Result& r : batch) {
@@ -102,6 +131,7 @@ bool ImageCache::poll(strata::d3d11_renderer& renderer)
     // keep the cache bounded: the least recently used finished entries go
     if (entries_.size() > k_max_entries) {
         std::vector<std::pair<unsigned long, std::string>> by_age;
+        by_age.reserve(entries_.size());
         for (const auto& [k, e] : entries_) {
             if (!e.loading) { by_age.emplace_back(e.used, k); }
         }
@@ -113,7 +143,7 @@ bool ImageCache::poll(strata::d3d11_renderer& renderer)
             entries_.erase(it);
         }
     }
-    if (!batch.empty() && !results_.empty()) { if (wake_) { wake_(); } } // (more waiting: another frame)
+    if (!batch.empty() && more) { if (wake_) { wake_(); } } // (more waiting: another frame)
     return any;
 }
 
@@ -143,13 +173,21 @@ void ImageCache::worker()
         // third-party thumbnail handlers run in here: a fault in one costs this picture, not the window
         (void)core::crash::guard("thumbnail / icon handler", [&] {
         ComPtr<IShellItem> item;
-        if (SUCCEEDED(::SHCreateItemFromParsingName(core::text::widen(req.path).c_str(), nullptr, IID_PPV_ARGS(&item)))) {
+        const std::wstring wpath = core::text::widen(req.path);
+        const DWORD attrs = ::GetFileAttributesW(wpath.c_str());
+        const bool cloud_only = attrs != INVALID_FILE_ATTRIBUTES &&
+                                (attrs & (FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS | FILE_ATTRIBUTE_RECALL_ON_OPEN | FILE_ATTRIBUTE_OFFLINE)) != 0;
+        if (SUCCEEDED(::SHCreateItemFromParsingName(wpath.c_str(), nullptr, IID_PPV_ARGS(&item)))) {
             ComPtr<IShellItemImageFactory> factory;
             if (SUCCEEDED(item.As(&factory))) {
                 const SIZE size{req.px, req.px};
                 HBITMAP bmp = nullptr;
                 HRESULT hr = E_FAIL;
-                if (req.kind == ImageKind::thumbnail) { hr = factory->GetImage(size, SIIGBF_THUMBNAILONLY | SIIGBF_BIGGERSIZEOK, &bmp); }
+                if (req.kind == ImageKind::thumbnail) {
+                    // never hydrate cloud-only placeholders just to render a thumbnail
+                    const int flags = SIIGBF_THUMBNAILONLY | SIIGBF_BIGGERSIZEOK | (cloud_only ? SIIGBF_INCACHEONLY : 0);
+                    hr = factory->GetImage(size, flags, &bmp);
+                }
                 if (FAILED(hr) || bmp == nullptr) { hr = factory->GetImage(size, SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK, &bmp); }
                 if (SUCCEEDED(hr) && bmp != nullptr) {
                     (void)core::bitmap_to_bgra(bmp, res.w, res.h, res.bgra);

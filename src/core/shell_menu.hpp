@@ -60,6 +60,7 @@ private:
     bool                  has_pending_{};
     unsigned              invoke_id_{};
     void*                 invoke_hwnd_{};
+    std::string           invoke_key_;  // guards invoke() against firing on a newly built menu
     bool                  has_invoke_{};
     std::string           asked_key_;   // the last query()
     std::string           done_key_;    // the query items_ belong to

@@ -16,6 +16,9 @@ struct Place {
     std::uint64_t free{};
     bool          removable{};
     bool          optical{};   // CD / DVD drive
+    bool          network{};   // mapped network drive (DRIVE_REMOTE)
+    bool          wsl{};       // WSL Linux distribution (\\wsl.localhost\<name>)
+    bool          cloud{};     // cloud storage root (e.g. Google Drive)
     std::string   bin;         // drives: this user's Recycle Bin folder on it, when there is one
     bool          recycle{};   // the Recycle Bin (a real folder, `path`, listed with the names things were deleted under)
     bool          device{};    // phone / camera without a drive letter: `path` is a shell parsing name ("::{...}\\?\usb#...")
@@ -34,10 +37,17 @@ struct KnownFolder {
 
 // Home, Desktop, Downloads, Documents, Pictures, Music, Videos (only the ones that exist)
 [[nodiscard]] std::vector<Place> quick_access();
-// fixed, removable and network drives that are ready
-[[nodiscard]] std::vector<Place> drives();
+// fixed, removable and network drives that are ready (`include_remote = false` skips network shares so startup never stalls)
+[[nodiscard]] std::vector<Place> drives(bool include_remote = true);
 // phones and cameras (MTP / PTP) listed under This PC; they have no path the win32 file apis can open. slow: worker threads only
 [[nodiscard]] std::vector<Place> portable_devices();
+// installed WSL distributions (\\wsl.localhost\<name>), read from HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss
+[[nodiscard]] std::vector<Place> wsl_distros();
+// Google Drive for Desktop sync roots / virtual drives (SyncRootManager, Explorer NameSpace, or local mirror)
+[[nodiscard]] std::vector<Place> google_drive_places();
+// ejects a removable USB/CD drive ("E:\") or disconnects a mapped network drive ("Z:\"). worker threads only
+[[nodiscard]] bool eject_drive(const std::string& root, std::string& error);
+[[nodiscard]] bool disconnect_network_drive(const std::string& root, std::string& error);
 [[nodiscard]] std::string        home_folder();
 
 } // namespace prism::core

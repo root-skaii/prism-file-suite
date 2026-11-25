@@ -2,7 +2,11 @@
 
 #include "core/text.hpp"
 
+#ifdef _WIN32
 #include <windows.h>
+#else
+#include <chrono>
+#endif
 
 #include <algorithm>
 #include <bitset>
@@ -595,17 +599,29 @@ struct Clock {
     Clock c;
     c.now = o.now;
     if (c.now == 0) {
+#ifdef _WIN32
         FILETIME ft;
         ::GetSystemTimeAsFileTime(&ft);
         c.now = (static_cast<std::uint64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+#else
+        const auto secs = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+        c.now = (static_cast<std::uint64_t>(secs) + 11644473600ULL) * 10000000ULL;
+#endif
     }
     int minutes = 0;
     if (o.utc_offset_minutes) {
         minutes = *o.utc_offset_minutes;
     } else {
+#ifdef _WIN32
         TIME_ZONE_INFORMATION tz{};
         const DWORD id = ::GetTimeZoneInformation(&tz);
         minutes = -(tz.Bias + (id == TIME_ZONE_ID_DAYLIGHT ? tz.DaylightBias : tz.StandardBias));
+#else
+        const std::time_t now_t = std::time(nullptr);
+        std::tm local_tm{};
+        ::localtime_r(&now_t, &local_tm);
+        minutes = static_cast<int>(local_tm.tm_gmtoff / 60);
+#endif
     }
     c.offset = static_cast<std::int64_t>(minutes) * 600'000'000LL;
     return c;
@@ -768,16 +784,16 @@ template <class Scalar>
     return slash == std::string_view::npos ? name : name.substr(slash + 1);
 }
 
-[[nodiscard]] bool holds(const QueryTerm& t, const FileEntry& e, std::string_view leaf) noexcept
+[[nodiscard]] bool holds(const QueryTerm& t, const FileEntryView& e, std::string_view leaf) noexcept
 {
     using Kind = QueryTerm::Kind;
-    const std::string_view subject = t.on_path ? std::string_view{e.name} : leaf;
+    const std::string_view subject = t.on_path ? e.name : leaf;
     switch (t.kind) {
     case Kind::substring: return contains(subject, t.text, t.fold);
     case Kind::glob:      return glob_match(t.text, subject, t.fold);
     case Kind::suffix:    return ends_with(subject, t.text, t.fold);
     case Kind::extension: {
-        const std::string_view ext = e.ext();
+        const std::string_view ext = e.ext;
         for (const std::string& want : t.list) {
             if (ext.size() == want.size() && ends_with(ext, want, t.fold)) { return true; }
         }
@@ -1009,10 +1025,10 @@ Query Query::parse(std::string_view text, const QueryOptions& options)
     return q;
 }
 
-bool Query::matches(const FileEntry& e) const noexcept
+bool Query::matches(const FileEntryView& e) const noexcept
 {
     if (groups_.empty()) { return true; }
-    const std::string_view leaf = last_component(e.display());
+    const std::string_view leaf = last_component(e.display);
     for (const auto& group : groups_) {
         bool all = true;
         for (const QueryTerm& t : group) {

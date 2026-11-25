@@ -2,6 +2,7 @@
 #include "ui/tr.hpp"
 
 #include "core/path.hpp"
+#include "core/rclone.hpp"
 #include "ui/tr.hpp"
 #include "core/recycle.hpp"
 #include "core/shell_ops.hpp"
@@ -17,6 +18,7 @@
 #include <charconv>
 #include <cmath>
 #include <cstdint>
+#include <thread>
 #include <utility>
 
 namespace prism::ui {
@@ -328,8 +330,9 @@ void Sidebar::drive_row(Painter& p, const core::Place& place)
     const FontSet& f   = env_.fonts;
     (void)m;
     const bool  compact = env_.theme.density() == Density::compact;
-    // (the bin has just a name: a row as short as a pinned folder's, not a drive's)
-    const float h       = place.recycle ? (compact ? 40.0f : 46.0f) : compact ? 54.0f : 62.0f;
+    // compact height when there is no capacity bar (Recycle Bin, WSL, mirror cloud folders)
+    const bool  short_row = place.recycle || (place.total <= 0 && !place.device);
+    const float h       = short_row ? (compact ? 40.0f : 46.0f) : compact ? 54.0f : 62.0f;
     const std::string key = "##drive:" + place.path;
 
     const item_result r   = ui.custom_item(key, {ui.content_width(), h});
@@ -339,18 +342,40 @@ void Sidebar::drive_row(Painter& p, const core::Place& place)
     const std::string& current = env_.tab().path();
     // (a drive lights up for anything on it, except the bin that lives on it: that has a row of its own)
     const bool in_bin = core::recycle::inside(current);
-    const bool active = place.recycle ? in_bin
-                                      : !in_bin && current.size() >= 2 && std::toupper(static_cast<unsigned char>(current[0])) == std::toupper(static_cast<unsigned char>(place.path[0])) && current[1] == ':';
+    bool active = false;
+    if (place.recycle) {
+        active = in_bin;
+    } else if (!in_bin && !current.empty()) {
+        if (place.wsl || place.cloud) {
+            const std::string cn = core::text::lower_ascii(core::path::normalize(current));
+            const std::string pn = core::text::lower_ascii(core::path::normalize(place.path));
+            active = !pn.empty() && (cn == pn || (cn.size() > pn.size() && cn.starts_with(pn) && (pn.back() == '\\' || cn[pn.size()] == '\\')));
+        } else {
+            active = current.size() >= 2 && place.path.size() >= 2 &&
+                     std::toupper(static_cast<unsigned char>(current[0])) == std::toupper(static_cast<unsigned char>(place.path[0])) && current[1] == ':';
+        }
+    }
     row_background(p, key, r, row, active);
     if (hint_.type == Spot::Type::into && hint_.path == place.path) {
         p.dl().rect_outline(row, pal.accent, 8.0f, 2.0f);
     }
 
-    const color tint = pal.tint[static_cast<std::size_t>(core::FileKind::drive)];
-    const float tile = place.recycle ? (compact ? 26.0f : 30.0f) : compact ? 30.0f : 34.0f;
+    const color tint = place.cloud   ? color{66, 133, 244, 255}
+                     : place.wsl     ? color{233, 84, 32, 255}
+                     : place.network ? pal.accent
+                                     : pal.tint[static_cast<std::size_t>(core::FileKind::drive)];
+    const float tile = short_row ? (compact ? 26.0f : 30.0f) : compact ? 30.0f : 34.0f;
     const rect  ibox = rect::from_size({row.min.x + 12.0f, row.center().y - tile * 0.5f}, {tile, tile});
     p.dl().rect_filled(ibox, tint.scaled_alpha(0.16f), 9.0f);
-    p.glyph_center(ibox, place.device ? glyph::phone : place.recycle ? glyph::delete_ : place.optical ? glyph::disc : place.removable ? glyph::usb : glyph::drive, tint);
+    const char32_t icon_glyph = place.device    ? glyph::phone
+                              : place.recycle   ? glyph::delete_
+                              : place.cloud     ? glyph::cloud
+                              : place.wsl       ? glyph::code
+                              : place.network   ? glyph::network
+                              : place.optical   ? glyph::disc
+                              : place.removable ? glyph::usb
+                                                : glyph::drive;
+    p.glyph_center(ibox, icon_glyph, tint);
 
     // name, bar and free-space line, centred in the row (tighter in compact mode)
     const float tx    = ibox.max.x + 12.0f;
@@ -460,6 +485,11 @@ void Sidebar::frame(Painter& p, const rect& area, const FrameInput& in)
     if (const unsigned rev = drive_watch_.revision(); rev != drives_rev_) {
         drives_     = drive_watch_.list();
         drives_rev_ = rev;
+    }
+    if (drive_op_ && drive_op_->done.load(std::memory_order_acquire)) {
+        env_.cmd.toast(drive_op_->msg, drive_op_->ok ? toast_kind::success : toast_kind::error);
+        drive_op_.reset();
+        drive_watch_.poke();
     }
     (void)in;
     const std::size_t n = env_.layout.sections().size();
@@ -950,14 +980,40 @@ void Sidebar::context_menu(Painter& p)
     }
 
     if (t.kind == Kind::drive) {
-        const std::string root = t.path;
-        const auto        found = std::ranges::find(drives_, root, &core::Place::path);
-        const std::string bin   = found != drives_.end() ? found->bin : std::string{};
+        const std::string root      = t.path;
+        const auto        found     = std::ranges::find(drives_, root, &core::Place::path);
+        const std::string bin       = found != drives_.end() ? found->bin : std::string{};
+        const bool        removable = found != drives_.end() && found->removable;
+        const bool        network   = found != drives_.end() && found->network;
         if (ui.menu_item(tr("Open"))) { env_.tab().navigate(root); }
         menus::open_in(ui, env_, root);
         ui.menu_separator();
-        if (ui.menu_item(tr("Open Recycle Bin"), "", false, !bin.empty())) { env_.tab().navigate(bin); }
-        if (ui.menu_item(tr("Empty Recycle Bin"), "", false, !bin.empty())) { env_.cmd.empty_recycle_bin(root); }
+        if (removable && ui.menu_item(tr("Eject"))) {
+            auto op = std::make_shared<DriveOp>();
+            drive_op_ = op;
+            std::thread{[op, root, wake = env_.window.waker()] {
+                std::string err;
+                op->ok  = core::eject_drive(root, err);
+                op->msg = op->ok ? trf("Ejected {}", root) : err;
+                op->done.store(true, std::memory_order_release);
+                if (wake) { wake(); }
+            }}.detach();
+        }
+        if (network && ui.menu_item(tr("Disconnect"))) {
+            auto op = std::make_shared<DriveOp>();
+            drive_op_ = op;
+            std::thread{[op, root, wake = env_.window.waker()] {
+                std::string err;
+                op->ok  = core::disconnect_network_drive(root, err);
+                op->msg = op->ok ? trf("Disconnected {}", root) : err;
+                op->done.store(true, std::memory_order_release);
+                if (wake) { wake(); }
+            }}.detach();
+        }
+        if (!bin.empty()) {
+            if (ui.menu_item(tr("Open Recycle Bin"))) { env_.tab().navigate(bin); }
+            if (ui.menu_item(tr("Empty Recycle Bin"))) { env_.cmd.empty_recycle_bin(root); }
+        }
         if (ui.menu_item(tr("Hide from sidebar"))) { edit("Hide " + root, [=](model::SidebarLayout& l) { (void)l.hide_drive(root); }); }
         folder_tail(root);
         return;
@@ -1010,6 +1066,18 @@ void Sidebar::context_menu(Painter& p)
     }
     if (!env_.layout.has_auto(model::SidebarSection::Auto::frequent) && ui.menu_item(tr("Show frequent folders"))) {
         edit(tr("Show frequent folders"), [=](model::SidebarLayout& l) { (void)l.add_auto_section(auto_slot, model::SidebarSection::Auto::frequent); });
+    }
+    ui.menu_separator();
+    if (ui.menu_item(tr("Connect Google Drive (rclone)"))) {
+        auto op = std::make_shared<DriveOp>();
+        drive_op_ = op;
+        std::thread{[op, wake = env_.window.waker()] {
+            std::string msg;
+            op->ok  = core::rclone::connect_google_drive(msg);
+            op->msg = msg;
+            op->done.store(true, std::memory_order_release);
+            if (wake) { wake(); }
+        }}.detach();
     }
     if (const auto& hidden = env_.layout.hidden_drives(); !hidden.empty()) {
         const std::vector<std::string> roots = hidden; // (a copy: showing one changes the list)

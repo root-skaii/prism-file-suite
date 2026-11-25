@@ -1,6 +1,8 @@
 #include "core/bitmap.hpp"
 
+#ifdef _WIN32
 #include <windows.h>
+#endif
 
 #include <algorithm>
 
@@ -8,6 +10,10 @@ namespace prism::core {
 
 bool bitmap_to_bgra(void* hbitmap, int& w, int& h, std::vector<unsigned char>& out)
 {
+#ifndef _WIN32
+    (void)hbitmap; (void)w; (void)h; (void)out;
+    return false;
+#else
     const auto bmp = static_cast<HBITMAP>(hbitmap);
     BITMAP bm{};
     if (::GetObjectW(bmp, sizeof bm, &bm) == 0 || bm.bmWidth <= 0 || bm.bmHeight <= 0) { return false; }
@@ -38,6 +44,7 @@ bool bitmap_to_bgra(void* hbitmap, int& w, int& h, std::vector<unsigned char>& o
         }
     }
     return true;
+#endif
 }
 
 } // namespace prism::core

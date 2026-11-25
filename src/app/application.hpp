@@ -3,7 +3,10 @@
 // one window: the OS window, its gpu, tabs and ui context, and the frame it draws. the process (app::Host) owns the
 // message loop, the shared settings and all the windows
 
+#include "core/file_index.hpp"
 #include "core/file_ops.hpp"
+#include "core/folder_sizes.hpp"
+#include "core/git_status.hpp"
 #include "model/tab_set.hpp"
 #include "model/undo_stack.hpp"
 #include "strata/keybinds.hpp"
@@ -25,17 +28,30 @@
 
 namespace prism::app {
 
+// heavy process-wide state owned by app::Host and shared by every window
+struct SharedServices {
+    core::FolderSizes&                             sizes;
+    core::GitStatus&                               git;
+    core::FileIndex&                               index;
+    bool&                                          index_started;
+    std::shared_ptr<platform::Gpu::SharedDevice>&  gpu;
+};
+
 class Application {
 public:
     struct Options {
         std::string path;   // where the first tab opens (empty: the home folder)
         std::string second; // a folder for the right pane: opens two panes
+        bool        select_file{}; // /select,<path>: open parent folder and select the file
+        std::vector<std::string> open_tabs; // --tab: open these tabs in order (relaunch preserves every tab)
+        int         active_tab{};           // --active-tab: which of `open_tabs` is active
         bool        light{};
         bool        compact{};
         bool        settings{};
         bool        palette{};
         std::string properties;  // open the Properties dialog for this path at start
         int         properties_tab{};
+        std::vector<std::string> properties_paths; // a window that shows only the Properties dialog for these items (closes with it)
         std::string usage;       // open Disk usage for this folder at start
         bool        grid{};
         bool        preview{};
@@ -50,16 +66,20 @@ public:
         bool        window_notice{};     // --window (with --crashed): only one window was lost
     };
 
+    using TransferTabFn = std::function<bool(std::unique_ptr<model::Tab>&, void* target_hwnd, int x, int y, int w, int h)>;
+
     // `open_window`: how this window asks for another one (the host makes it)
-    Application(ui::Settings& settings, strata::keybinds& binds, std::function<void(const Options&)> open_window)
-        : binds_{binds}, settings_{settings}, open_window_{std::move(open_window)} {}
+    Application(ui::Settings& settings, strata::keybinds& binds, SharedServices shared,
+                std::function<void(const Options&)> open_window, TransferTabFn transfer_tab = {})
+        : binds_{binds}, settings_{settings}, shared_{shared}, open_window_{std::move(open_window)}, transfer_tab_{std::move(transfer_tab)} {}
 
     // opens the troubleshooting log and writes what a bug report needs (version, machine, paths)
     static void start_log();
 
     // starts the gpu driver load on its own thread, ahead of init() (it overlaps the fonts)
     void prewarm();
-    [[nodiscard]] bool init(const Options& opts);
+    [[nodiscard]] bool init(const Options& opts, std::unique_ptr<model::Tab> initial_tab = {});
+    void adopt_tab(std::unique_ptr<model::Tab> tab);
 
     // runs a frame if this window has something to do: input, a worker's wake-up, a timer or an animation that is due
     void tick();
@@ -69,6 +89,7 @@ public:
     void                 pace() const noexcept { gpu_.pace_to_display(); } // blocks until the next screen refresh
 
     [[nodiscard]] bool closed() const noexcept { return window_.closed(); }
+    [[nodiscard]] bool properties_only() const noexcept { return properties_only_; }
     [[nodiscard]] platform::Window& window() noexcept { return window_; }
     void request_close() noexcept { window_.request_close(); }
     // the window is closing: remember its size and tabs
@@ -94,12 +115,13 @@ private:
     strata::keybinds&              binds_;      // shared by all windows
     model::UndoStack               history_;
     ui::Settings&                  settings_;   // shared by all windows: a change in one shows in the others
+    SharedServices                 shared_;     // process-wide index, git, folder sizes, D3D11 device
     std::function<void(const Options&)> open_window_;
+    TransferTabFn                  transfer_tab_;
     std::unique_ptr<core::FileOps> ops_;
     std::unique_ptr<platform::ImageCache> images_;
     std::unique_ptr<model::TabSet> tabs_;
     int                            scale_pct_{100};
-    unsigned                       baked_revision_{};   // core::text::demand_revision() the font atlas was built for
     std::optional<strata::context> ui_;
     std::unique_ptr<ui::Shell>     shell_;
     bool                           presented_{};
@@ -110,6 +132,10 @@ private:
     std::atomic<bool>              device_ready_{false};
     int                            frames_{};           // (for --crash-test-window)
     bool                           crash_test_window_{};
+    bool                           ole_init_{};
+    bool                           properties_only_{};
+    int                            live_resize_skipped_{};
+    bool                           first_frame_{true};
 };
 
 } // namespace prism::app

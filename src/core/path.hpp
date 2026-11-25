@@ -8,7 +8,19 @@
 
 namespace prism::core::path {
 
+// utf-8 -> wide with \\?\ (or \\?\UNC\) prefix past MAX_PATH so win32 calls work even without LongPathsEnabled
+[[nodiscard]] std::wstring long_wide(std::string_view utf8);
+
+// true only for filesystem link reparse points (symlink / junction), NOT cloud placeholders (OneDrive, iCloud, Dropbox)
+[[nodiscard]] bool is_link_reparse_tag(unsigned long tag) noexcept;
+// inspects the entry's reparse tag; true only if it is a symlink or junction (safe on cloud folders)
+[[nodiscard]] bool is_reparse_link(const std::string& p);
+
 [[nodiscard]] bool is_root(std::string_view p) noexcept;
+// true for a bare UNC server ("\\server" or "\\wsl.localhost") without a share name
+[[nodiscard]] bool is_unc_server(std::string_view p) noexcept;
+// true when `a` and `b` live on the same volume (works for lettered drives, mount points and UNC shares)
+[[nodiscard]] bool same_volume(const std::string& a, const std::string& b);
 // "C:\a\b" -> "C:\a"; a root has no parent (returns empty)
 [[nodiscard]] std::string parent(std::string_view p);
 // last component: "C:\a\b" -> "b", "C:\" -> "C:\"
@@ -16,6 +28,8 @@ namespace prism::core::path {
 [[nodiscard]] std::string join(std::string_view dir, std::string_view name);
 // forward slashes -> backslashes, trailing slash dropped (except on a root), "C:" -> "C:\"
 [[nodiscard]] std::string normalize(std::string_view p);
+// expands %ENV% variables, resolves `shell:<name>` URIs and relative paths (against cwd) into a normalized path
+[[nodiscard]] std::string resolve_input(std::string_view raw);
 
 struct Segment {
     std::string name; // what a breadcrumb shows

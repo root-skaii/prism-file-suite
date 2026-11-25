@@ -68,7 +68,7 @@ public:
         char32_t         icon{};
         ButtonKind       kind{ButtonKind::secondary};
         bool             enabled{true};
-        std::string_view tip;
+        std::string_view tip{};
         float            width{}; // 0: fits the label
     };
     [[nodiscard]] bool button(const ButtonSpec& s);
@@ -92,7 +92,7 @@ public:
     // cards ------------------------------------------------------------------
     // a rounded section with a subtle border. `body_h` is the summed height of the rows that follow (the card draws its
     // background up front); end it with card_end()
-    void card_begin(std::string_view id, std::string_view title, float body_h);
+    void card_begin(std::string_view id, std::string_view title, float body_h, char32_t icon = 0);
     void card_end(std::string_view id);
     // the summed height of the cards finished so far this frame (a dialog sizes its scrolling body to it)
     [[nodiscard]] float cards_height() const noexcept { return cards_h_; }
@@ -111,6 +111,7 @@ public:
         bool  copyable{true};
         bool  separator{true};
         float key_w{140.0f};
+        Tone  highlight{Tone::neutral}; // non-neutral adds a subtle tinted row pill (e.g. matched checksum)
     };
     // a fixed-height row: dim key, value cut with ".." (the tooltip has all of it), a click copies the value
     void key_value(const KeyValue& kv);
@@ -121,6 +122,8 @@ public:
         std::string_view label;
         std::string value;
         std::string_view sub;
+        Tone tone{Tone::neutral};
+        bool copyable{true};
     };
     void stat_tiles(std::string_view id, std::span<const Stat> stats);
     [[nodiscard]] float stat_tiles_height() const noexcept; // what stat_tiles() takes: size a card for it with this

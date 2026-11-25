@@ -5,15 +5,19 @@
 #include "core/path.hpp"
 #include "core/text.hpp"
 
+#ifdef _WIN32
 #include <windows.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
 #include <wrl/client.h>
+#endif
 
 #include <algorithm>
 
 namespace prism::core {
+
+#ifdef _WIN32
 
 using Microsoft::WRL::ComPtr;
 
@@ -26,6 +30,7 @@ struct Built {
     ComPtr<IContextMenu> menu;
     HMENU                hmenu{};
     std::wstring         dir;
+    std::string          key;
 };
 
 void release(Built& b)
@@ -52,7 +57,7 @@ void release(Built& b)
         PIDLIST_ABSOLUTE pidl = nullptr;
         if (SUCCEEDED(::SHParseDisplayName(text::widen(p).c_str(), nullptr, &pidl, 0, nullptr)) && pidl != nullptr) { ids.push_back(pidl); }
     }
-    if (ids.size() == paths.size()) {
+    if (!ids.empty()) {
         ComPtr<IShellItemArray> arr;
         if (SUCCEEDED(::SHCreateShellItemArrayFromIDLists(static_cast<UINT>(ids.size()), const_cast<PCIDLIST_ABSOLUTE*>(ids.data()), &arr)) && arr != nullptr) {
             (void)arr->BindToHandler(nullptr, BHID_SFUIObject, IID_PPV_ARGS(&cm));
@@ -110,7 +115,7 @@ void release(Built& b)
         }
         return v;
     }();
-    return std::ranges::any_of(labels, [&](const std::string& s) { return _stricmp(s.c_str(), label.c_str()) == 0; });
+    return std::ranges::any_of(labels, [&](const std::string& s) { return text::compare_plain(s, label) == 0; });
 }
 
 void tidy(std::vector<ShellMenuItem>& v)
@@ -122,7 +127,7 @@ void tidy(std::vector<ShellMenuItem>& v)
     }
 }
 
-void collect(HMENU menu, IContextMenu* cm, IContextMenu2* cm2, std::vector<ShellMenuItem>& out, int depth)
+void collect(HMENU menu, IContextMenu* cm, IContextMenu2* cm2, IContextMenu3* cm3, std::vector<ShellMenuItem>& out, int depth)
 {
     const int n = ::GetMenuItemCount(menu);
     for (int i = 0; i < n; ++i) {
@@ -140,7 +145,8 @@ void collect(HMENU menu, IContextMenu* cm, IContextMenu2* cm2, std::vector<Shell
             out.push_back(std::move(item));
             continue;
         }
-        if ((mi.fType & (MFT_OWNERDRAW | MFT_BITMAP)) != 0) { continue; } // (nothing we could draw)
+        if ((mi.fType & MFT_BITMAP) != 0) { continue; }
+        // owner-draw items (e.g. TortoiseGit, Notepad++, WinRAR) often still provide a label string; keep them when readable
         item.label = clean_label(label);
         if (item.label.empty() || (depth == 0 && noise_label(item.label))) { continue; }
         item.enabled = (mi.fState & (MFS_DISABLED | MFS_GRAYED)) == 0;
@@ -159,8 +165,13 @@ void collect(HMENU menu, IContextMenu* cm, IContextMenu2* cm2, std::vector<Shell
         if (mi.hSubMenu != nullptr) {
             if (depth >= 4) { continue; }
             // many handlers (New, Send to, Open with) only fill their submenu when it is about to open
-            if (cm2 != nullptr) { (void)cm2->HandleMenuMsg(WM_INITMENUPOPUP, reinterpret_cast<WPARAM>(mi.hSubMenu), MAKELPARAM(i, 0)); }
-            collect(mi.hSubMenu, cm, cm2, item.children, depth + 1);
+            if (cm3 != nullptr) {
+                LRESULT res = 0;
+                (void)cm3->HandleMenuMsg2(WM_INITMENUPOPUP, reinterpret_cast<WPARAM>(mi.hSubMenu), MAKELPARAM(i, 0), &res);
+            } else if (cm2 != nullptr) {
+                (void)cm2->HandleMenuMsg(WM_INITMENUPOPUP, reinterpret_cast<WPARAM>(mi.hSubMenu), MAKELPARAM(i, 0));
+            }
+            collect(mi.hSubMenu, cm, cm2, cm3, item.children, depth + 1);
             tidy(item.children);
             if (item.children.empty()) { continue; }
         } else {
@@ -230,6 +241,7 @@ void ShellMenu::invoke(unsigned id, void* hwnd)
         std::lock_guard lock{mutex_};
         invoke_id_   = id;
         invoke_hwnd_ = hwnd;
+        invoke_key_  = done_key_;
         has_invoke_  = true;
     }
     ::SetEvent(static_cast<HANDLE>(signal_));
@@ -257,12 +269,14 @@ void ShellMenu::run()
         bool    do_invoke = false;
         unsigned id{};
         void*    hwnd{};
+        std::string inv_key;
         {
             std::lock_guard lock{mutex_};
             if (has_invoke_) {
                 do_invoke   = true;
                 id          = invoke_id_;
                 hwnd        = invoke_hwnd_;
+                inv_key     = invoke_key_;
                 has_invoke_ = false;
             }
             if (has_pending_) {
@@ -272,7 +286,7 @@ void ShellMenu::run()
             }
         }
 
-        if (do_invoke && cur.menu != nullptr) {
+        if (do_invoke && cur.menu != nullptr && inv_key == cur.key) {
             const std::string narrow_dir = text::narrow(cur.dir);
             CMINVOKECOMMANDINFOEX ci{};
             ci.cbSize       = sizeof ci;
@@ -290,6 +304,7 @@ void ShellMenu::run()
             release(cur);
             std::vector<ShellMenuItem> items;
             cur.menu = bind_menu(req.paths, req.background);
+            cur.key  = req.key;
             if (cur.menu != nullptr) {
                 cur.dir   = text::widen(req.background ? req.paths.front() : path::parent(req.paths.front()));
                 cur.hmenu = ::CreatePopupMenu();
@@ -297,8 +312,10 @@ void ShellMenu::run()
                 const bool built = crash::guard("shell extensions (build menu)", [&] {
                     if (SUCCEEDED(cur.menu->QueryContextMenu(cur.hmenu, 0, k_first, k_last, CMF_NORMAL))) {
                         ComPtr<IContextMenu2> cm2;
+                        ComPtr<IContextMenu3> cm3;
                         (void)cur.menu.As(&cm2);
-                        collect(cur.hmenu, cur.menu.Get(), cm2.Get(), items, 0);
+                        (void)cur.menu.As(&cm3);
+                        collect(cur.hmenu, cur.menu.Get(), cm2.Get(), cm3.Get(), items, 0);
                         tidy(items);
                     }
                 });
@@ -315,5 +332,14 @@ void ShellMenu::run()
     release(cur);
     if (com) { ::CoUninitialize(); }
 }
+#else
+ShellMenu::ShellMenu(std::function<void()> wake) : wake_{std::move(wake)} {}
+ShellMenu::~ShellMenu() = default;
+void ShellMenu::query(const std::vector<std::string>&, bool) {}
+std::vector<ShellMenuItem> ShellMenu::items() const { return {}; }
+bool ShellMenu::ready() const { return true; }
+void ShellMenu::invoke(unsigned, void*) {}
+void ShellMenu::run() {}
+#endif
 
 } // namespace prism::core

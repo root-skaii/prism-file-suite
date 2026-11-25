@@ -4,13 +4,22 @@
 #include "core/terminal.hpp"
 #include "core/text.hpp"
 
+#ifdef _WIN32
 #include <windows.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
 #include <wrl/client.h>
+#else
+#include <cstdlib>
+#include <unistd.h>
+#endif
+
+#include <thread>
 
 namespace prism::core::shell {
+
+#ifdef _WIN32
 
 namespace {
 
@@ -49,7 +58,7 @@ bool show_native_menu(const std::vector<std::string>& paths, void* owner_hwnd)
         if (SUCCEEDED(::SHParseDisplayName(text::widen(p).c_str(), nullptr, &pidl, 0, nullptr)) && pidl != nullptr) { ids.push_back(pidl); }
     }
     ComPtr<IContextMenu> cm;
-    if (ids.size() == paths.size()) {
+    if (!ids.empty()) {
         ComPtr<IShellItemArray> arr;
         if (SUCCEEDED(::SHCreateShellItemArrayFromIDLists(static_cast<UINT>(ids.size()), const_cast<PCIDLIST_ABSOLUTE*>(ids.data()), &arr)) && arr != nullptr) {
             (void)arr->BindToHandler(nullptr, BHID_SFUIObject, IID_PPV_ARGS(&cm));
@@ -106,23 +115,29 @@ bool open(const std::string& path)
 {
     const std::wstring w   = text::widen(path);
     const std::wstring dir = text::widen(path::parent(path));
-    const auto r = reinterpret_cast<INT_PTR>(::ShellExecuteW(nullptr, L"open", w.c_str(), nullptr, dir.empty() ? nullptr : dir.c_str(), SW_SHOWNORMAL));
+    // nullptr verb runs the file type's registered default verb (not every file type names its default verb "open")
+    const auto r = reinterpret_cast<INT_PTR>(::ShellExecuteW(nullptr, nullptr, w.c_str(), nullptr, dir.empty() ? nullptr : dir.c_str(), SW_SHOWNORMAL));
     return r > 32;
 }
 
 bool show_properties(const std::string& path)
 {
-    const std::wstring w = text::widen(path);
-    // the shell's own entry point for "Properties" (it runs the sheet on its own thread and copes with cloud folders such as
-    // OneDrive, where the plain "properties" verb below fails with "Unspecified error")
-    if (::SHObjectProperties(nullptr, SHOP_FILEPATH, w.c_str(), nullptr)) { return true; }
-    SHELLEXECUTEINFOW info{};
-    info.cbSize = sizeof info;
-    info.fMask  = SEE_MASK_INVOKEIDLIST | SEE_MASK_NOASYNC;
-    info.lpVerb = L"properties";
-    info.lpFile = w.c_str();
-    info.nShow  = SW_SHOW;
-    return ::ShellExecuteExW(&info) != FALSE;
+    if (path.empty()) { return false; }
+    // run off the ui thread: SHObjectProperties / ShellExecuteExW can stall seconds on slow shell extensions or cloud folders
+    std::thread{[w = text::widen(path)] {
+        const HRESULT com = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        if (!::SHObjectProperties(nullptr, SHOP_FILEPATH, w.c_str(), nullptr)) {
+            SHELLEXECUTEINFOW info{};
+            info.cbSize = sizeof info;
+            info.fMask  = SEE_MASK_INVOKEIDLIST | SEE_MASK_NOASYNC;
+            info.lpVerb = L"properties";
+            info.lpFile = w.c_str();
+            info.nShow  = SW_SHOW;
+            (void)::ShellExecuteExW(&info);
+        }
+        if (SUCCEEDED(com)) { ::CoUninitialize(); }
+    }}.detach();
+    return true;
 }
 
 bool is_elevated()
@@ -141,18 +156,61 @@ bool is_elevated()
 
 namespace {
 
-[[nodiscard]] std::wstring folder_args(const std::vector<std::string>& folders)
+// quotes one argument for Windows CommandLineToArgvW (backslashes before quotes and at the end are doubled)
+[[nodiscard]] std::wstring quote_arg(std::wstring_view s)
 {
-    std::wstring args;
-    for (std::size_t i = 0; i < folders.size() && i < 2; ++i) {
-        if (!folders[i].empty()) { args += (args.empty() ? L"\"" : L" \"") + text::widen(folders[i]) + L"\""; }
+    std::wstring out;
+    out.reserve(s.size() + 4);
+    out.push_back(L'"');
+    std::size_t bs = 0;
+    for (const wchar_t c : s) {
+        if (c == L'\\') {
+            ++bs;
+        } else if (c == L'"') {
+            out.append(bs * 2 + 1, L'\\');
+            out.push_back(L'"');
+            bs = 0;
+        } else {
+            out.append(bs, L'\\');
+            out.push_back(c);
+            bs = 0;
+        }
     }
-    return args;
+    out.append(bs * 2, L'\\');
+    out.push_back(L'"');
+    return out;
 }
 
 } // namespace
 
-bool relaunch_unelevated(const std::vector<std::string>& folders)
+std::wstring relaunch_arguments(const RelaunchState& state)
+{
+    std::wstring args;
+    const auto add = [&](std::wstring_view part) {
+        if (!args.empty()) { args.push_back(L' '); }
+        args += part;
+    };
+    int count = 0;
+    int mapped_active = 0;
+    for (std::size_t i = 0; i < state.tabs.size(); ++i) {
+        if (state.tabs[i].empty()) { continue; }
+        if (static_cast<int>(i) == state.active_tab) { mapped_active = count; }
+        add(L"--tab");
+        add(quote_arg(text::widen(state.tabs[i])));
+        ++count;
+    }
+    if (count > 0) {
+        add(L"--active-tab");
+        add(std::to_wstring(mapped_active));
+    }
+    if (!state.right.empty()) {
+        add(L"--right");
+        add(quote_arg(text::widen(state.right)));
+    }
+    return args;
+}
+
+bool relaunch_unelevated(const RelaunchState& state)
 {
     // (Explorer runs with the normal token of the logged-in user: borrow it for the new process)
     DWORD pid = 0;
@@ -165,7 +223,9 @@ bool relaunch_unelevated(const std::vector<std::string>& folders)
     if (ok) {
         wchar_t exe[MAX_PATH]{};
         ::GetModuleFileNameW(nullptr, exe, MAX_PATH);
-        std::wstring cmd = L"\"" + std::wstring{exe} + L"\" " + folder_args(folders);
+        const std::wstring args = relaunch_arguments(state);
+        std::wstring cmd = quote_arg(exe);
+        if (!args.empty()) { cmd += L" " + args; }
         STARTUPINFOW si{};
         si.cb = sizeof si;
         PROCESS_INFORMATION pi{};
@@ -181,11 +241,11 @@ bool relaunch_unelevated(const std::vector<std::string>& folders)
     return ok;
 }
 
-bool relaunch_elevated(const std::vector<std::string>& folders)
+bool relaunch_elevated(const RelaunchState& state)
 {
     wchar_t exe[MAX_PATH]{};
     ::GetModuleFileNameW(nullptr, exe, MAX_PATH);
-    const std::wstring args = folder_args(folders);
+    const std::wstring args = relaunch_arguments(state);
     SHELLEXECUTEINFOW info{};
     info.cbSize       = sizeof info;
     info.fMask        = SEE_MASK_NOASYNC;
@@ -202,11 +262,38 @@ bool open_device(const std::string& parsing_name)
     return reinterpret_cast<INT_PTR>(::ShellExecuteW(nullptr, L"open", L"explorer.exe", args.c_str(), nullptr, SW_SHOWNORMAL)) > 32;
 }
 
+bool create_shortcut(const std::string& target, const std::string& link_path)
+{
+    using Microsoft::WRL::ComPtr;
+    if (target.empty() || link_path.empty()) { return false; }
+    const HRESULT init = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    bool ok = false;
+    {
+        ComPtr<IShellLinkW> link;
+        if (SUCCEEDED(::CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&link)))) {
+            (void)link->SetPath(text::widen(target).c_str());
+            const std::string dir = path::parent(target);
+            if (!dir.empty()) { (void)link->SetWorkingDirectory(text::widen(dir).c_str()); }
+            ComPtr<IPersistFile> pf;
+            if (SUCCEEDED(link.As(&pf))) {
+                ok = SUCCEEDED(pf->Save(text::widen(link_path).c_str(), TRUE));
+            }
+        }
+    }
+    if (SUCCEEDED(init)) { ::CoUninitialize(); }
+    return ok;
+}
+
 bool reveal_in_explorer(const std::string& path)
 {
-    const std::wstring args = L"/select,\"" + text::widen(path) + L"\"";
-    const auto r = reinterpret_cast<INT_PTR>(::ShellExecuteW(nullptr, L"open", L"explorer.exe", args.c_str(), nullptr, SW_SHOWNORMAL));
-    return r > 32;
+    if (path.empty()) { return false; }
+    // always launch explorer.exe asynchronously off the ui thread: synchronous SHOpenFolderAndSelectItems blocks the
+    // ui thread on cross-process COM and can deadlock when PrismFS is registered as the default folder handler
+    std::thread{[w = text::widen(path)] {
+        const std::wstring args = L"/select,\"" + w + L"\"";
+        (void)::ShellExecuteW(nullptr, L"open", L"explorer.exe", args.c_str(), nullptr, SW_SHOWNORMAL);
+    }}.detach();
+    return true;
 }
 
 bool run_command(const std::string& line, const std::string& folder)
@@ -307,5 +394,36 @@ std::string get_clipboard_text()
     ::CloseClipboard();
     return out;
 }
+#else
+bool open(const std::string& path)
+{
+    if (path.empty()) { return false; }
+    std::thread{[path] {
+        const std::string cmd = "xdg-open \"" + path + "\" >/dev/null 2>&1 &";
+        (void)std::system(cmd.c_str());
+    }}.detach();
+    return true;
+}
+bool show_properties(const std::string&) { return false; }
+bool show_native_menu(const std::vector<std::string>&, void*) { return false; }
+bool is_elevated() { return ::geteuid() == 0; }
+std::wstring relaunch_arguments(const RelaunchState&) { return {}; }
+bool relaunch_elevated(const RelaunchState&) { return false; }
+bool relaunch_unelevated(const RelaunchState&) { return false; }
+bool open_device(const std::string&) { return false; }
+bool reveal_in_explorer(const std::string& path) { return open(path::parent(path)); }
+bool create_shortcut(const std::string& target, const std::string& link_path)
+{
+    return ::symlink(target.c_str(), link_path.c_str()) == 0;
+}
+bool run_command(const std::string& line, const std::string& folder)
+{
+    const std::string cmd = "cd \"" + folder + "\" && " + line + " &";
+    return std::system(cmd.c_str()) == 0;
+}
+bool set_clipboard_text(std::string_view) { return false; }
+std::string get_clipboard_text() { return {}; }
+bool clipboard_text_contains(std::wstring_view) { return false; }
+#endif
 
 } // namespace prism::core::shell

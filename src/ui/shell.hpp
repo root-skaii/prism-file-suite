@@ -6,6 +6,7 @@
 #include "core/archive.hpp"
 #include "core/file_index.hpp"
 #include "core/image_tools.hpp"
+#include "platform/dnd.hpp"
 #include "model/folder_sorts.hpp"
 #include "model/sessions.hpp"
 #include "ui/batch_rename_dialog.hpp"
@@ -39,12 +40,19 @@ namespace prism::ui {
 class Shell final : private Commands {
 public:
     Shell(platform::Window& window, Theme& theme, FontSet fonts, model::TabSet& tabs, core::FileOps& ops, Settings& settings,
-          platform::ImageCache& images, strata::keybinds& binds, model::UndoStack& history);
+          platform::ImageCache& images, strata::keybinds& binds, model::UndoStack& history,
+          core::FolderSizes& sizes, core::GitStatus& git, core::FileIndex& index, bool& index_started);
     ~Shell();
 
     void frame(strata::context& ui, const FrameInput& in);
-    [[nodiscard]] platform::HitZone hit_test(strata::vec2 logical) const { return title_bar_.hit_test(logical); }
+    [[nodiscard]] platform::HitZone hit_test(strata::vec2 logical) const
+    {
+        if (properties_only_) { return properties_dialog_.drag_zone().contains(logical) ? platform::HitZone::caption : platform::HitZone::client; }
+        return title_bar_.hit_test(logical);
+    }
 
+    // seconds until a debounced watcher refresh needs a tick (3600 = none pending)
+    [[nodiscard]] double next_wake_seconds() const noexcept;
     // the theme / density / accent changed: the host re-applies strata's style
     [[nodiscard]] bool take_restyle() noexcept { return std::exchange(restyle_, false); }
     // the interface size changed (percent, 0 = no change): the host rebuilds the font atlas
@@ -58,11 +66,12 @@ public:
     [[nodiscard]] std::string resolve_drop(strata::vec2 logical) const;
     void set_drop_point(std::optional<strata::vec2> p);
     // the paths of the drag in progress: drawn as a ghost at the pointer (with what a drop would do) while it is over the window
-    void set_dragging(std::vector<std::string> paths) { ghost_paths_ = std::move(paths); }
+    void set_dragging(std::vector<std::string> paths);
     void refresh_all();
     void refresh_quiet();
+    void draw_window_outline(strata::context& ui);
     void start_delete(core::OpKind kind, std::vector<std::string> paths);
-    void drop_files(std::vector<std::string> paths, const std::string& dest, bool move);
+    void drop_files(std::vector<std::string> paths, const std::string& dest, platform::DropAction action);
     // files a drag offered without a path (remote files) that could not be received
     void drop_failed(std::size_t count);
 
@@ -77,6 +86,19 @@ public:
 
     // asks the host for another window: folder, whether `x, y` (screen pixels) place it, and its logical size
     std::function<void(const std::string& folder, bool has_at, int x, int y, int w, int h)> open_window_hook;
+    // moves an actual Tab (history, scroll, listing, filter) into another window of this process, or into a new one.
+    // takes `tab` by ref and consumes it only when returning true (false = cross-process target, caller falls back)
+    std::function<bool(std::unique_ptr<model::Tab>& tab, void* target_hwnd, int x, int y, int w, int h)> transfer_tab_hook;
+    std::function<void(const std::vector<std::string>& paths)> open_properties_hook; // Settings::properties_window: the host makes the window
+    // adopts a Tab transferred in from another window of this process
+    void adopt_tab(std::unique_ptr<model::Tab> tab);
+    // this window is only the Properties dialog: nothing else is drawn, and it closes with the dialog
+    void show_properties_window(std::vector<std::string> paths, int tab)
+    {
+        properties_only_ = true;
+        properties_dialog_.set_embedded(true);
+        properties_dialog_.open(std::move(paths), tab);
+    }
 
 private:
     // Commands
@@ -135,20 +157,21 @@ private:
     void service_remove_section(strata::context& ui);
     [[nodiscard]] bool dialog_has_keyboard(strata::context& ui) const;
     void splitter(Painter& p, const strata::rect& area);
+    void preview_splitter(Painter& p, const strata::rect& area, float window_w);
     void apply_deferred();
     void draw_drag_ghost(Painter& p);
     void apply_tags();
-    void rebuild_index();
+    void rebuild_index(bool force = false);
     void set_tag_masks(const std::vector<std::pair<std::string, std::uint16_t>>& masks);
     [[nodiscard]] model::Session capture_session(std::string name) const;
     void restore_session(const model::Session& s) { pending_session_ = s; }
 
-    core::FolderSizes    sizes_;  // (before env_)
-    core::GitStatus      git_;
+    core::FolderSizes&   sizes_;  // shared across windows by app::Host (before env_)
+    core::GitStatus&     git_;
     core::ArchiveOps     archives_;
     core::ArchiveViews   views_;   // (before env_)
-    core::FileIndex      index_;
-    bool                 index_started_{};
+    core::FileIndex&     index_;
+    bool&                index_started_;
     core::ImageJobs      image_jobs_;
     model::SidebarLayout layout_; // (before env_, which refers to it)
     std::size_t          saved_layout_{};
@@ -195,6 +218,8 @@ private:
     float             sidebar_w_{0.0f};
     bool              split_drag_{};
     float             split_grab_{};
+    bool              preview_drag_{};
+    float             preview_grab_{};
     bool              show_hidden_{false};
     bool              restyle_{false};
     int               scale_request_{0};
@@ -203,11 +228,19 @@ private:
     strata::cursor_kind cursor_{strata::cursor_kind::arrow};
     std::vector<std::string> drag_paths_;
     std::vector<std::string> ghost_paths_;
+    bool                     ghost_is_dir_{};
     std::optional<strata::vec2> ghost_at_;
     // a delete waiting for its confirmation. strata modals must open outside every window, so the panels only
     // record the request and service_delete() shows the dialog at the end of the frame
+    bool                     properties_only_{};
     std::vector<std::string> delete_paths_;
     bool                     delete_permanent_{};
+    struct BinRestore {
+        std::atomic<bool> done{false};
+        int               restored{};
+        std::string       error;
+    };
+    std::shared_ptr<BinRestore> bin_restore_;
     std::shared_ptr<std::atomic<int>> bin_empty_{std::make_shared<std::atomic<int>>(0)}; // 0 idle, 3 running, 1 / 2 finished (ok / failed): the worker's answer
     bool                     delete_ask_{};
     // a sidebar section removal waiting for its answer (same reason); npos: none
@@ -216,8 +249,10 @@ private:
 
     // tab changes asked for mid-frame run at its end, when no panel still holds a reference into the tab list
     struct Open { std::string path; bool activate; };
+    struct Transfer { std::size_t index{}; int screen_x{}, screen_y{}; };
     std::vector<Open>        pending_open_;
     std::vector<std::size_t> pending_close_;
+    std::vector<Transfer>    pending_transfer_;
     std::vector<std::string> pending_actions_;
     struct Toast { std::string text; strata::toast_kind kind; };
     std::vector<Toast>       pending_toasts_;

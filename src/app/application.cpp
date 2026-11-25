@@ -26,7 +26,11 @@ namespace prism::app {
 
 void Application::prewarm()
 {
-    if (device_thread_.joinable()) { return; }
+    if (device_thread_.joinable() || (shared_.gpu && gpu_.use_shared_device(shared_.gpu))) {
+        device_ok_ = true;
+        device_ready_.store(true, std::memory_order_release);
+        return;
+    }
     // loading the gpu driver takes ~180 ms and needs nothing else: it starts first and everything else runs beside it
     device_thread_ = std::jthread{[this] {
         device_ok_ = gpu_.create_device();
@@ -34,7 +38,7 @@ void Application::prewarm()
     }};
 }
 
-bool Application::init(const Options& opts)
+bool Application::init(const Options& opts, std::unique_ptr<model::Tab> initial_tab)
 {
     const std::string& start_path = opts.path;
     auto lap_t = std::chrono::steady_clock::now();
@@ -63,14 +67,16 @@ bool Application::init(const Options& opts)
     theme_.set_mode(settings_.dark ? ui::ThemeMode::dark : ui::ThemeMode::light);
     scale_pct_ = settings_.ui_scale;
     ::SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-    (void)::OleInitialize(nullptr); // (a single-threaded apartment, plus what drag and drop needs)
+    ole_init_ = SUCCEEDED(::OleInitialize(nullptr)); // (a single-threaded apartment, plus what drag and drop needs)
     lap("ole / dpi setup");
     core::refresh_default_manager(); // (the folder was moved: opening folders for other apps must still find this exe)
     lap("default folder handler (registry)");
 
-    const int win_w = opts.width > 0 ? opts.width : settings_.window_w > 0 ? settings_.window_w : 1360;
-    const int win_h = opts.height > 0 ? opts.height : settings_.window_h > 0 ? settings_.window_h : 840;
-    if (!window_.create({.title = "PrismFS", .width = win_w, .height = win_h, .has_at = opts.has_at, .at_x = opts.at_x, .at_y = opts.at_y})) { return false; }
+    const bool props_only = !opts.properties_paths.empty();
+    properties_only_ = props_only;
+    const int win_w = props_only ? (settings_.props_w > 0 ? settings_.props_w : 700) : opts.width > 0 ? opts.width : settings_.window_w > 0 ? settings_.window_w : 1360;
+    const int win_h = props_only ? (settings_.props_h > 0 ? settings_.props_h : settings_.compact ? 680 : 820) : opts.height > 0 ? opts.height : settings_.window_h > 0 ? settings_.window_h : 840;
+    if (!window_.create({.title = props_only ? "Properties" : "PrismFS", .width = win_w, .height = win_h, .has_at = opts.has_at, .at_x = opts.at_x, .at_y = opts.at_y})) { return false; }
 
     {
         const strata::color bg = theme_.pal().window; // (something on screen at once; the first real frame replaces it)
@@ -81,38 +87,59 @@ bool Application::init(const Options& opts)
     // the folder listing, the d3d device and the font bake do not depend on each other: run them side by side
     ops_  = std::make_unique<core::FileOps>(window_.waker(), window_.handle());
     tabs_ = std::make_unique<model::TabSet>(window_.waker());
-    if (!start_path.empty()) {
-        const std::string first = core::path::normalize(start_path);
-        tabs_->open(core::path::is_directory(first) ? first : "C:\\");
-    } else if (settings_.restore_tabs && !settings_.tabs.empty()) {
-        for (const std::string& t : settings_.tabs) {
-            if (core::path::is_directory(t)) { tabs_->open(t); }
+    if (!props_only) {
+        if (initial_tab) {
+            (void)tabs_->attach(std::move(initial_tab), true);
+        } else if (!opts.open_tabs.empty()) {
+            for (const std::string& raw : opts.open_tabs) {
+                const std::string p = core::path::normalize(raw);
+                if (!p.empty()) { tabs_->open(p, false); }
+            }
+            if (tabs_->size() > 0) {
+                tabs_->activate(static_cast<std::size_t>(std::clamp(opts.active_tab, 0, static_cast<int>(tabs_->size()) - 1)));
+            }
+        } else if (!start_path.empty()) {
+            const std::string first = core::path::resolve_input(start_path);
+            if (!first.empty() && (opts.select_file || core::path::kind(first) == core::path::Kind::file)) {
+                const std::string dir = core::path::parent(first);
+                tabs_->open(dir.empty() ? "C:\\" : dir);
+                if (tabs_->size() > 0) { tabs_->active().reveal_name = core::path::leaf(first); }
+            } else {
+                tabs_->open(first.empty() ? "C:\\" : first);
+            }
+        } else if (settings_.restore_tabs && !settings_.tabs.empty()) {
+            for (const std::string& t : settings_.tabs) {
+                if (!t.empty()) { tabs_->open(t, false); }
+            }
+            if (tabs_->size() > 0) {
+                tabs_->activate(static_cast<std::size_t>(std::clamp(settings_.active_tab, 0, static_cast<int>(tabs_->size()) - 1)));
+            }
         }
-        tabs_->activate(static_cast<std::size_t>(std::max(0, settings_.active_tab)));
-    }
-    if (tabs_->size() == 0) {
-        const std::string home = core::home_folder();
-        tabs_->open(core::path::is_directory(home) ? home : "C:\\");
+        if (tabs_->size() == 0) {
+            const std::string home = core::home_folder();
+            tabs_->open(home.empty() ? "C:\\" : home);
+        }
     }
 
     lap("first tabs (folder listing starts)");
 
-    // the language's own characters (and anything else already noted) go into the first bake, so it needs no rebuild at once
-    baked_revision_ = core::text::demand_revision();
-    auto created = ui::create_context(theme_.style(), window_.dpi_scale() * static_cast<float>(scale_pct_) / 100.0f, core::text::demanded_codepoints());
+    // dynamic glyph baking keeps the initial atlas tiny (overlaps D3D11CreateDevice) and bakes unseen scripts on demand
+    auto created = ui::create_context(theme_.style(), window_.dpi_scale() * static_cast<float>(scale_pct_) / 100.0f);
     lap("fonts and ui context");
-    device_thread_.join();
-    if (!created || !device_ok_ ||!gpu_.create_swap_chain(window_.handle())) { return false; }
+    if (device_thread_.joinable()) { device_thread_.join(); }
+    if (!created || !device_ok_ || !gpu_.create_swap_chain(window_.handle())) { return false; }
+    if (!shared_.gpu) { shared_.gpu = gpu_.shared_device(); }
     ui_.emplace(std::move(*created));
     ui_->set_clipboard(window_.input().clipboard());
     if (!gpu_.create_renderer(*ui_)) { return false; }
     lap("direct3d swap chain and renderer (the device was made meanwhile)");
 
     images_ = std::make_unique<platform::ImageCache>(window_.waker());
-    shell_ = std::make_unique<ui::Shell>(window_, theme_, ui::FontSet{}, *tabs_, *ops_, settings_, *images_, binds_, history_);
-    if (!opts.second.empty()) {
+    shell_ = std::make_unique<ui::Shell>(window_, theme_, ui::FontSet{}, *tabs_, *ops_, settings_, *images_, binds_, history_,
+                                         shared_.sizes, shared_.git, shared_.index, shared_.index_started);
+    if (!props_only && !opts.second.empty()) {
         const std::string right = core::path::normalize(opts.second);
-        if (core::path::is_directory(right)) {
+        if (!right.empty()) {
             settings_.split = true;
             shell_->set_second_folder(right);
         }
@@ -124,7 +151,7 @@ bool Application::init(const Options& opts)
     drop.resolve = [this](strata::vec2 p) { return shell_->resolve_drop(p); };
     drop.hover   = [this](std::optional<strata::vec2> p) { shell_->set_drop_point(p); };
     drop.link    = [](const std::string& dest) { return ui::Sidebar::is_pin_target(dest); };
-    drop.dropped = [this](std::vector<std::string> paths, std::string dest, bool move) { shell_->drop_files(std::move(paths), dest, move); };
+    drop.dropped = [this](std::vector<std::string> paths, std::string dest, platform::DropAction action) { shell_->drop_files(std::move(paths), dest, action); };
     drop.failed  = [this](std::size_t n) { shell_->drop_failed(n); };
     drop.redraw  = [this] { (void)step(true); };
     drop.scale   = [this] { return window_.logical_scale(); };
@@ -133,12 +160,11 @@ bool Application::init(const Options& opts)
         // the window is being dragged: if a newer pointer position is already waiting, this size is about to be stale and
         // drawing it would only hold the next one back (on a slow gpu that is the "keeps resizing after I let go" lag).
         // never skip more than a few in a row, and the last size always draws
-        static int skipped = 0;
-        if (skipped < 3 && HIWORD(::GetQueueStatus(QS_MOUSEMOVE)) != 0) {
-            ++skipped;
+        if (live_resize_skipped_ < 3 && HIWORD(::GetQueueStatus(QS_MOUSEMOVE)) != 0) {
+            ++live_resize_skipped_;
             return;
         }
-        skipped = 0;
+        live_resize_skipped_ = 0;
         (void)window_.take_resized();
         gpu_.resize();
         gpu_.set_immediate(true);
@@ -147,7 +173,11 @@ bool Application::init(const Options& opts)
     };
     if (opts.settings) { shell_->show_settings(); }
     if (opts.palette) { shell_->show_palette(); }
-    if (!opts.properties.empty()) { shell_->show_properties({opts.properties}, opts.properties_tab); }
+    if (props_only) {
+        window_.set_min_size(400, 260);
+        shell_->show_properties_window(opts.properties_paths, opts.properties_tab);
+    }
+    else if (!opts.properties.empty()) { shell_->show_properties({opts.properties}, opts.properties_tab); }
     if (!opts.usage.empty()) { shell_->show_usage(opts.usage); }
     apply_theme();
     shell_->open_window_hook = [this](const std::string& folder, bool has_at, int x, int y, int w, int h) {
@@ -160,6 +190,12 @@ bool Application::init(const Options& opts)
         o.height = h;
         open_window_(o);
     };
+    shell_->open_properties_hook = [this](const std::vector<std::string>& paths) {
+        Options o;
+        o.properties_paths = paths;
+        open_window_(o);
+    };
+    shell_->transfer_tab_hook = transfer_tab_;
     lap("final setup");
     core::log::info("startup: init finished, the first frame comes next");
     window_.show();
@@ -179,11 +215,13 @@ void Application::start_log()
     ::GetModuleFileNameW(nullptr, exe, MAX_PATH);
     SYSTEM_INFO si{};
     ::GetNativeSystemInfo(&si);
-    MEMORYSTATUSEX mem{sizeof mem};
+    MEMORYSTATUSEX mem{};
+    mem.dwLength = sizeof mem;
     ::GlobalMemoryStatusEx(&mem);
     using RtlGetVersionFn = LONG(WINAPI*)(OSVERSIONINFOW*);
-    OSVERSIONINFOW os{sizeof os};
-    if (const auto fn = reinterpret_cast<RtlGetVersionFn>(::GetProcAddress(::GetModuleHandleW(L"ntdll.dll"), "RtlGetVersion"))) { fn(&os); }
+    OSVERSIONINFOW os{};
+    os.dwOSVersionInfoSize = sizeof os;
+    if (const auto fn = reinterpret_cast<RtlGetVersionFn>(reinterpret_cast<void*>(::GetProcAddress(::GetModuleHandleW(L"ntdll.dll"), "RtlGetVersion")))) { fn(&os); }
     core::log::info("==== PrismFS start, pid {} ====", ::GetCurrentProcessId());
     core::log::info("exe {}", core::text::narrow(exe));
     core::log::info("settings {}", ui::Settings::file_path());
@@ -214,25 +252,6 @@ bool Application::step(bool force_draw)
         if (settings_.log_enabled) { start_log(); } else { core::log::info("log switched off"); core::log::disable(); }
     }
     const auto ms_since = [](std::chrono::steady_clock::time_point t) { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t).count(); };
-    // names with characters the fonts do not have (han, kana, hangul, arabic, emoji ...): bake exactly those glyphs. the
-    // fonts are rebuilt as a whole, which takes a few tens of ms, so it happens only when a new character first appears
-    if (const unsigned rev = core::text::demand_revision(); rev != baked_revision_) {
-        baked_revision_ = rev; // (also on failure: no retry loop)
-        core::log::Timer font_time{std::format("fonts rebuilt for new characters (revision {})", rev)};
-        auto created = ui::create_context(theme_.style(), ui_->scale(), core::text::demanded_codepoints());
-        if (created) {
-            ui_.emplace(std::move(*created));
-            ui_->set_clipboard(window_.input().clipboard());
-            ui_->theme() = theme_.style();
-            strings_dirty_ = true;
-            images_->forget();
-            popup_.destroy(); // (it lives on the device that is replaced; made again by the next frame)
-            if (!gpu_.recreate(*ui_)) {
-                window_.request_close();
-                return false;
-            }
-        }
-    }
 
     if (strings_dirty_) {
         strings_dirty_ = false;
@@ -256,11 +275,15 @@ bool Application::step(bool force_draw)
     shell_->frame(*ui_, frame_in);
     strata::end_frame(*ui_, window_.input());
     const double ui_ms = ms_since(ui_start);
-    // this frame met characters the fonts lack (they would draw as '?', on the dim first frame of the fade-in): do not show
-    // it. the rebuild happens at the start of the next step, which must come at once, and the window keeps the last good
-    // frame meanwhile (a rebuild takes a few hundred ms)
-    const bool stale_glyphs = !force_draw && core::text::demand_revision() != baked_revision_;
-    if (stale_glyphs) { ui_->invalidate(); }
+
+    // upload any glyphs baked on demand during this frame (partial sub-rect upload when dimensions match).
+    // if the atlas had to double in size mid-frame, earlier vertices used the old UVs: skip this frame and redraw at once
+    const bool atlas_grew = ui_->font().resized();
+    if (ui_->font().dirty()) {
+        (void)strata::sync_font_atlas(*ui_, gpu_.renderer());
+        if (atlas_grew) { ui_->invalidate(); }
+    }
+    const bool skip_present = !force_draw && atlas_grew;
     if (shell_->take_restyle()) { apply_theme(); }
     if (const int pct = shell_->take_scale_request(); pct > 0) {
         scale_pct_ = pct;
@@ -270,12 +293,11 @@ bool Application::step(bool force_draw)
 
     bool presented = false;
     const auto present_start = std::chrono::steady_clock::now();
-    if (!stale_glyphs && (force_draw || !ui_->frame_unchanged())) {
+    if (!skip_present && (force_draw || !ui_->frame_unchanged())) {
         presented = true;
         const bool ok = present_frame();
-        static bool first_frame = true;
-        if (first_frame) {
-            first_frame = false;
+        if (first_frame_) {
+            first_frame_ = false;
             core::log::info("startup: first frame on screen (ui {:.0f} ms, draw + present {:.0f} ms)", ui_ms, ms_since(present_start));
         }
         if (core::log::enabled()) {
@@ -289,6 +311,7 @@ bool Application::step(bool force_draw)
                 window_.request_close();
                 return false;
             }
+            shared_.gpu = gpu_.shared_device();
         }
     }
 
@@ -432,9 +455,10 @@ void Application::tick()
     if (presented_) { gpu_.wait_for_frame(); }
     presented_ = step(false);
 
-    // the next frame is due when input arrives, a timer runs out (caret, tooltip delay) or an animation is still moving.
+    // the next frame is due when input arrives, a timer runs out (caret, tooltip delay, debounced watcher) or an animation is still moving.
     // a directory loader posts a message when it has rows, which counts as input
-    const double wait = ui_ != std::nullopt ? ui_->next_wake_seconds() : 3600.0;
+    double wait = ui_ != std::nullopt ? ui_->next_wake_seconds() : 3600.0;
+    if (shell_) { wait = std::min(wait, shell_->next_wake_seconds()); }
     animating_ = wait <= 0.0;
     due_       = std::chrono::steady_clock::now() + std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(std::min(wait, 3600.0)));
 }
@@ -445,12 +469,25 @@ double Application::seconds_until_due() const
     return std::max(0.0, std::chrono::duration<double>(due_ - std::chrono::steady_clock::now()).count());
 }
 
+void Application::adopt_tab(std::unique_ptr<model::Tab> tab)
+{
+    if (shell_ && tab) {
+        shell_->adopt_tab(std::move(tab));
+        if (ui_) { ui_->invalidate(); }
+    }
+}
+
 void Application::shutdown()
 {
     platform::detach_drop_target(window_.handle());
-    if (!ui_ || !shell_) { return; }
-    const strata::vec2 logical = ui_->display_size();
-    shell_->save_session(static_cast<int>(logical.x * static_cast<float>(scale_pct_) / 100.0f), static_cast<int>(logical.y * static_cast<float>(scale_pct_) / 100.0f));
+    if (ui_ && shell_) {
+        const strata::vec2 logical = ui_->display_size();
+        shell_->save_session(static_cast<int>(logical.x * static_cast<float>(scale_pct_) / 100.0f), static_cast<int>(logical.y * static_cast<float>(scale_pct_) / 100.0f));
+    }
+    if (ole_init_) {
+        ole_init_ = false;
+        ::OleUninitialize();
+    }
 }
 
 } // namespace prism::app

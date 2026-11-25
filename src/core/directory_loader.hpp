@@ -26,6 +26,7 @@ public:
     DirectoryLoader(const DirectoryLoader&)            = delete;
     DirectoryLoader& operator=(const DirectoryLoader&) = delete;
 
+    void set_waker(std::function<void()> wake) { wake_ = std::move(wake); }
     void start(const std::string& utf8_path);
     // every file and folder below `utf8_root` that matches `query`; names are relative paths. capped at 200k results
     void start_search(const std::string& utf8_root, Query query);

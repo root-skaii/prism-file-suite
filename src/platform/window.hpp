@@ -60,6 +60,7 @@ public:
     void abandon() noexcept;
     // wakes wait() from any thread
     void wake() const noexcept;
+    static void wake_handle(void* hwnd) noexcept;
     // the same as a free-standing callable (copies the handle: safe on a worker thread that outlives the window)
     [[nodiscard]] std::function<void()> waker() const;
 
@@ -71,10 +72,15 @@ public:
     void  set_logical_scale(float s) noexcept { logical_scale_ = s; }
     [[nodiscard]] float logical_scale() const noexcept { return logical_scale_ > 0.0f ? logical_scale_ : platform_.dpi_scale(); }
     [[nodiscard]] bool                   maximized() const noexcept;
+    [[nodiscard]] bool                   active() const noexcept { return active_; } // the foreground window of the system
+    // the smallest size the user can drag this window to, in ui pixels (the default suits the file view)
+    void set_min_size(int w, int h) noexcept { min_w_ = w; min_h_ = h; }
 
     // true once after the client area changed size; the new dpi scale (0: none) after WM_DPICHANGED
     [[nodiscard]] bool  take_resized() noexcept;
     [[nodiscard]] float take_dpi_change() noexcept;
+    // multimedia / precision-touchpad browser commands (WM_APPCOMMAND): 0 = none, -1 = back, +1 = forward, 2 = refresh
+    [[nodiscard]] int   take_app_command() noexcept { return std::exchange(app_command_, 0); }
 
     void minimize() const noexcept;
     void toggle_maximize() const noexcept;
@@ -86,7 +92,9 @@ public:
     [[nodiscard]] bool maximize_hovered() const noexcept { return max_hover_; }
     [[nodiscard]] bool maximize_pressed() const noexcept { return max_down_; }
 
-    // moving a tab between windows: hands a folder to the PrismFS window under the screen point (false: none there)
+    // moving a tab between windows: returns the other PrismFS window under the screen point (nullptr: none)
+    [[nodiscard]] void* prism_window_at(int screen_x, int screen_y) const;
+    // cross-process fallback: hands a folder to the PrismFS window under the screen point (false: none there)
     [[nodiscard]] bool send_folder_to_window_at(int screen_x, int screen_y, std::string_view folder) const;
     // folders other windows sent us since the last call
     [[nodiscard]] std::vector<std::string> take_incoming() { return std::exchange(incoming_, {}); }
@@ -122,6 +130,8 @@ private:
     bool                  quit_{};
     bool                  faulted_{};   // a fault hit this window: messages are ignored from then on
     bool                  activity_{true};
+    bool                  active_{true};
+    int                   min_w_{}, min_h_{};
     bool                  minimized_{};
     bool                  resized_{};
     bool                  sizing_{}; // inside the system's resize / move loop
@@ -129,6 +139,7 @@ private:
     bool                  max_down_{};
     float                 pending_dpi_{};
     float                 logical_scale_{};
+    int                   app_command_{};
 };
 
 } // namespace prism::platform

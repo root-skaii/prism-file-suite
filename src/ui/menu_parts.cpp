@@ -3,10 +3,13 @@
 #include "core/file_ops.hpp"
 #include "core/path.hpp"
 #include "core/places.hpp"
+#include "core/rclone.hpp"
 #include "core/recycle.hpp"
 #include "core/shell_ops.hpp"
 #include "core/terminal.hpp"
 #include "ui/tr.hpp"
+
+#include <thread>
 
 namespace prism::ui::menus {
 
@@ -14,11 +17,21 @@ using namespace strata;
 
 bool terminal_target(const std::string& folder)
 {
-    return !folder.empty() && !core::is_device_path(folder) && !core::recycle::inside(folder) && !folder.starts_with("prism:");
+    return !folder.empty() && !core::is_device_path(folder) && !core::recycle::inside(folder) && !folder.starts_with("prism:") && !core::rclone::is_path(folder);
 }
 
 void open_file(Env& env, const std::string& path)
 {
+    if (core::rclone::is_path(path)) {
+        env.cmd.toast(trf("Downloading {}...", core::path::leaf(path)), toast_kind::info);
+        std::thread{[path] {
+            std::string local, err;
+            if (core::rclone::download_to_cache(path, local, err) && !local.empty()) {
+                (void)core::shell::open(local);
+            }
+        }}.detach();
+        return;
+    }
     if (!core::shell::open(path)) { env.cmd.toast(trf("Could not open {}", core::path::leaf(path)), toast_kind::error); }
 }
 

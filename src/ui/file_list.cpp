@@ -1,26 +1,16 @@
 #include "ui/file_list.hpp"
-#include "ui/tr.hpp"
 
-#include "core/path.hpp"
-#include "ui/tr.hpp"
 #include "core/archive.hpp"
-#include "ui/tr.hpp"
 #include "core/git_status.hpp"
-#include "ui/tr.hpp"
 #include "core/image_tools.hpp"
-#include "ui/tr.hpp"
-#include "core/templates.hpp"
-#include "ui/tr.hpp"
+#include "core/path.hpp"
 #include "core/recycle.hpp"
 #include "core/shell_ops.hpp"
-#include "ui/tr.hpp"
+#include "core/templates.hpp"
 #include "core/text.hpp"
-#include "ui/tr.hpp"
 #include "ui/menu_parts.hpp"
 #include "ui/new_menu.hpp"
-#include "ui/tr.hpp"
 #include "ui/panel.hpp"
-#include "ui/tr.hpp"
 #include "ui/tag_colors.hpp"
 #include "ui/tr.hpp"
 
@@ -133,13 +123,44 @@ std::size_t FileList::Geo::group_index(std::size_t i) const noexcept
 
 float FileList::Geo::top_of(std::size_t i) const noexcept
 {
-    if (grid) { return static_cast<float>(i / static_cast<std::size_t>(per_row)) * cell_h; }
+    if (grid) {
+        const auto per = static_cast<std::size_t>(per_row);
+        if (starts == nullptr || starts->empty()) { return static_cast<float>(i / per) * cell_h; }
+        const std::size_t gk = group_index(i);
+        float y = 0.0f;
+        for (std::size_t k = 0; k < gk; ++k) {
+            y += group_h;
+            if (k + 1 < gk) {
+                const std::size_t count = (*starts)[k + 1] - (*starts)[k];
+                const std::size_t lines = (count + per - 1) / per;
+                y += static_cast<float>(lines) * cell_h;
+            } else {
+                const std::size_t offset = i - (*starts)[k];
+                y += static_cast<float>(offset / per) * cell_h;
+            }
+        }
+        return y;
+    }
     return static_cast<float>(i) * cell_h + static_cast<float>(group_index(i)) * group_h;
 }
 
 float FileList::Geo::total_height(std::size_t rows) const noexcept
 {
-    if (grid) { return static_cast<float>((rows + static_cast<std::size_t>(per_row) - 1) / static_cast<std::size_t>(per_row)) * cell_h + k_pad; }
+    if (grid) {
+        const auto per = static_cast<std::size_t>(per_row);
+        if (starts == nullptr || starts->empty()) {
+            return static_cast<float>((rows + per - 1) / per) * cell_h + k_pad;
+        }
+        float y = 0.0f;
+        for (std::size_t k = 0; k < starts->size(); ++k) {
+            const std::size_t s = (*starts)[k];
+            const std::size_t next = k + 1 < starts->size() ? (*starts)[k + 1] : rows;
+            const std::size_t count = next > s ? next - s : 0;
+            const std::size_t lines = (count + per - 1) / per;
+            y += group_h + static_cast<float>(lines) * cell_h;
+        }
+        return y + k_pad;
+    }
     return static_cast<float>(rows) * cell_h + (starts != nullptr ? static_cast<float>(starts->size()) * group_h : 0.0f);
 }
 
@@ -168,18 +189,18 @@ FileList::Geo FileList::make_geo(float body_w, const model::Listing& listing) co
     g.body_w = body_w;
     g.grid   = env_.settings.grid_view;
     if (g.grid) {
-        const bool compact = env_.theme.density() == Density::compact;
-        g.cell_w  = compact ? 112.0f : 132.0f;
-        g.cell_h  = compact ? 116.0f : 140.0f;
+        const float base = std::clamp(env_.settings.grid_size, 88.0f, 220.0f);
+        g.cell_w  = base;
+        g.cell_h  = std::round(base * 1.06f);
         g.per_row = std::max(1, static_cast<int>((body_w - 2.0f * k_pad) / g.cell_w));
     } else {
         g.cell_w  = body_w;
         g.cell_h  = m.row_height;
         g.per_row = 1;
-        if (!listing.group_starts().empty()) {
-            g.starts  = &listing.group_starts();
-            g.group_h = m.row_height + 4.0f;
-        }
+    }
+    if (!listing.group_starts().empty()) {
+        g.starts  = &listing.group_starts();
+        g.group_h = m.row_height + 4.0f;
     }
     return g;
 }
@@ -190,10 +211,16 @@ rect FileList::cell_rect(const Geo& g, std::size_t i, vec2 origin) const
         const float y = origin.y + g.top_of(i);
         return {{origin.x + k_pad, y + 1.0f}, {origin.x + g.body_w - k_pad, y + g.cell_h - 1.0f}};
     }
-    const std::size_t col = i % static_cast<std::size_t>(g.per_row);
-    const std::size_t row = i / static_cast<std::size_t>(g.per_row);
+    const auto per = static_cast<std::size_t>(g.per_row);
+    std::size_t local = i;
+    if (g.starts != nullptr && !g.starts->empty()) {
+        const std::size_t gk = g.group_index(i);
+        if (gk > 0) { local = i - (*g.starts)[gk - 1]; }
+    }
+    const std::size_t col = local % per;
     const float left = origin.x + k_pad + (g.body_w - 2.0f * k_pad - static_cast<float>(g.per_row) * g.cell_w) * 0.5f;
-    return rect::from_size({left + static_cast<float>(col) * g.cell_w + 3.0f, origin.y + static_cast<float>(row) * g.cell_h + 3.0f}, {g.cell_w - 6.0f, g.cell_h - 6.0f});
+    const float y    = origin.y + g.top_of(i);
+    return rect::from_size({left + static_cast<float>(col) * g.cell_w + 3.0f, y + 3.0f}, {g.cell_w - 6.0f, g.cell_h - 6.0f});
 }
 
 int FileList::index_at(const Geo& g, vec2 origin, vec2 p, std::size_t rows) const
@@ -203,10 +230,32 @@ int FileList::index_at(const Geo& g, vec2 origin, vec2 p, std::size_t rows) cons
     }
     const float left = origin.x + k_pad + (g.body_w - 2.0f * k_pad - static_cast<float>(g.per_row) * g.cell_w) * 0.5f;
     const int c = static_cast<int>(std::floor((p.x - left) / g.cell_w));
-    const int r = static_cast<int>(std::floor((p.y - origin.y) / g.cell_h));
-    if (c < 0 || c >= g.per_row || r < 0) { return -1; }
-    const std::size_t i = static_cast<std::size_t>(r) * static_cast<std::size_t>(g.per_row) + static_cast<std::size_t>(c);
-    return i < rows ? static_cast<int>(i) : -1;
+    if (c < 0 || c >= g.per_row) { return -1; }
+    const float y = p.y - origin.y;
+    if (y < 0.0f) { return -1; }
+    if (g.starts == nullptr || g.starts->empty()) {
+        const int r = static_cast<int>(std::floor(y / g.cell_h));
+        const std::size_t i = static_cast<std::size_t>(r) * static_cast<std::size_t>(g.per_row) + static_cast<std::size_t>(c);
+        return i < rows ? static_cast<int>(i) : -1;
+    }
+    const auto per = static_cast<std::size_t>(g.per_row);
+    float gy = 0.0f;
+    for (std::size_t k = 0; k < g.starts->size(); ++k) {
+        const std::size_t s     = (*g.starts)[k];
+        const std::size_t next  = k + 1 < g.starts->size() ? (*g.starts)[k + 1] : rows;
+        const std::size_t count = next > s ? next - s : 0;
+        const std::size_t lines = (count + per - 1) / per;
+        const float body_top    = gy + g.group_h;
+        const float body_bot    = body_top + static_cast<float>(lines) * g.cell_h;
+        if (y < body_top) { return -1; } // over group header
+        if (y < body_bot) {
+            const std::size_t r = static_cast<std::size_t>((y - body_top) / g.cell_h);
+            const std::size_t idx = s + r * per + static_cast<std::size_t>(c);
+            return idx < next ? static_cast<int>(idx) : -1;
+        }
+        gy = body_bot;
+    }
+    return -1;
 }
 
 // a row files can be dropped on: a folder, or (like Explorer) a program / script / shortcut that is run with them
@@ -229,9 +278,13 @@ std::string FileList::drop_target_at(vec2 p) const
 // --- navigation ---------------------------------------------------------------------------------------------
 
 void FileList::open_row(model::Tab& tab, std::size_t row)
-{    const core::FileEntry& e = tab.listing().at(row);
+{
+    const core::FileEntry& e = tab.listing().at(row);
     const std::string full = core::path::join(tab.path(), e.name);
-    if (e.is_dir()) {
+    if (e.has_display_override() && core::recycle::inside(tab.path())) {
+        // Explorer opens Properties for items inside the Recycle Bin instead of executing raw $R... files
+        env_.cmd.open_properties({full});
+    } else if (e.is_dir()) {
         tab.navigate(full);
     } else if (env_.settings.browse_archives && browsable_archive(e)) {
         env_.cmd.open_archive(full);
@@ -266,10 +319,54 @@ std::vector<std::string> FileList::selected_paths(const model::Tab& tab) const
     return out;
 }
 
+void FileList::sync_cut_clipboard()
+{
+    const unsigned long seq = core::clipboard_sequence();
+    if (seq == clip_seq_) { return; }
+    clip_seq_ = seq;
+    cut_paths_.clear();
+    cut_dir_lower_.clear();
+    cut_names_lower_.clear();
+    if (!core::clipboard_has_files()) { return; }
+    std::vector<std::string> paths;
+    bool cut = false;
+    if (core::clipboard_get_files(paths, cut) && cut && !paths.empty()) {
+        std::string first_dir = core::text::lower_ascii(core::path::normalize(core::path::parent(paths.front())));
+        bool same_dir = !first_dir.empty();
+        cut_paths_.reserve(paths.size());
+        for (const std::string& p : paths) {
+            const std::string norm = core::path::normalize(p);
+            const std::string par  = core::text::lower_ascii(core::path::parent(norm));
+            if (par != first_dir) { same_dir = false; }
+            cut_paths_.push_back(core::text::lower_ascii(norm));
+        }
+        if (same_dir) {
+            cut_dir_lower_ = std::move(first_dir);
+            cut_names_lower_.reserve(paths.size());
+            for (const std::string& p : paths) { cut_names_lower_.push_back(core::text::lower_ascii(core::path::leaf(p))); }
+        }
+    }
+}
+
 bool FileList::is_cut(const model::Tab& tab, std::string_view name) const
 {
-    if (cut_names_.empty() || cut_dir_ != tab.path()) { return false; }
-    return std::find(cut_names_.begin(), cut_names_.end(), name) != cut_names_.end();
+    if (cut_paths_.empty()) { return false; }
+    if (!cut_dir_lower_.empty()) {
+        // fast path: compare folder once without building full paths for every visible row
+        const std::string_view tp = tab.path();
+        if (tp.size() != cut_dir_lower_.size()) { return false; }
+        for (std::size_t i = 0; i < tp.size(); ++i) {
+            char c = tp[i];
+            if (c >= 'A' && c <= 'Z') { c = static_cast<char>(c + 32); }
+            if (c != cut_dir_lower_[i]) { return false; }
+        }
+        for (const std::string& n : cut_names_lower_) {
+            if (n.size() == name.size() && core::text::compare_plain(n, name) == 0) { return true; }
+        }
+        return false;
+    }
+    const std::string full = core::text::lower_ascii(core::path::normalize(core::path::join(tab.path(), name)));
+    return std::find(cut_paths_.begin(), cut_paths_.end(), full) != cut_paths_.end();
 }
 
 void FileList::copy_selection(model::Tab& tab, bool cut)
@@ -280,12 +377,7 @@ void FileList::copy_selection(model::Tab& tab, bool cut)
         env_.cmd.toast(tr("Could not use the clipboard"), toast_kind::error);
         return;
     }
-    cut_names_.clear();
-    cut_dir_.clear();
-    if (cut) {
-        cut_dir_ = tab.path();
-        for (const std::size_t r : tab.listing().selected_rows()) { cut_names_.push_back(tab.listing().at(r).name); }
-    }
+    sync_cut_clipboard();
     env_.cmd.toast(cut ? trf_n("{} item cut", "{} items cut", static_cast<long long>(paths.size()), paths.size()) : trf_n("{} item copied", "{} items copied", static_cast<long long>(paths.size()), paths.size()), toast_kind::info);
 }
 
@@ -296,8 +388,8 @@ void FileList::paste(model::Tab& tab)
     if (!core::clipboard_get_files(paths, cut)) { return; }
     env_.ops.start(cut ? core::OpKind::move : core::OpKind::copy, std::move(paths), tab.path());
     if (cut) {
-        cut_names_.clear();
-        cut_dir_.clear();
+        core::clipboard_clear_cut();
+        sync_cut_clipboard();
     }
 }
 
@@ -325,10 +417,7 @@ bool FileList::perform(context& ui, model::Tab& tab, std::string_view action)
     if (action == "move_to_pane")   { to_other_pane(tab, true); return true; }
     if (action == "select_all")     { L.select_all(); return true; }
     if (action == "select_none")    { L.clear_selection(); return true; }
-    if (action == "select_invert") {
-        for (std::size_t r = 0; r < L.rows(); ++r) { L.toggle(r); }
-        return true;
-    }
+    if (action == "select_invert") { L.invert_selection(); return true; }
     if (action == "rename") {
         if (L.selected_rows().size() > 1) { env_.cmd.request_action("batch_rename"); } // (several: one pattern for all)
         else if (L.focus() != model::Listing::npos) { begin_rename(ui, tab, L.focus()); }
@@ -423,7 +512,7 @@ void FileList::new_from_template(model::Tab& tab, std::string_view key)
 void FileList::begin_rename(context&, model::Tab& tab, std::size_t row)
 {
     const core::FileEntry& e = tab.listing().at(row);
-    if (!e.shown.empty()) { return; } // (a Recycle Bin item: its real name is the bin's own)
+    if (e.has_display_override()) { return; } // (a Recycle Bin item: its real name is the bin's own)
     rename_active_ = true;
     rename_path_   = core::path::join(tab.path(), e.name);
     rename_orig_   = e.name;
@@ -454,45 +543,85 @@ void FileList::draw_rename(Painter& p, model::Tab& tab, const Geo& g, vec2 origi
         box = rect{{cell.min.x, cell.max.y - 34.0f}, {cell.max.x, cell.max.y - 6.0f}};
     } else {
         const float name_x = cell.min.x + 12.0f + env_.theme.metrics().icon + 10.0f - 10.0f;
-        box = rect{{name_x, cell.min.y + 1.0f}, {name_x + std::min(380.0f, viewport_.width() - 160.0f), cell.max.y - 1.0f}};
+        box = rect{{name_x, cell.min.y + 1.0f}, {name_x + std::min(380.0f, std::max(140.0f, viewport_.width() - 160.0f)), cell.max.y - 1.0f}};
     }
+    // never let the rename field float over the toolbar or status bar when scrolled out of the viewport
+    if (box.max.y <= viewport_.min.y || box.min.y >= viewport_.max.y) { return; }
+    box.min.y = std::max(box.min.y, viewport_.min.y);
+    box.max.y = std::min(box.max.y, viewport_.max.y);
 
+    const bool invalid_chars = rename_text_.find_first_of("\\/:*?\"<>|") != std::string::npos ||
+                               (!rename_text_.empty() && (rename_text_.back() == '.' || rename_text_.back() == ' '));
     bool done = false;
     bool commit = false;
+    int  tab_step = 0; // Tab / Shift+Tab commits and jumps straight to the next / previous item
     {
         PanelScope panel{ui, "##rename" + std::to_string(rename_gen_), box};
         shape_style s;
         s.radius       = radii(7.0f);
         s.fill_top     = s.fill_bottom = pal.raised;
-        s.border       = pal.accent;
+        s.border       = invalid_chars ? pal.danger : pal.accent;
         s.border_width = 1.5f;
         p.dl().shape(box, s);
         ui.push_var(style_var::frame_padding_y, std::max(0.0f, (box.height() - p.line_height(env_.fonts.body)) * 0.5f));
         ui.push_color(style_color::widget_bg, color{0, 0, 0, 0});
         ui.push_color(style_color::widget_border, color{0, 0, 0, 0});
         ui.set_next_item_width(box.width());
-        if (rename_age_ < 3) { ui.request_text_focus("##rn"); }
+        if (rename_age_ < 3) {
+            std::size_t sel_end = rename_text_.size();
+            if (env_.settings.rename_select_stem && !L.at(row).is_dir()) {
+                const std::size_t dot = rename_text_.rfind('.');
+                if (dot != std::string::npos && dot > 0) { sel_end = dot; }
+            }
+            ui.request_text_focus("##rn", 0, sel_end);
+        }
         (void)ui.input_text("##rn", rename_text_);
         ui.pop_color(2);
         ui.pop_var();
+        if (invalid_chars) { ui.tooltip(tr("A file name cannot contain \\ / : * ? \" < > | or end with a space or dot")); }
         ++rename_age_;
-        if (ui.key_pressed(key::enter)) { done = commit = true; }
-        else if (ui.key_pressed(key::escape)) { done = true; }
-        else if (rename_age_ >= 4 && !ui.field_focused("##rn")) { done = commit = true; } // clicking elsewhere keeps the new name
+        if (ui.key_pressed(key::enter)) {
+            if (!invalid_chars) { done = commit = true; }
+        } else if (ui.key_pressed(key::tab) || ui.key_pressed(key::tab, false, true)) {
+            if (!invalid_chars) {
+                done = commit = true;
+                tab_step = ui.shift_down() ? -1 : 1;
+            }
+        } else if (ui.key_pressed(key::escape)) {
+            done = true;
+        } else if (rename_age_ >= 4 && !ui.field_focused("##rn")) {
+            // switching away to another OS window cancels rather than silently committing a half-typed name
+            done   = true;
+            commit = env_.window.active() && !invalid_chars;
+        }
     }
     if (!done) { return; }
     rename_active_ = false;
-    if (commit && rename_text_ != core::path::leaf(rename_orig_) && !rename_text_.empty()) {
+    bool renamed = false;
+    if (commit && rename_text_ != core::path::leaf(rename_orig_) && !rename_text_.empty() && !invalid_chars) {
         if (core::FileOps::rename(rename_path_, rename_text_)) {
+            renamed = true;
             const std::string from = rename_path_;
             const std::string to   = core::path::join(core::path::parent(rename_path_), rename_text_);
             env_.history.push({trf("Rename {}", core::path::leaf(from)),
                                [from, to] { return core::FileOps::rename(to, core::path::leaf(from)); },
                                [from, to] { return core::FileOps::rename(from, core::path::leaf(to)); }});
-            tab.reveal_name = rename_text_;
+            // search results carry relative paths (`sub\file.txt`): keep the relative folder so reveal finds it
+            const std::size_t sep = rename_orig_.rfind('\\');
+            tab.reveal_name = sep == std::string::npos ? rename_text_ : rename_orig_.substr(0, sep + 1) + rename_text_;
             tab.refresh();
         } else {
             env_.cmd.toast(tr("Could not rename: the name is invalid or already used"), toast_kind::error);
+        }
+    }
+    if (tab_step != 0 && L.rows() > 1) {
+        const std::size_t next = tab_step > 0 ? (row + 1) % L.rows() : (row == 0 ? L.rows() - 1 : row - 1);
+        if (renamed) {
+            pending_rename_ = L.at(next).name;
+            tab.reveal_name = pending_rename_;
+        } else {
+            move_focus(tab, next, false);
+            begin_rename(ui, tab, next);
         }
     }
 }
@@ -505,6 +634,13 @@ void FileList::update_band(context& ui, model::Tab& tab, const Geo& g, vec2 orig
     model::Listing& L  = tab.listing();
     const vec2      mp = ui.mouse_pos();
     if (!ui.mouse_down(mouse_button::left) || ui.key_pressed(key::escape)) {
+        if (!band_active_ && !band_click_name_.empty() && !ui.key_pressed(key::escape)) {
+            if (const auto r = L.find_name(band_click_name_)) {
+                L.select_only(*r);
+                L.set_focus(*r, true);
+            }
+        }
+        band_click_name_.clear();
         band_armed_ = band_active_ = false;
         return;
     }
@@ -513,6 +649,7 @@ void FileList::update_band(context& ui, model::Tab& tab, const Geo& g, vec2 orig
         const vec2 d = here - band_anchor_;
         if (d.x * d.x + d.y * d.y <= 16.0f) { return; } // (a click, not a sweep)
         band_active_ = true;
+        band_click_name_.clear();
     }
     // near the top / bottom edge the list scrolls under the pointer: the faster, the further out
     const float edge = 28.0f;
@@ -530,26 +667,26 @@ void FileList::update_band(context& ui, model::Tab& tab, const Geo& g, vec2 orig
     for (const std::size_t r : band_base_) {
         if (r < rows) { L.set_selected(r, true); }
     }
+    const auto apply_hit = [&](std::size_t i) {
+        if (band_ctrl_) { L.toggle(i); } else { L.set_selected(i, true); }
+    };
     std::size_t last = model::Listing::npos;
     if (rows > 0 && box.max.y >= 0.0f && !g.grid) {
         for (std::size_t i = g.first_at(box.min.y, rows); i < rows && g.top_of(i) <= box.max.y; ++i) {
             if (g.top_of(i) + g.cell_h < box.min.y) { continue; }
-            L.set_selected(i, true);
+            apply_hit(i);
             last = i;
         }
     } else if (rows > 0 && box.max.y >= 0.0f) {
+        std::size_t start = g.first_at(std::max(0.0f, box.min.y - g.cell_h), rows);
+        // back up to the start of the line so we don't miss cells to the left of `start`
         const auto per = static_cast<std::size_t>(g.per_row);
-        const auto r0  = static_cast<std::size_t>(std::max(0.0f, std::floor(box.min.y / g.cell_h)));
-        const auto r1  = static_cast<std::size_t>(std::max(0.0f, std::floor(box.max.y / g.cell_h)));
-        for (std::size_t line = r0; line <= r1 && line * per < rows; ++line) {
-            for (std::size_t col = 0; col < per; ++col) {
-                const std::size_t i = line * per + col;
-                if (i >= rows) { break; }
-                const rect c = cell_rect(g, i, {0.0f, 0.0f});
-                if (c.max.x < box.min.x || c.min.x > box.max.x || c.max.y < box.min.y || c.min.y > box.max.y) { continue; }
-                L.set_selected(i, true);
-                last = i;
-            }
+        start = start >= per ? start - per : 0;
+        for (std::size_t i = start; i < rows && g.top_of(i) <= box.max.y; ++i) {
+            const rect c = cell_rect(g, i, {0.0f, 0.0f});
+            if (c.max.x < box.min.x || c.min.x > box.max.x || c.max.y < box.min.y || c.min.y > box.max.y) { continue; }
+            apply_hit(i);
+            last = i;
         }
     }
     if (last != model::Listing::npos) { L.set_focus(last, true); }
@@ -606,20 +743,47 @@ void FileList::handle_keys(context& ui, model::Tab& tab, const FrameInput& in, c
         if (ui.key_pressed(key::escape)) { L.clear_selection(); }
     }
 
-    // type-to-find: letters typed in quick succession build a prefix
+    // type-to-find: letters typed in quick succession build a prefix (Unicode-aware, Backspace edits, same-letter cycles)
     find_age_ += in.dt;
     if (find_age_ > 1.0) { find_buffer_.clear(); }
+    if (!find_buffer_.empty() && ui.key_pressed(key::backspace)) {
+        // pop one UTF-8 codepoint from the end of find_buffer_
+        while (!find_buffer_.empty() && (static_cast<unsigned char>(find_buffer_.back()) & 0xc0u) == 0x80u) { find_buffer_.pop_back(); }
+        if (!find_buffer_.empty()) { find_buffer_.pop_back(); }
+        find_age_ = 0.0;
+        if (!find_buffer_.empty()) {
+            if (const auto hit = L.find_prefix(find_buffer_, cur)) {
+                keyboard_mode_ = true;
+                move_focus(tab, *hit, false);
+            }
+        }
+    }
     bool typed_any = false;
+    std::string added;
     for (const char c : in.typed) {
         if (static_cast<unsigned char>(c) >= 0x20 && c != 0x7f) {
-            find_buffer_.push_back(c);
+            if (c == ' ' && find_buffer_.empty()) { continue; } // leading Space is Quick Look, not a filename prefix
+            added.push_back(c);
             typed_any = true;
         }
     }
     if (typed_any && !ui.ctrl_down() && !ui.alt_down()) {
+        find_buffer_ += added;
         find_age_ = 0.0;
-        const std::size_t from = find_buffer_.size() == 1 && has_focus ? cur + 1 : cur;
-        if (const auto hit = L.find_prefix(find_buffer_, from)) {
+        const std::size_t from = find_buffer_.size() == added.size() && has_focus ? cur + 1 : cur;
+        auto hit = L.find_prefix(find_buffer_, from);
+        // repeated same-letter press (e.g. 'a' then 'a') cycles through items starting with 'a' when "aa" has no match
+        if (!hit && find_buffer_.size() > added.size() && added.size() == 1 &&
+            core::text::starts_with_icase(find_buffer_, added)) {
+            const bool all_same = std::ranges::all_of(find_buffer_, [&](char ch) {
+                return core::text::lower_ascii(std::string_view{&ch, 1}) == core::text::lower_ascii(added);
+            });
+            if (all_same) {
+                find_buffer_ = added;
+                hit = L.find_prefix(find_buffer_, has_focus ? cur + 1 : 0);
+            }
+        }
+        if (hit) {
             keyboard_mode_ = true;
             move_focus(tab, *hit, false);
         }
@@ -628,11 +792,61 @@ void FileList::handle_keys(context& ui, model::Tab& tab, const FrameInput& in, c
 
 // --- drawing ---------------------------------------------------------------------------------------------------
 
+void FileList::draw_recycle_bar(Painter& p, model::Tab& tab, float width, float height)
+{
+    context&        ui  = p.ui();
+    const Palette&  pal = p.pal();
+    const FontSet&  f   = env_.fonts;
+    model::Listing& L   = tab.listing();
+
+    const item_result r   = ui.custom_item("##bin_bar" + std::string{right_ ? "r" : "l"}, {width, height});
+    const rect        box = r.bounds;
+    const vec2        mp  = ui.mouse_pos();
+    p.dl().rect_filled({{box.min.x + k_pad, box.max.y - 1.0f}, {box.max.x - k_pad, box.max.y}}, pal.divider);
+
+    const bool has_sel   = L.selected_count() > 0;
+    const bool has_items = L.rows() > 0;
+
+    float x = box.min.x + k_pad + 6.0f;
+    const float bh = height - 10.0f;
+    const float by = box.center().y - bh * 0.5f;
+
+    const auto pill = [&](std::string_view label, bool enabled, bool danger) -> bool {
+        const float bw = p.measure(f.small, label).x + 22.0f;
+        const rect  br = rect::from_size({x, by}, {bw, bh});
+        x += bw + 8.0f;
+        const bool hot = enabled && r.hovered && br.contains(mp);
+        const color bg = !enabled ? pal.raised.scaled_alpha(0.35f)
+                       : danger   ? (hot ? pal.danger.scaled_alpha(0.22f) : pal.danger.scaled_alpha(0.10f))
+                                  : (hot ? pal.hover : pal.raised.scaled_alpha(0.7f));
+        const color fg = !enabled ? pal.text_faint : (danger ? pal.danger : pal.text);
+        p.dl().rect_filled(br, bg, 6.0f);
+        p.dl().rect_outline(br, danger && enabled ? pal.danger.scaled_alpha(0.4f) : pal.border, 6.0f, 1.0f);
+        p.text_center(br, label, fg, f.small);
+        return hot && ui.mouse_clicked(mouse_button::left);
+    };
+
+    if (pill(tr("Restore selected"), has_sel, false)) {
+        env_.cmd.restore_from_bin(selected_paths(tab));
+    }
+    if (pill(tr("Restore all"), has_items, false)) {
+        std::vector<std::string> all;
+        all.reserve(L.rows());
+        for (std::size_t i = 0; i < L.rows(); ++i) { all.push_back(core::path::join(tab.path(), L.at(i).name)); }
+        env_.cmd.restore_from_bin(std::move(all));
+    }
+    if (pill(tr("Empty Recycle Bin"), has_items, true)) {
+        env_.cmd.empty_recycle_bin(core::recycle::drive_of(tab.path()));
+    }
+}
+
 void FileList::draw_header(Painter& p, model::Listing& L, const std::string& folder, float width, float height, float body_w)
 {
     context&       ui  = p.ui();
     const Palette& pal = p.pal();
     const FontSet& f   = env_.fonts;
+
+    widths_ = {env_.settings.col_mod_w, env_.settings.col_type_w, env_.settings.col_size_w};
 
     const item_result r = ui.custom_item("##hdr" + std::string{right_ ? "r" : "l"}, {width, height});
     const rect  box = r.bounds;
@@ -659,7 +873,30 @@ void FileList::draw_header(Painter& p, model::Listing& L, const std::string& fol
         }
     }
     if (hot_handle >= 0 || resize_col_ >= 0) { env_.cmd.set_cursor(cursor_kind::resize_ew); }
-    if (hot_handle >= 0 && ui.mouse_clicked(mouse_button::left)) {
+    const auto commit_widths = [&] {
+        env_.settings.col_mod_w  = widths_[col_modified];
+        env_.settings.col_type_w = widths_[col_type];
+        env_.settings.col_size_w = widths_[col_size];
+        env_.cmd.settings_changed();
+    };
+    if (hot_handle >= 0 && ui.item_double_clicked()) {
+        // double-click column divider to auto-fit to visible/sampled content
+        float best = p.measure(f.small, cells[hot_handle + 1].label).x + 34.0f;
+        const std::size_t sample = std::min<std::size_t>(L.rows(), 200);
+        for (std::size_t i = 0; i < sample; ++i) {
+            const core::FileEntry& e = L.at(i);
+            std::string s;
+            if (hot_handle == col_modified) { s = core::path::format_time(e.modified); }
+            else if (hot_handle == col_type) {
+                const std::string_view orig = e.original_path();
+                s = orig.empty() ? std::string{core::type_label(e.kind, e.ext())} : core::path::parent(orig);
+            } else if (!e.is_dir()) { s = core::path::format_size(e.size); }
+            if (!s.empty()) { best = std::max(best, p.measure(f.body, s).x + 26.0f); }
+        }
+        widths_[static_cast<std::size_t>(hot_handle)] = std::clamp(std::ceil(best), 70.0f, 380.0f);
+        commit_widths();
+        resize_col_ = -1;
+    } else if (hot_handle >= 0 && ui.mouse_clicked(mouse_button::left)) {
         resize_col_     = hot_handle;
         resize_start_x_ = mp.x;
         resize_start_w_ = widths_[static_cast<std::size_t>(hot_handle)];
@@ -667,8 +904,12 @@ void FileList::draw_header(Painter& p, model::Listing& L, const std::string& fol
     if (resize_col_ >= 0) {
         if (!ui.mouse_down(mouse_button::left)) {
             resize_col_ = -1;
+            commit_widths();
         } else {
             widths_[static_cast<std::size_t>(resize_col_)] = std::clamp(resize_start_w_ - (mp.x - resize_start_x_), 60.0f, 420.0f);
+            env_.settings.col_mod_w  = widths_[col_modified];
+            env_.settings.col_type_w = widths_[col_type];
+            env_.settings.col_size_w = widths_[col_size];
         }
     }
 
@@ -773,6 +1014,7 @@ void FileList::draw_details(Painter& p, model::Tab& tab, const Geo& g, vec2 orig
     // git: the folder's repository (looked up off the ui thread; null when none) and this folder's place in it
     const std::shared_ptr<const core::GitRepo> git = env_.settings.git_badges && !tab.searching() ? env_.git.lookup(tab.path()) : nullptr;
     const std::string git_base = git ? git->relative(tab.path()) : std::string{};
+    std::string git_key;
     const float icon = m.icon;
     const int   icon_px = static_cast<int>(std::ceil(icon * ui.scale()));
     const std::vector<std::uint32_t>* starts = g.starts;
@@ -837,8 +1079,10 @@ void FileList::draw_details(Painter& p, model::Tab& tab, const Geo& g, vec2 orig
         }
 
         if (git) {
-            const std::string lname = core::text::lower_ascii(e.name);
-            const char code = git->code_for(git_base.empty() ? lname : git_base + "\\" + lname, e.is_dir());
+            git_key.clear();
+            if (!git_base.empty()) { git_key += git_base; git_key.push_back('\\'); }
+            for (const char ch : e.name) { git_key.push_back(ch >= 'A' && ch <= 'Z' ? static_cast<char>(ch + 32) : ch); }
+            const char code = git->code_for(git_key, e.is_dir());
             if (code != 0) {
                 const color bc = code == 'M' ? pal.warning : (code == 'A' || code == '?') ? pal.success : (code == 'R') ? pal.accent : pal.danger;
                 const char  letter[2] = {code, 0};
@@ -847,8 +1091,9 @@ void FileList::draw_details(Painter& p, model::Tab& tab, const Geo& g, vec2 orig
         }
         const color dim = pal.text_dim;
         p.text_left(rect{{x0 + c.mod_x, y}, {x0 + c.type_x - 8.0f, y + rh}}, core::path::format_time(e.modified), dim, f.body, 10.0f);
+        const std::string_view orig = e.original_path();
         p.text_left(rect{{x0 + c.type_x, y}, {x0 + c.size_x - 8.0f, y + rh}},
-                    e.original.empty() ? std::string{core::type_label(e.kind, e.ext())} : core::path::parent(e.original), dim, f.body, 10.0f);
+                    orig.empty() ? std::string{core::type_label(e.kind, e.ext())} : core::path::parent(orig), dim, f.body, 10.0f);
         if (!e.is_dir()) {
             p.text_right(rect{{x0 + c.size_x, y}, {x0 + c.end_x, y + rh}}, core::path::format_size(e.size), dim, f.body, 14.0f);
         } else if (env_.settings.folder_sizes) {
@@ -869,10 +1114,10 @@ void FileList::draw_grid(Painter& p, model::Tab& tab, const Geo& g, vec2 origin,
 
     const std::size_t rows = L.rows();
     const auto per = static_cast<std::size_t>(g.per_row);
-    const auto first_row = static_cast<std::size_t>(std::max(0.0f, std::floor((vtop - origin.y) / g.cell_h)));
-    const auto last_row  = static_cast<std::size_t>(std::max(0.0f, std::ceil((vbottom - origin.y) / g.cell_h))) + 1;
-    const std::size_t first = std::min(rows, first_row * per);
-    const std::size_t last  = std::min(rows, last_row * per);
+    std::size_t first = g.first_at(vtop - origin.y, rows);
+    first = first >= per ? first - per : 0;
+    std::size_t last = first;
+    while (last < rows && g.top_of(last) <= vbottom - origin.y) { ++last; }
 
     const float dy = (1.0f - enter) * 10.0f;
     p.dl().push_alpha(enter);
@@ -886,6 +1131,20 @@ void FileList::draw_grid(Painter& p, model::Tab& tab, const Geo& g, vec2 origin,
         p.dl().rect_filled(rect::from_size({hx, hy + dy}, hc.size()), pal.hover.scaled_alpha(ha), 11.0f);
     } else {
         (void)ui.animate("fg_ha" + side, 0.0f, 20.0f);
+    }
+
+    const std::vector<std::uint32_t>* starts = g.starts;
+    if (starts != nullptr && !starts->empty()) {
+        for (std::size_t k = 0; k < starts->size(); ++k) {
+            const std::size_t s    = (*starts)[k];
+            const std::size_t next = k + 1 < starts->size() ? (*starts)[k + 1] : rows;
+            const float       hy0  = origin.y + g.top_of(s) - g.group_h + dy;
+            if (hy0 + g.group_h < vtop || hy0 > vbottom) { continue; }
+            const rect title{{origin.x + k_pad + 12.0f, hy0 + 6.0f}, {origin.x + g.body_w - k_pad, hy0 + g.group_h}};
+            const float tw = p.text_left(title, L.group_title(s), pal.text, f.bold);
+            p.text_left(rect{{title.min.x + tw + 10.0f, title.min.y}, title.max}, std::format("{}", next - s), pal.text_faint, f.small);
+            p.dl().rect_filled({{origin.x + k_pad + 12.0f, hy0 + g.group_h - 1.0f}, {origin.x + g.body_w - k_pad, hy0 + g.group_h}}, pal.border, 0.0f);
+        }
     }
 
     for (std::size_t i = first; i < last; ++i) {
@@ -1145,6 +1404,10 @@ void FileList::frame(Painter& p, const rect& area, model::Tab& tab, const FrameI
     if (enter_ < 1.0f) { p.ui().invalidate(); } // (the fade needs its frames: without them the list sleeps half faded)
     const float enter_eased = 1.0f - (1.0f - enter_) * (1.0f - enter_);
 
+    const bool  in_bin    = !tab.searching() && core::recycle::inside(tab.path());
+    const float bin_h     = in_bin ? 36.0f : 0.0f;
+    if (in_bin) { draw_recycle_bar(p, tab, area.width(), bin_h); }
+
     const bool  grid_mode = env_.settings.grid_view;
     const float hh     = grid_mode ? 6.0f : m.header_height;
     const float body_w = area.width() - context::scrollbar_width();
@@ -1154,9 +1417,17 @@ void FileList::frame(Painter& p, const rect& area, model::Tab& tab, const FrameI
         (void)ui.custom_item("##hdr_gap" + std::string{right_ ? "r" : "l"}, {area.width(), hh});
     }
 
-    auto body = ui.child(right_ ? "##rows_r" : "##rows", {area.width(), area.height() - hh - k_pad}, child_flags::no_padding);
+    auto body = ui.child(right_ ? "##rows_r" : "##rows", {area.width(), area.height() - bin_h - hh - k_pad}, child_flags::no_padding);
     const rect vp = ui.content_rect();
     viewport_ = vp;
+
+    if (grid_mode && vp.contains(ui.mouse_pos()) && ui.ctrl_down()) {
+        const float wheel = ui.take_wheel();
+        if (wheel != 0.0f) {
+            env_.settings.grid_size = std::clamp(env_.settings.grid_size + wheel * 16.0f, 88.0f, 220.0f);
+            env_.cmd.settings_changed();
+        }
+    }
 
     const Geo g = make_geo(body_w, L);
     geo_ = g;
@@ -1200,37 +1471,88 @@ void FileList::frame(Painter& p, const rect& area, model::Tab& tab, const FrameI
         ensure_visible_ = false;
     }
 
+    sync_cut_clipboard();
     // pointer
     const vec2 mp = drop_point_ ? *drop_point_ : ui.mouse_pos();
     int hover = -1;
     if ((cv.hovered || drop_point_) && vp.contains(mp)) { hover = index_at(g, origin, mp, L.rows()); }
+
+    // drag edge auto-scroll & spring-loaded folder hover (~600 ms)
+    if (drop_point_ && vp.contains(*drop_point_)) {
+        const float edge = 30.0f;
+        float dy = 0.0f;
+        if (drop_point_->y < vp.min.y + edge) { dy = -(vp.min.y + edge - drop_point_->y); }
+        else if (drop_point_->y > vp.max.y - edge) { dy = drop_point_->y - (vp.max.y - edge); }
+        if (dy != 0.0f) {
+            ui.set_scroll_y(std::max(0.0f, ui.scroll_y() + std::clamp(dy, -60.0f, 60.0f) * in.dt * 10.0f));
+            ui.invalidate();
+        }
+        std::string hovered_dir;
+        if (hover >= 0 && L.at(static_cast<std::size_t>(hover)).is_dir()) {
+            hovered_dir = core::path::join(tab.path(), L.at(static_cast<std::size_t>(hover)).name);
+        }
+        if (!hovered_dir.empty() && hovered_dir == spring_target_) {
+            spring_age_ += in.dt;
+            if (spring_age_ >= 0.6) {
+                tab.navigate(hovered_dir);
+                spring_target_.clear();
+                spring_age_ = 0.0;
+            } else {
+                ui.invalidate();
+            }
+        } else {
+            spring_target_ = std::move(hovered_dir);
+            spring_age_ = 0.0;
+        }
+    } else {
+        spring_target_.clear();
+        spring_age_ = 0.0;
+    }
+
     if (cv.hovered && vp.contains(ui.mouse_pos())) {
         // a double click needs both clicks on the same item: after a delete the next file slides under the pointer
         if (ui.mouse_clicked(mouse_button::left)) {
             keyboard_mode_ = false;
+            const unsigned long long now_ms = ::GetTickCount64();
+            const unsigned long long elapsed = now_ms - click_ms_;
+            click_ms_   = now_ms;
             prev_click_ = std::move(click_name_);
             click_name_ = hover >= 0 ? L.at(static_cast<std::size_t>(hover)).name : std::string{};
+            slow_rename_armed_ = false;
+            slow_rename_name_.clear();
             env_.right_active = right_;
-            if (hover >= 0) {
+            // in Details view, dragging on an unselected row's right columns (Date / Type / Size) starts a marquee
+            // instead of an OS drag; a plain click there still selects the row on release
+            const Columns cols = layout_columns(widths_, body_w);
+            const bool details_blank_col = !g.grid && hover >= 0 && mp.x >= origin.x + cols.mod_x &&
+                                           !L.selected(static_cast<std::size_t>(hover)) && !ui.ctrl_down() && !ui.shift_down();
+            if (hover >= 0 && !details_blank_col) {
                 const auto row = static_cast<std::size_t>(hover);
-                if (ui.ctrl_down()) {
+                const bool was_sole_selected = L.selected(row) && L.selected_count() == 1;
+                if (ui.shift_down()) {
+                    const std::size_t anchor = L.anchor() == model::Listing::npos ? row : L.anchor();
+                    L.select_range(anchor, row, ui.ctrl_down());
+                    L.set_focus(row, false);
+                } else if (ui.ctrl_down()) {
                     L.toggle(row);
                     L.set_focus(row, true);
-                } else if (ui.shift_down()) {
-                    const std::size_t anchor = L.anchor() == model::Listing::npos ? row : L.anchor();
-                    L.select_range(anchor, row, false);
-                    L.set_focus(row, false);
                 } else if (L.selected(row) && L.selected_count() > 1) {
-                    collapse_row_ = hover; // maybe a drag of the whole selection: decided on release
+                    collapse_name_ = L.at(row).name; // maybe a drag of the whole selection: decided on release
                     L.set_focus(row, true);
                 } else {
                     L.select_only(row);
                     L.set_focus(row, true);
+                    // slow second click on an already-selected single item arms inline rename (like Explorer)
+                    if (was_sole_selected && click_name_ == prev_click_ && elapsed >= 450 && elapsed <= 3000) {
+                        slow_rename_armed_ = true;
+                        slow_rename_name_  = click_name_;
+                    }
                 }
                 drag_armed_  = !ui.ctrl_down() && !ui.shift_down();
                 drag_origin_ = mp;
             } else {
                 if (!ui.ctrl_down()) { L.clear_selection(); }
+                band_click_name_ = details_blank_col ? L.at(static_cast<std::size_t>(hover)).name : std::string{};
                 band_armed_  = true;
                 band_active_ = false;
                 band_anchor_ = mp - origin;
@@ -1239,7 +1561,11 @@ void FileList::frame(Painter& p, const rect& area, model::Tab& tab, const FrameI
             }
         }
         if (dbl && hover >= 0 && !ui.ctrl_down() && !ui.shift_down() && L.at(static_cast<std::size_t>(hover)).name == prev_click_) {
-            collapse_row_ = -1;
+            collapse_name_.clear();
+            slow_rename_armed_ = false;
+            slow_rename_name_.clear();
+            band_click_name_.clear();
+            band_armed_ = band_active_ = false;
             drag_armed_   = false;
             open_row(tab, static_cast<std::size_t>(hover));
         }
@@ -1261,13 +1587,21 @@ void FileList::frame(Painter& p, const rect& area, model::Tab& tab, const FrameI
     if (drag_armed_) {
         if (!ui.mouse_down(mouse_button::left)) {
             drag_armed_ = false;
-            if (collapse_row_ >= 0 && static_cast<std::size_t>(collapse_row_) < L.rows()) { L.select_only(static_cast<std::size_t>(collapse_row_)); }
-            collapse_row_ = -1;
+            if (!collapse_name_.empty()) {
+                if (const auto r = L.find_name(collapse_name_)) { L.select_only(*r); }
+                collapse_name_.clear();
+            } else if (slow_rename_armed_ && !slow_rename_name_.empty()) {
+                if (const auto r = L.find_name(slow_rename_name_)) { begin_rename(ui, tab, *r); }
+            }
+            slow_rename_armed_ = false;
+            slow_rename_name_.clear();
         } else {
             const vec2 d = ui.mouse_pos() - drag_origin_;
             if (d.x * d.x + d.y * d.y > 36.0f && L.selected_count() > 0) {
-                drag_armed_   = false;
-                collapse_row_ = -1;
+                drag_armed_ = false;
+                collapse_name_.clear();
+                slow_rename_armed_ = false;
+                slow_rename_name_.clear();
                 env_.cmd.begin_drag(selected_paths(tab));
             }
         }

@@ -2,7 +2,13 @@
 
 #include "core/text.hpp"
 
+#ifdef _WIN32
 #include <windows.h>
+#else
+#include <dirent.h>
+#include <fstream>
+#include <sys/stat.h>
+#endif
 
 #include <algorithm>
 #include <memory>
@@ -35,6 +41,7 @@ std::vector<std::unique_ptr<Catalog>> g_retired;
 std::string read_file(const std::string& path)
 {
     std::string out;
+#ifdef _WIN32
     const HANDLE h = ::CreateFileW(core::text::widen(path).c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h == INVALID_HANDLE_VALUE) { return out; }
     LARGE_INTEGER size{};
@@ -45,6 +52,15 @@ std::string read_file(const std::string& path)
         out.resize(got);
     }
     ::CloseHandle(h);
+#else
+    struct stat st{};
+    if (::stat(path.c_str(), &st) != 0 || st.st_size <= 0 || st.st_size >= (16 << 20)) { return out; }
+    std::ifstream in(path, std::ios::binary);
+    if (!in) { return out; }
+    out.resize(static_cast<std::size_t>(st.st_size));
+    in.read(out.data(), static_cast<std::streamsize>(out.size()));
+    out.resize(static_cast<std::size_t>(in.gcount()));
+#endif
     if (out.starts_with("\xEF\xBB\xBF")) { out.erase(0, 3); }
     return out;
 }
@@ -206,6 +222,7 @@ void scan(std::span<const std::string> dirs)
 {
     g_languages.assign(1, LanguageInfo{"en", "English", {}});
     for (const std::string& dir : dirs) {
+#ifdef _WIN32
         WIN32_FIND_DATAW fd{};
         const HANDLE h = ::FindFirstFileW(core::text::widen(dir + "\\*.lang").c_str(), &fd);
         if (h == INVALID_HANDLE_VALUE) { continue; }
@@ -222,6 +239,25 @@ void scan(std::span<const std::string> dirs)
             else { g_languages.push_back({code, name, path}); }
         } while (::FindNextFileW(h, &fd));
         ::FindClose(h);
+#else
+        DIR* d = ::opendir(dir.c_str());
+        if (d == nullptr) { continue; }
+        while (const dirent* ent = ::readdir(d)) {
+            const std::string file = ent->d_name;
+            if (file.size() <= 5 || !file.ends_with(".lang")) { continue; }
+            std::string code = core::text::lower_ascii(file.substr(0, file.size() - 5));
+            if (code.empty() || code == "en" || code == "template") { continue; }
+            const std::string path = dir + "/" + file;
+            struct stat st{};
+            if (::stat(path.c_str(), &st) != 0 || S_ISDIR(st.st_mode)) { continue; }
+            std::string name = file_name_of(read_file(path));
+            if (name.empty()) { name = code; }
+            const auto it = std::ranges::find(g_languages, code, &LanguageInfo::code);
+            if (it != g_languages.end()) { it->name = name; it->path = path; }
+            else { g_languages.push_back({code, name, path}); }
+        }
+        ::closedir(d);
+#endif
     }
     std::sort(g_languages.begin() + 1, g_languages.end(), [](const LanguageInfo& a, const LanguageInfo& b) { return a.name < b.name; });
 }

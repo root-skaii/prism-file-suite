@@ -31,6 +31,7 @@ public:
 private:
     [[nodiscard]] bool icon_button(Painter& p, std::string_view id, char32_t glyph, bool enabled, bool on, std::string_view tip, float size);
     void address(Painter& p, float x, float y, float width, float height);
+    void history_menu(Painter& p, model::Tab& tab); // right-click on Back / Forward: jump several steps at once
     void crumb_menu(Painter& p); // the folders next to a breadcrumb segment (the chevron's dropdown)
     void crumb_context_menu(Painter& p); // right click on a path segment: the folder's own menu
     static void field_background(Painter& p, const strata::rect& r, bool invalid = false);
@@ -60,6 +61,17 @@ private:
     };
     std::shared_ptr<PathCheck> check_;
     std::string  check_target_;
+    // async address-bar path autocomplete (Tab / Down / click to complete without blocking the ui)
+    struct AcLoad {
+        std::atomic<bool>        done{false};
+        std::string              dir;
+        std::vector<std::string> dirs;
+    };
+    std::shared_ptr<AcLoad>  ac_load_;
+    std::string              ac_dir_;
+    std::vector<std::string> ac_dirs_;
+    int                      ac_sel_{-1};
+    bool                     hist_forward_{}; // which history list ##hist_menu shows (false = back, true = forward)
     std::string  filter_text_;
     std::string  crumb_parent_, crumb_next_; // the dropdown's folder and the segment the path continues with
     struct CrumbRect { strata::rect rect; std::string path; };
@@ -67,7 +79,13 @@ private:
     std::optional<strata::vec2> drop_;
     std::string  crumb_ctx_path_;   // the folder the right click menu is about
     bool         crumb_ctx_paste_{}; // the clipboard held files when it opened (looked at once, not every frame)
-    std::vector<std::string> crumb_dirs_;
+    struct CrumbLoad {
+        std::atomic<bool>        done{false};
+        std::vector<std::string> dirs;
+    };
+    std::shared_ptr<CrumbLoad> crumb_load_;
+    std::vector<std::string>   crumb_dirs_;
+    bool                       crumb_loading_{};
     const void*  last_tab_{};
     std::uint32_t last_generation_{};
 };

@@ -14,6 +14,10 @@ namespace prism::platform {
 
 class Gpu {
 public:
+    // opaque handle to a D3D11 device + immediate context that multiple windows on the ui thread can share
+    // (avoids repeating the ~180 ms D3D11CreateDevice call for every new window or Properties window)
+    struct SharedDevice;
+
     Gpu();
     ~Gpu();
     Gpu(const Gpu&)            = delete;
@@ -24,6 +28,9 @@ public:
     // the same in three steps, in this order: the device needs neither window nor context (the driver load is ~180 ms, so
     // it can run on its own thread from the very start), the swap chain needs the window, the renderer the fonts
     [[nodiscard]] bool create_device();
+    // reuses an existing healthy device from another window; false if null or lost (caller falls back to create_device)
+    [[nodiscard]] bool use_shared_device(const std::shared_ptr<SharedDevice>& shared);
+    [[nodiscard]] std::shared_ptr<SharedDevice> shared_device() const;
     [[nodiscard]] bool create_swap_chain(void* hwnd);
     [[nodiscard]] bool create_renderer(strata::context& ui);
 

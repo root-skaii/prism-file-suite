@@ -12,12 +12,14 @@
 
 namespace prism::platform {
 
+enum class DropAction { copy, move, link };
+
 struct DropCallbacks {
     // the folder a drop at this logical point would land in; "" = nowhere
-    std::function<std::string(strata::vec2)>                                       resolve;
+    std::function<std::string(strata::vec2)>                                             resolve;
     // the pointer while a drag is over the window (nullopt when it leaves or ends)
-    std::function<void(std::optional<strata::vec2>)>                               hover;
-    std::function<void(std::vector<std::string>, std::string dest, bool move)>     dropped;
+    std::function<void(std::optional<strata::vec2>)>                                     hover;
+    std::function<void(std::vector<std::string>, std::string dest, DropAction action)>   dropped;
     // true when this destination only records the paths (a pin): the pointer shows "link" and nothing is moved
     std::function<bool(const std::string&)>                                        link;
     // files offered without a path (remote files from MobaXterm ...) that could not be received: how many

@@ -17,9 +17,12 @@ struct Settings {
     unsigned accent{0x6d8cff};  // 0xRRGGBB, any colour
     bool  show_hidden{false};
     bool  confirm_delete{false}; // ask before moving to the recycle bin (deleting for good always asks)
+    bool  rename_select_stem{true}; // F2 / rename selects only the filename without its extension; off: selects full name
     bool  restore_tabs{true};
+    bool  window_outline{true}; // a soft accent outline on the active window, a quiet one on the others
     bool  background{true};      // PrismFS keeps running after the last window closes, with a notification-area icon (open / settings / exit); off: the last window quits it
     bool  drop_on_programs{true}; // dropping files on a program (or script, shortcut) in the list runs it with them, like Explorer
+    bool  properties_window{false}; // experimental: Properties opens in a window of its own instead of a dialog over the file list
     bool  detached_menus{false}; // experimental: menus may reach past the window edge (drawn in a window of their own)
     bool  shell_menu{true};     // the right-click menu also lists Explorer's own entries (Open with Code, 7-Zip, New ...)
     bool  browse_archives{true}; // Enter on a zip / 7z / tar opens it as a folder (a temporary unpacked copy) instead of the default app
@@ -45,8 +48,15 @@ struct Settings {
     int   group_by{0};          // model::GroupBy: titled groups in the details view
     int   ui_scale{100};        // percent on top of the monitor's dpi
     float sidebar_width{0.0f};  // 0: the theme's default
+    float preview_width{0.0f};  // 0: default (26% of window)
+    float grid_size{132.0f};    // thumbnail tile width in Grid view (Ctrl+Wheel)
+    float col_mod_w{170.0f};    // Details view column widths
+    float col_type_w{150.0f};
+    float col_size_w{100.0f};
     int   window_w{0};          // logical client size of the last session (0: default)
     int   window_h{0};
+    int   props_w{0};           // the same for the Properties window (Settings::properties_window); 0: default
+    int   props_h{0};
     std::vector<std::string> tabs;
     int   active_tab{0};
 

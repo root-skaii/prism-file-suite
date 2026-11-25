@@ -1,13 +1,11 @@
 #include "ui/status_bar.hpp"
-#include "ui/tr.hpp"
 
-#include "core/path.hpp"
-#include "ui/tr.hpp"
 #include "core/git_status.hpp"
-#include "ui/tr.hpp"
+#include "core/path.hpp"
 #include "ui/panel.hpp"
 #include "ui/tr.hpp"
 
+#include <algorithm>
 #include <format>
 
 namespace prism::ui {
@@ -24,6 +22,59 @@ void StatusBar::frame(Painter& p, const rect& area)
     PanelScope panel{ui, "##status", area};
     p.dl().rect_filled(area, pal.window);
     const item_result hit = ui.custom_item("##status_hit", area.size());
+
+    // the file card ends 2 px above this bar and the window has a border at the bottom: the line is centred between them
+    const rect line{{area.min.x, area.min.y - 2.0f}, {area.max.x, area.max.y - 2.0f}};
+
+    // compact view-mode toggle icons (Details / Thumbnails) anchored on the far right
+    const float icon_btn = std::min(22.0f, line.height() - 2.0f);
+    const float btn_y    = line.center().y - icon_btn * 0.5f;
+    float right_edge     = area.max.x - 10.0f;
+    const auto view_btn  = [&](char32_t g, bool on, std::string_view tip) {
+        const rect r{{right_edge - icon_btn, btn_y}, {right_edge, btn_y + icon_btn}};
+        const bool over = hit.hovered && r.contains(ui.mouse_pos());
+        if (on) { p.dl().rect_filled(r, pal.accent.scaled_alpha(0.18f), 5.0f); }
+        else if (over) { p.dl().rect_filled(r, pal.hover, 5.0f); }
+        p.glyph_center(r, g, on ? pal.accent : (over ? pal.text : pal.text_faint), env_.fonts.tile);
+        if (over) {
+            env_.cmd.set_cursor(cursor_kind::hand);
+            ui.tooltip(tip);
+        }
+        right_edge -= icon_btn + 2.0f;
+        return over && ui.mouse_released(mouse_button::left);
+    };
+    const bool grid = env_.settings.grid_view;
+    if (view_btn(glyph::grid, grid, tr("Thumbnails")) && !grid) { env_.cmd.toggle_view(); }
+    if (view_btn(glyph::list, !grid, tr("Details")) && grid)    { env_.cmd.toggle_view(); }
+    right_edge -= 8.0f;
+
+    // right-side status (search cancel button, loading indicator, or Git branch summary) — measured so left text never overlaps
+    if (tab.searching()) {
+        const std::string_view label = tab.loading() ? tr("Cancel search") : tr("Back to folder");
+        const float w     = p.measure(env_.fonts.small, label).x + 20.0f;
+        const rect  btn{{right_edge - w, line.min.y + 3.0f}, {right_edge, line.max.y - 3.0f}};
+        const bool  over = hit.hovered && btn.contains(ui.mouse_pos());
+        if (over) { p.dl().rect_filled(btn, pal.hover, 6.0f); env_.cmd.set_cursor(cursor_kind::hand); }
+        p.text_center(btn, label, over ? pal.text : pal.accent, env_.fonts.small);
+        if (over && ui.mouse_released(mouse_button::left)) { tab.clear_search(); }
+        right_edge = btn.min.x - 10.0f;
+    } else if (tab.loading()) {
+        const std::string_view lbl = tr("Loading...");
+        const float w = p.measure(env_.fonts.small, lbl).x;
+        p.text_right(rect{line.min, {right_edge, line.max.y}}, lbl, pal.accent, env_.fonts.small, 0.0f);
+        right_edge -= w + 12.0f;
+    } else if (env_.settings.git_badges) {
+        if (const auto repo = env_.git.lookup(tab.path()); repo && !repo->branch.empty()) {
+            std::string g = "git " + repo->branch;
+            if (repo->ahead > 0) { g += std::format("  +{}", repo->ahead); }
+            if (repo->behind > 0) { g += std::format("  -{}", repo->behind); }
+            const std::size_t changed = repo->files.size() + repo->untracked_dirs.size();
+            g += changed == 0 ? "  " + std::string{tr("clean")} : trf("  {} changed", changed);
+            const float w = p.measure(env_.fonts.small, g).x;
+            p.text_right(rect{line.min, {right_edge, line.max.y}}, g, changed == 0 ? pal.text_dim : pal.warning, env_.fonts.small, 0.0f);
+            right_edge -= w + 14.0f;
+        }
+    }
 
     std::string left;
     color       left_col = pal.text_dim;
@@ -42,30 +93,7 @@ void StatusBar::frame(Painter& p, const rect& area)
         left += "   |   " + trf("{} selected", L.selected_count());
         if (L.selected_bytes() > 0) { left += "  " + core::path::format_size(L.selected_bytes()); }
     }
-    p.text_left(rect{area.min, {area.max.x - 160.0f, area.max.y}}, left, left_col, env_.fonts.small, 16.0f);
-
-    // a running search can be stopped, a finished one dismissed
-    if (tab.searching()) {
-        const std::string_view label = tab.loading() ? tr("Cancel search") : tr("Back to folder");
-        const float w     = p.measure(env_.fonts.small, label).x + 20.0f;
-        const rect  btn{{area.max.x - w - 12.0f, area.min.y + 3.0f}, {area.max.x - 12.0f, area.max.y - 3.0f}};
-        const bool  over = hit.hovered && btn.contains(ui.mouse_pos());
-        if (over) { p.dl().rect_filled(btn, pal.hover, 6.0f); env_.cmd.set_cursor(cursor_kind::hand); }
-        p.text_center(btn, label, over ? pal.text : pal.accent, env_.fonts.small);
-        if (over && ui.mouse_released(mouse_button::left)) { tab.clear_search(); }
-    } else if (tab.loading()) {
-        p.text_right(area, tr("Loading..."), pal.accent, env_.fonts.small, 16.0f);
-    } else if (env_.settings.git_badges) {
-        // the branch of the repository this folder is in, with how far it is from its upstream and how much is changed
-        if (const auto repo = env_.git.lookup(tab.path()); repo && !repo->branch.empty()) {
-            std::string g = "git " + repo->branch;
-            if (repo->ahead > 0) { g += std::format("  +{}", repo->ahead); }
-            if (repo->behind > 0) { g += std::format("  -{}", repo->behind); }
-            const std::size_t changed = repo->files.size() + repo->untracked_dirs.size();
-            g += changed == 0 ? "  " + std::string{tr("clean")} : trf("  {} changed", changed);
-            p.text_right(area, g, changed == 0 ? pal.text_dim : pal.warning, env_.fonts.small, 16.0f);
-        }
-    }
+    p.text_left(rect{line.min, {std::max(line.min.x + 80.0f, right_edge), line.max.y}}, left, left_col, env_.fonts.small, 16.0f);
 }
 
 } // namespace prism::ui

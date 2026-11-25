@@ -2,13 +2,19 @@
 
 #include "core/text.hpp"
 
+#ifdef _WIN32
 #include <windows.h>
 #include <shellapi.h>
+#else
+#include <cstdlib>
+#endif
 
 #include <atomic>
 #include <thread>
 
 namespace prism::core::terminal {
+
+#ifdef _WIN32
 
 namespace {
 
@@ -175,5 +181,24 @@ std::optional<Shell> from_program(std::wstring_view name)
     if (name == L"bash") { return Shell::bash; }
     return std::nullopt;
 }
+#else
+bool open(const Request& req)
+{
+    const std::string dir = req.folder.empty() ? std::string{"$HOME"} : req.folder;
+    const std::string cmd = "cd \"" + dir + "\" && (x-terminal-emulator || gnome-terminal || konsole || xterm) >/dev/null 2>&1 &";
+    return std::system(cmd.c_str()) == 0;
+}
+std::vector<Shell> installed() { return {Shell::default_terminal, Shell::bash}; }
+std::string_view label(Shell shell)
+{
+    switch (shell) {
+    case Shell::default_terminal: return "Terminal";
+    case Shell::bash:             return "Bash";
+    default:                      return "Shell";
+    }
+}
+std::optional<Shell> from_program(std::wstring_view name) { return name == L"bash" ? std::optional{Shell::bash} : std::nullopt; }
+std::wstring wt_arguments(std::wstring_view, std::wstring_view, std::wstring_view) { return {}; }
+#endif
 
 } // namespace prism::core::terminal

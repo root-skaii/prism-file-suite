@@ -18,12 +18,25 @@
         { "name": "debug",   "displayName": "Debug (clang-cl + lld-link)",   "inherits": "base", "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" } },
         { "name": "release", "displayName": "Release (clang-cl + lld-link, ThinLTO)", "inherits": "base", "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" } },
         { "name": "dev",     "displayName": "Release, no LTO (fast iteration)", "inherits": "base", "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "PRISM_LTO": "OFF" } },
-        { "name": "relwithdebinfo", "displayName": "RelWithDebInfo (clang-cl + lld-link)", "inherits": "base", "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" } }
+        { "name": "relwithdebinfo", "displayName": "RelWithDebInfo (clang-cl + lld-link)", "inherits": "base", "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" } },
+        {
+            "name": "linux-base",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Linux" }
+        },
+        { "name": "linux-debug",   "displayName": "Linux Debug",   "inherits": "linux-base", "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" } },
+        { "name": "linux-release", "displayName": "Linux Release", "inherits": "linux-base", "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" } },
+        { "name": "linux-dev",     "displayName": "Linux Release (no LTO)", "inherits": "linux-base", "cacheVariables": { "CMAKE_BUILD_TYPE": "Release", "PRISM_LTO": "OFF" } }
     ],
     "buildPresets": [
         { "name": "debug",   "configurePreset": "debug" },
         { "name": "release", "configurePreset": "release" },
         { "name": "dev",     "configurePreset": "dev" },
-        { "name": "relwithdebinfo", "configurePreset": "relwithdebinfo" }
+        { "name": "relwithdebinfo", "configurePreset": "relwithdebinfo" },
+        { "name": "linux-debug",   "configurePreset": "linux-debug" },
+        { "name": "linux-release", "configurePreset": "linux-release" },
+        { "name": "linux-dev",     "configurePreset": "linux-dev" }
     ]
 }

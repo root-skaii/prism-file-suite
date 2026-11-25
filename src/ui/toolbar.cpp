@@ -1,18 +1,12 @@
 #include "ui/toolbar.hpp"
-#include "ui/tr.hpp"
 
 #include "core/path.hpp"
-#include "ui/tr.hpp"
 #include "core/recycle.hpp"
-#include "core/text.hpp"
-#include "ui/tr.hpp"
 #include "core/shell_menu.hpp"
-#include "ui/tr.hpp"
 #include "core/shell_ops.hpp"
-#include "ui/tr.hpp"
+#include "core/text.hpp"
 #include "ui/menu_parts.hpp"
 #include "ui/new_menu.hpp"
-#include "ui/tr.hpp"
 #include "ui/panel.hpp"
 #include "ui/tr.hpp"
 
@@ -226,18 +220,115 @@ void Toolbar::address(Painter& p, float area_x, float area_y, float width, float
     }
 
     if (editing_) {
+        // poll finished autocomplete directory listing
+        if (ac_load_ && ac_load_->done.load(std::memory_order_acquire)) {
+            if (ac_load_->dir == ac_dir_) { ac_dirs_ = std::move(ac_load_->dirs); }
+            ac_load_.reset();
+        }
         // the field is a strata widget: sized to the row by its padding
-        if (edit_age_ < 3) { ui.request_text_focus("##address"); } // (only at the start: asking every frame steals the focus back from whatever you click next)
-        field_background(p, rect::from_size({area_x, area_y}, {width, height}));
+        if (edit_age_ < 3) { ui.request_text_focus("##address"); }
+        const rect field_box = rect::from_size({area_x, area_y}, {width, height});
+        field_background(p, field_box);
         ui.set_next_item_width(width);
         ui.push_var(style_var::frame_padding_y, (height - p.line_height(f.body)) * 0.5f);
         ui.push_color(style_color::widget_bg, color{0, 0, 0, 0});
-        (void)ui.input_text("##address", edit_text_, tr("Type a path"));
+        const bool text_changed = ui.input_text("##address", edit_text_, tr("Type a path, %ENV%, shell:... or a command"));
         ui.pop_color();
         ui.pop_var();
         ++edit_age_;
+
+        // split typed path into parent folder + partial child prefix for async autocomplete
+        std::string ac_parent, ac_prefix;
+        {
+            const std::size_t sep = edit_text_.find_last_of("\\/");
+            if (sep != std::string::npos) {
+                ac_parent = core::path::normalize(std::string_view{edit_text_}.substr(0, sep + 1));
+                ac_prefix = edit_text_.substr(sep + 1);
+            }
+        }
+        if (ac_parent != ac_dir_) {
+            ac_dir_ = ac_parent;
+            ac_dirs_.clear();
+            ac_sel_ = -1;
+            if (!ac_dir_.empty() && ((ac_dir_.size() >= 2 && ac_dir_[1] == ':') || ac_dir_.starts_with("\\\\"))) {
+                auto job = std::make_shared<AcLoad>();
+                job->dir = ac_dir_;
+                ac_load_ = job;
+                std::thread{[job, wake = env_.window.waker()] {
+                    job->dirs = core::path::subfolders(job->dir, 200);
+                    job->done.store(true, std::memory_order_release);
+                    if (wake) { wake(); }
+                }}.detach();
+            }
+        }
+        if (text_changed) { ac_sel_ = -1; }
+
+        std::vector<std::string> matches;
+        if (!ac_dirs_.empty()) {
+            for (const std::string& d : ac_dirs_) {
+                if (ac_prefix.empty() || core::text::starts_with_icase(d, ac_prefix)) {
+                    matches.push_back(d);
+                    if (matches.size() >= 8) { break; }
+                }
+            }
+        }
+
+        // Tab completes the selected (or first) match; Down / Up cycles through matches
+        if (!matches.empty()) {
+            if (ui.key_pressed(key::down)) { ac_sel_ = (ac_sel_ + 1) % static_cast<int>(matches.size()); }
+            if (ui.key_pressed(key::up))   { ac_sel_ = ac_sel_ <= 0 ? static_cast<int>(matches.size()) - 1 : ac_sel_ - 1; }
+            if (ui.key_pressed(key::tab)) {
+                const int pick = ac_sel_ >= 0 ? ac_sel_ : 0;
+                edit_text_ = core::path::join(ac_dir_, matches[static_cast<std::size_t>(pick)]) + "\\";
+                ac_sel_    = -1;
+                ui.request_text_focus("##address", edit_text_.size(), edit_text_.size());
+            }
+        }
+
+        // sleek floating autocomplete dropdown beneath the address bar
+        bool over_ac = false;
+        if (!matches.empty()) {
+            const float row_h = 28.0f;
+            const float drop_h = static_cast<float>(matches.size()) * row_h + 8.0f;
+            const rect  drop{{field_box.min.x, field_box.max.y + 4.0f}, {field_box.max.x, field_box.max.y + 4.0f + drop_h}};
+            const vec2  mp = ui.mouse_pos();
+            over_ac = drop.contains(mp);
+            auto fg = ui.layer(layer::foreground);
+            p.dl().rect_filled(drop.expanded(2.0f), color{0, 0, 0, 75}, 10.0f);
+            shape_style ds;
+            ds.radius       = radii(8.0f);
+            ds.fill_top     = ds.fill_bottom = pal.raised;
+            ds.border       = pal.border;
+            ds.border_width = 1.0f;
+            p.dl().shape(drop, ds);
+            for (std::size_t i = 0; i < matches.size(); ++i) {
+                const rect rr{{drop.min.x + 4.0f, drop.min.y + 4.0f + static_cast<float>(i) * row_h},
+                              {drop.max.x - 4.0f, drop.min.y + 4.0f + static_cast<float>(i + 1) * row_h}};
+                const bool hot = rr.contains(mp);
+                const bool sel = static_cast<int>(i) == ac_sel_;
+                if (hot || sel) {
+                    p.dl().rect_filled(rr, sel ? pal.accent.scaled_alpha(0.22f) : pal.hover, 6.0f);
+                    if (hot) { env_.cmd.set_cursor(cursor_kind::hand); }
+                }
+                p.glyph_center(rect{{rr.min.x + 6.0f, rr.min.y}, {rr.min.x + 24.0f, rr.max.y}}, glyph::folder, pal.accent, f.tile);
+                p.text_left(rect{{rr.min.x + 28.0f, rr.min.y}, {rr.max.x - 8.0f, rr.max.y}}, matches[i], pal.text, f.body);
+                if (hot && ui.mouse_clicked(mouse_button::left)) {
+                    const std::string chosen = core::path::join(ac_dir_, matches[i]);
+                    tab.navigate(chosen);
+                    editing_ = false;
+                    check_.reset();
+                    return;
+                }
+            }
+        }
+
         if (ui.key_pressed(key::enter) && check_ == nullptr) {
-            check_target_ = core::path::normalize(edit_text_);
+            if (ac_sel_ >= 0 && ac_sel_ < static_cast<int>(matches.size())) {
+                tab.navigate(core::path::join(ac_dir_, matches[static_cast<std::size_t>(ac_sel_)]));
+                editing_ = false;
+                return;
+            }
+            check_target_ = core::path::resolve_input(edit_text_);
             check_        = std::make_shared<PathCheck>();
             std::thread{[state = check_, target = check_target_, wake = env_.window.waker()] {
                 state->state.store(static_cast<int>(core::path::kind(target)));
@@ -264,8 +355,9 @@ void Toolbar::address(Painter& p, float area_x, float area_y, float width, float
             } else {
                 env_.cmd.toast(trf("Not a folder: {}", edit_text_), toast_kind::error);
             }
-        } else if (ui.key_pressed(key::escape) || (edit_age_ >= 3 && !ui.field_focused("##address"))) {
+        } else if (ui.key_pressed(key::escape) || (edit_age_ >= 3 && !ui.field_focused("##address") && !over_ac)) {
             editing_ = false;
+            check_.reset();
         }
         return;
     }
@@ -359,9 +451,17 @@ void Toolbar::address(Painter& p, float area_x, float area_y, float width, float
                 p.dl().rect_filled(cc, r.held ? pal.pressed : pal.hover, 6.0f);
                 env_.cmd.set_cursor(cursor_kind::hand);
                 if (ui.mouse_clicked(mouse_button::left)) {
-                    crumb_parent_ = segs[i].path;
-                    crumb_next_   = segs[i + 1].name;
-                    crumb_dirs_   = core::path::subfolders(crumb_parent_, 400);
+                    crumb_parent_  = segs[i].path;
+                    crumb_next_    = segs[i + 1].name;
+                    crumb_dirs_.clear();
+                    crumb_loading_ = true;
+                    auto job = std::make_shared<CrumbLoad>();
+                    crumb_load_ = job;
+                    std::thread{[job, dir = crumb_parent_, wake = env_.window.waker()] {
+                        job->dirs = core::path::subfolders(dir, 400);
+                        job->done.store(true, std::memory_order_release);
+                        if (wake) { wake(); }
+                    }}.detach();
                     ui.open_popup_menu("##crumb_menu", {cc.min.x, box.max.y + 4.0f});
                 }
             }
@@ -408,7 +508,7 @@ void Toolbar::crumb_context_menu(Painter& p)
             tab.refresh();
         }
     }
-    const bool is_root = dir.size() <= 3; // "C:\"
+    const bool is_root = core::path::is_root(dir); // drive roots ("C:\") and UNC share roots ("\\server\share")
     if (!is_root && ui.menu_item(tr("Cut"), env_.binds.text("cut"))) { (void)core::clipboard_set_files({dir}, true); }
     if (ui.menu_item(tr("Copy"), env_.binds.text("copy"))) { (void)core::clipboard_set_files({dir}, false); }
     menus::paste_into(ui, env_, dir, crumb_ctx_paste_);
@@ -424,14 +524,49 @@ void Toolbar::crumb_context_menu(Painter& p)
     menus::windows_items(ui, env_, {dir});
 }
 
+void Toolbar::history_menu(Painter& p, model::Tab& tab)
+{
+    context& ui = p.ui();
+    const MenuDensity density{ui, env_.settings.compact};
+    auto menu = ui.popup_menu("##hist_menu");
+    if (!menu) { return; }
+    const auto list = hist_forward_ ? tab.forward_history() : tab.back_history();
+    if (list.empty()) { return; }
+    char icon[5];
+    const std::size_t cap = std::min<std::size_t>(list.size(), 16);
+    for (std::size_t i = 0; i < cap; ++i) {
+        const auto& [idx, path] = list[i];
+        std::string label = path == core::recycle::all ? std::string{tr("Recycle Bin")} : core::path::leaf(path);
+        if (label.empty()) { label = path; }
+        for (std::size_t k = 0; (k = label.find('&', k)) != std::string::npos; k += 2) { label.insert(k, 1, '&'); }
+        menu_item_options o;
+        o.icon      = glyph_utf8(glyph::folder, icon);
+        o.icon_font = env_.fonts.icons;
+        if (ui.menu_item(label + "##h" + std::to_string(idx), o)) { (void)tab.jump_history(idx); }
+    }
+}
+
 void Toolbar::crumb_menu(Painter& p)
 {
+    if (crumb_load_ && crumb_load_->done.load(std::memory_order_acquire)) {
+        crumb_dirs_    = std::move(crumb_load_->dirs);
+        crumb_load_.reset();
+        crumb_loading_ = false;
+    }
     context& ui = p.ui();
     const MenuDensity density{ui, env_.settings.compact};
     auto menu = ui.popup_menu("##crumb_menu");
     if (!menu) { return; }
+    if (crumb_loading_) {
+        menu_item_options o;
+        o.enabled = false;
+        (void)ui.menu_item(tr("Loading ..."), o);
+        return;
+    }
     if (crumb_dirs_.empty()) {
-        (void)ui.menu_item(tr("No subfolders"), menu_item_options{.enabled = false});
+        menu_item_options o;
+        o.enabled = false;
+        (void)ui.menu_item(tr("No subfolders"), o);
         return;
     }
     char icon[5];
@@ -460,13 +595,14 @@ void Toolbar::frame(Painter& p, const rect& area, bool show_hidden)
         last_generation_ = tab.generation;
         filter_text_     = tab.searching() ? tab.search_query() : tab.listing().query().text();
         editing_         = false;
+        check_.reset();
     }
 
     PanelScope panel{ui, "##toolbar", area};
     p.dl().rect_filled(area, pal.title_bar);
 
-    const float rh  = m.toolbar - 12.0f;
     const float gap = m.gap;
+    const float rh  = m.toolbar - 2.0f * gap;
     const float chip_w   = 26.0f;
     const float half     = rh * 0.85f + 6.0f; // two icon buttons: This folder / Subfolders (tooltips say which)
     const float scope_w  = half * 2.0f + 6.0f;
@@ -475,13 +611,24 @@ void Toolbar::frame(Painter& p, const rect& area, bool show_hidden)
     const float left_w   = 12.0f + rh * 4.0f + 6.0f + gap * 2.0f;
     const float addr_w   = std::max(120.0f, area.width() - left_w - right_w - 10.0f);
 
-    (void)ui.custom_item("##tb_vpad", {1.0f, 6.0f});
+    (void)ui.custom_item("##tb_vpad", {1.0f, gap});
     (void)ui.custom_item("##tb_lpad", {12.0f, rh});
     ui.same_line();
     const auto sp = [&](const char* id) { ui.same_line(); (void)ui.custom_item(id, {2.0f, rh}); ui.same_line(); };
-    if (icon_button(p, "##nav_back", glyph::back, tab.can_back(), false, "Back  (Alt+Left)", rh)) { (void)tab.back(); }
+    if (icon_button(p, "##nav_back", glyph::back, tab.can_back(), false, tr("Back  (Alt+Left, right-click for history)"), rh)) { (void)tab.back(); }
+    if (tab.can_back() && ui.item_rect().contains(ui.mouse_pos()) && ui.mouse_clicked(mouse_button::right)) {
+        hist_forward_ = false;
+        const rect b = ui.item_rect();
+        ui.open_popup_menu("##hist_menu", {b.min.x, b.max.y + 4.0f});
+    }
     sp("##sp1");
-    if (icon_button(p, "##nav_fwd", glyph::forward, tab.can_forward(), false, "Forward  (Alt+Right)", rh)) { (void)tab.forward(); }
+    if (icon_button(p, "##nav_fwd", glyph::forward, tab.can_forward(), false, tr("Forward  (Alt+Right, right-click for history)"), rh)) { (void)tab.forward(); }
+    if (tab.can_forward() && ui.item_rect().contains(ui.mouse_pos()) && ui.mouse_clicked(mouse_button::right)) {
+        hist_forward_ = true;
+        const rect b = ui.item_rect();
+        ui.open_popup_menu("##hist_menu", {b.min.x, b.max.y + 4.0f});
+    }
+    history_menu(p, tab);
     sp("##sp2");
     if (icon_button(p, "##nav_up", glyph::up, tab.can_up(), false, "Up  (Alt+Up)", rh)) { env_.cmd.go_up(tab); }
     sp("##sp3");
@@ -490,7 +637,7 @@ void Toolbar::frame(Painter& p, const rect& area, bool show_hidden)
     (void)ui.custom_item("##tb_gap1", {gap * 2.0f, rh});
     ui.same_line();
 
-    address(p, area.min.x + left_w, area.min.y + 6.0f, addr_w, rh);
+    address(p, area.min.x + left_w, area.min.y + gap, addr_w, rh);
     ui.same_line();
     (void)ui.custom_item("##tb_gap2", {gap, rh});
     ui.same_line();
@@ -508,7 +655,7 @@ void Toolbar::frame(Painter& p, const rect& area, bool show_hidden)
 
     const float filter_x = area.min.x + left_w + addr_w + gap + scope_w + gap;
     const bool  invalid  = !tab.listing().query().valid();
-    field_background(p, rect::from_size({filter_x, area.min.y + 6.0f}, {filter_w, rh}), invalid);
+    field_background(p, rect::from_size({filter_x, area.min.y + gap}, {filter_w, rh}), invalid);
     ui.set_next_item_width(filter_w - chip_w * 3.0f);
     ui.push_var(style_var::frame_padding_y, (rh - p.line_height(f.body)) * 0.5f);
     ui.push_color(style_color::widget_bg, color{0, 0, 0, 0});

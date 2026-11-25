@@ -4,7 +4,9 @@
 #include "core/recycle.hpp"
 #include "core/text.hpp"
 
+#ifdef _WIN32
 #include <windows.h>
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -12,20 +14,15 @@
 
 namespace prism::core {
 
+#ifdef _WIN32
+
 namespace {
 
 using Clock = std::chrono::steady_clock;
 
 [[nodiscard]] std::uint64_t pack(DWORD high, DWORD low) noexcept { return (static_cast<std::uint64_t>(high) << 32) | low; }
 
-// paths past MAX_PATH need the \\?\ form
-[[nodiscard]] std::wstring lp(const std::string& utf8)
-{
-    std::wstring w = text::widen(utf8);
-    if (w.size() < 248 || w.starts_with(L"\\\\?\\")) { return w; }
-    if (w.starts_with(L"\\\\")) { return L"\\\\?\\UNC\\" + w.substr(2); }
-    return L"\\\\?\\" + w;
-}
+[[nodiscard]] std::wstring lp(const std::string& utf8) { return path::long_wide(utf8); }
 
 [[nodiscard]] bool same_text(std::string_view a, std::string_view b)
 {
@@ -42,15 +39,15 @@ using Clock = std::chrono::steady_clock;
 
 [[nodiscard]] bool same_volume(const std::string& a, const std::string& b)
 {
-    wchar_t ra[MAX_PATH]{}, rb[MAX_PATH]{};
-    if (!::GetVolumePathNameW(lp(a).c_str(), ra, MAX_PATH) || !::GetVolumePathNameW(lp(b).c_str(), rb, MAX_PATH)) { return false; }
-    return ::_wcsicmp(ra, rb) == 0;
+    return path::same_volume(a, b);
 }
 
 struct Attr {
     bool          exists{};
     bool          dir{};
-    bool          reparse{};
+    bool          reparse{}; // symlink or junction (NOT cloud placeholders)
+    DWORD         raw_attrs{};
+    FILETIME      ft_created{}, ft_accessed{}, ft_modified{};
     std::uint64_t size{};
     std::uint64_t modified{};
 };
@@ -60,11 +57,15 @@ struct Attr {
     Attr a;
     WIN32_FILE_ATTRIBUTE_DATA d{};
     if (!::GetFileAttributesExW(lp(p).c_str(), GetFileExInfoStandard, &d)) { return a; }
-    a.exists   = true;
-    a.dir      = (d.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-    a.reparse  = (d.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
-    a.size     = a.dir ? 0 : pack(d.nFileSizeHigh, d.nFileSizeLow);
-    a.modified = pack(d.ftLastWriteTime.dwHighDateTime, d.ftLastWriteTime.dwLowDateTime);
+    a.exists      = true;
+    a.raw_attrs   = d.dwFileAttributes;
+    a.dir         = (d.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+    a.reparse     = (d.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 && path::is_reparse_link(p);
+    a.ft_created  = d.ftCreationTime;
+    a.ft_accessed = d.ftLastAccessTime;
+    a.ft_modified = d.ftLastWriteTime;
+    a.size        = a.dir ? 0 : pack(d.nFileSizeHigh, d.nFileSizeLow);
+    a.modified    = pack(d.ftLastWriteTime.dwHighDateTime, d.ftLastWriteTime.dwLowDateTime);
     return a;
 }
 
@@ -94,7 +95,7 @@ struct RecycledName {
         const std::string candidate = std::format("{} ({}){}", stem, i, ext);
         if (!attr_of(path::join(dir, candidate)).exists) { return candidate; }
     }
-    return name;
+    return std::format("{} ({}){}", stem, ::GetTickCount64(), ext);
 }
 
 // "name - Copy.ext", "name - Copy (2).ext": a copy next to its original
@@ -107,7 +108,7 @@ struct RecycledName {
         const std::string candidate = (i == 1 ? stem + " - Copy" : std::format("{} - Copy ({})", stem, i)) + ext;
         if (!attr_of(path::join(dir, candidate)).exists) { return candidate; }
     }
-    return name;
+    return std::format("{} - Copy ({}){}", stem, ::GetTickCount64(), ext);
 }
 
 struct Item {
@@ -138,7 +139,7 @@ std::vector<Child> list_children(const std::string& dir)
         Child c;
         c.name    = text::narrow(n);
         c.dir     = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-        c.reparse = (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+        c.reparse = (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 && path::is_link_reparse_tag(fd.dwReserved0);
         c.size    = c.dir ? 0 : pack(fd.nFileSizeHigh, fd.nFileSizeLow);
         out.push_back(std::move(c));
     } while (::FindNextFileW(h, &fd));
@@ -166,6 +167,7 @@ void clear_readonly(const std::string& p)
 
 // the state of the job being run: what the worker counts, shared with the progress callback
 struct TransferQueue::Run {
+    explicit Run(TransferQueue& owner) : q{owner} {}
     TransferQueue& q;
     std::uint64_t  bytes_done{}, bytes_total{};
     std::uint64_t  items_done{}, items_total{};
@@ -237,6 +239,7 @@ TransferQueue::~TransferQueue()
         std::lock_guard g{lock_};
         quit_   = true;
         cancel_ = true;
+        cancel_flag_ = TRUE;
     }
     cv_.notify_all();
     if (thread_.joinable()) { thread_.join(); }
@@ -284,6 +287,7 @@ void TransferQueue::cancel()
     {
         std::lock_guard g{lock_};
         cancel_ = true;
+        cancel_flag_ = TRUE;
         paused_ = false;
         for (const Job& j : queue_) { // (what never started reports itself as cancelled, so its toast and undo stay honest)
             OpResult r;
@@ -348,6 +352,7 @@ void TransferQueue::work()
             queue_.erase(queue_.begin());
             running_ = true;
             cancel_  = false;
+            cancel_flag_ = FALSE;
             paused_  = false;
             shown_   = {};
             shown_.kind     = job.kind;
@@ -463,10 +468,25 @@ void TransferQueue::work()
                         continue;
                     }
                     if (!da.exists && !::CreateDirectoryW(lp(it.dst).c_str(), nullptr)) {
+                        const DWORD err = ::GetLastError();
+                        if (err == ERROR_ACCESS_DENIED) { res.access_denied = true; }
                         ++failed; ++top_failed[it.top];
-                        if (first_error.empty()) { first_error = std::format("{}: {}", path::leaf(it.dst), win_error(::GetLastError())); }
+                        if (first_error.empty()) { first_error = std::format("{}: {}", path::leaf(it.dst), win_error(err)); }
                         skip_prefix.push_back(it.src);
                         continue;
+                    }
+                    // preserve folder timestamps and basic attributes (hidden / system / readonly)
+                    if (!da.exists) {
+                        const Attr sa = attr_of(it.src);
+                        if (sa.exists) {
+                            const DWORD keep = sa.raw_attrs & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM | FILE_ATTRIBUTE_READONLY);
+                            if (keep != 0) { ::SetFileAttributesW(lp(it.dst).c_str(), keep); }
+                            HANDLE dh = ::CreateFileW(lp(it.dst).c_str(), FILE_WRITE_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+                            if (dh != INVALID_HANDLE_VALUE) {
+                                ::SetFileTime(dh, &sa.ft_created, &sa.ft_accessed, &sa.ft_modified);
+                                ::CloseHandle(dh);
+                            }
+                        }
                     }
                     if (res.made[it.top].empty() && it.src == job.sources[it.top]) { res.made[it.top] = it.dst; }
                     continue;
@@ -521,8 +541,7 @@ void TransferQueue::work()
                     Callback cb{&run, &base, run.bytes_done};
                     DWORD flags = COPY_FILE_ALLOW_DECRYPTED_DESTINATION;
                     if (it.link) { flags |= COPY_FILE_COPY_SYMLINK; }
-                    BOOL cancel_flag = FALSE;
-                    ok = ::CopyFileExW(lp(it.src).c_str(), lp(dst).c_str(), copy_progress, &cb, &cancel_flag, flags) != FALSE;
+                    ok = ::CopyFileExW(lp(it.src).c_str(), lp(dst).c_str(), copy_progress, &cb, reinterpret_cast<LPBOOL>(&cancel_flag_), flags) != FALSE;
                     error = ok ? 0 : ::GetLastError();
                     if (ok) {
                         run.bytes_done = cb.before + it.size;
@@ -541,6 +560,7 @@ void TransferQueue::work()
                 if (ok) {
                     if (res.made[it.top].empty() && it.src == job.sources[it.top]) { res.made[it.top] = dst; }
                 } else {
+                    if (error == ERROR_ACCESS_DENIED) { res.access_denied = true; }
                     ++failed; ++top_failed[it.top];
                     if (first_error.empty()) { first_error = std::format("{}: {}", path::leaf(it.src), win_error(error)); }
                 }
@@ -578,5 +598,25 @@ void TransferQueue::work()
         if (wake_) { wake_(); }
     }
 }
+#else
+TransferQueue::~TransferQueue()
+{
+    {
+        std::lock_guard g{lock_};
+        quit_ = true;
+    }
+    cv_.notify_all();
+    if (thread_.joinable()) { thread_.join(); }
+}
+void TransferQueue::add(OpKind, std::vector<std::string>, std::string, bool) {}
+TransferProgress TransferQueue::progress() const { return {}; }
+bool TransferQueue::busy() const { return false; }
+void TransferQueue::set_paused(bool paused) { paused_ = paused; }
+void TransferQueue::cancel() { cancel_ = true; }
+std::optional<ConflictInfo> TransferQueue::conflict() const { return std::nullopt; }
+void TransferQueue::resolve(std::uint64_t, ConflictChoice, bool) {}
+bool TransferQueue::poll(OpResult&) { return false; }
+void TransferQueue::work() {}
+#endif
 
 } // namespace prism::core

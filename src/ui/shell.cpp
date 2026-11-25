@@ -1,22 +1,15 @@
 #include "ui/shell.hpp"
-#include "ui/tr.hpp"
 
 #include "core/links.hpp"
-#include "ui/tr.hpp"
 #include "core/path.hpp"
-#include "ui/tr.hpp"
 #include "core/places.hpp"
-#include "ui/tr.hpp"
 #include "core/recycle.hpp"
 #include "core/shell_ops.hpp"
 #include "core/terminal.hpp"
-#include "ui/menu_parts.hpp"
-#include "ui/tr.hpp"
 #include "core/text.hpp"
-#include "ui/tr.hpp"
-#include "ui/panel.hpp"
-#include "ui/tr.hpp"
 #include "strata/config.hpp"
+#include "ui/menu_parts.hpp"
+#include "ui/panel.hpp"
 #include "ui/tr.hpp"
 
 #include <windows.h>
@@ -30,15 +23,16 @@ namespace prism::ui {
 using namespace strata;
 
 Shell::Shell(platform::Window& window, Theme& theme, FontSet fonts, model::TabSet& tabs, core::FileOps& ops, Settings& settings,
-             platform::ImageCache& images, strata::keybinds& binds, model::UndoStack& history)
-    : sizes_{window.waker()}, git_{window.waker()}, archives_{window.waker()}, index_{window.waker()}, image_jobs_{window.waker()}, layout_{model::SidebarLayout::defaults()},
+             platform::ImageCache& images, strata::keybinds& binds, model::UndoStack& history,
+             core::FolderSizes& sizes, core::GitStatus& git, core::FileIndex& index, bool& index_started)
+    : sizes_{sizes}, git_{git}, archives_{window.waker()}, index_{index}, index_started_{index_started}, image_jobs_{window.waker()}, layout_{model::SidebarLayout::defaults()},
       env_{window, theme, fonts, tabs, *this, ops, settings, images, binds, history, layout_, visits_, sizes_, git_, tags_, views_},
       ops_{ops}, settings_{settings},
       title_bar_{env_}, toolbar_{env_}, sidebar_{env_}, file_list_{env_, false}, file_list_r_{env_, true}, preview_{env_}, quick_look_{env_},
       status_bar_{env_}, settings_dialog_{env_}, properties_dialog_{env_}, batch_rename_dialog_{env_}, duplicates_dialog_{env_},
       sessions_dialog_{env_, sessions_, [this](std::string name) { return capture_session(std::move(name)); }, [this](const model::Session& s) { restore_session(s); }},
       usage_dialog_{env_}, compare_dialog_{env_}, transfers_ui_{env_},
-      search_dialog_{env_, index_, [this] { rebuild_index(); }}, empty_folders_dialog_{env_}
+      search_dialog_{env_, index_, [this] { rebuild_index(true); }}, empty_folders_dialog_{env_}
 {
     sidebar_w_     = settings.sidebar_width > 0.0f ? settings.sidebar_width : theme.metrics().sidebar_width;
     applied_scale_ = settings.ui_scale;
@@ -61,7 +55,7 @@ Shell::Shell(platform::Window& window, Theme& theme, FontSet fonts, model::TabSe
 Shell::~Shell() { core::FileOps::remove_rename_hook(this); }
 
 // the local fixed drives: what the instant search covers (network and removable drives are slow and come and go)
-void Shell::rebuild_index()
+void Shell::rebuild_index(bool force)
 {
     std::vector<std::string> roots;
     const DWORD mask = ::GetLogicalDrives();
@@ -70,7 +64,7 @@ void Shell::rebuild_index()
         const std::wstring root = std::wstring{static_cast<wchar_t>(L'A' + i)} + L":\\";
         if (::GetDriveTypeW(root.c_str()) == DRIVE_FIXED) { roots.push_back(core::text::narrow(root)); }
     }
-    index_.start(std::move(roots));
+    index_.start(std::move(roots), force);
 }
 
 void Shell::set_tag_masks(const std::vector<std::pair<std::string, std::uint16_t>>& masks)
@@ -160,30 +154,36 @@ void Shell::spawn_window(const std::string& folder, std::optional<std::pair<int,
     if (open_window_hook) { open_window_hook(folder, true, at.x, at.y, lw, lh); } // (the host makes the window, in this process)
 }
 
-// a tab dropped outside this window: into the PrismFS window under the pointer, else into a window of its own
+// a tab dropped outside this window: queued for end-of-frame transfer (moves the Tab itself, state and all, inside this process)
 void Shell::move_tab_out(std::size_t index, int screen_x, int screen_y)
 {
     if (index >= env_.tabs.size()) { return; }
-    const std::string path = env_.tabs.at(index).path();
-    if (path.empty()) { return; }
-    if (!env_.window.send_folder_to_window_at(screen_x, screen_y, path)) {
-        if (env_.tabs.size() < 2) { return; } // (the only tab: nothing to tear off)
-        spawn_window(path, std::pair{screen_x, screen_y});
-    }
-    close_tab(index);
+    if (env_.tabs.at(index).path().empty()) { return; }
+    pending_transfer_.push_back({index, screen_x, screen_y});
+}
+
+void Shell::adopt_tab(std::unique_ptr<model::Tab> tab)
+{
+    if (!tab) { return; }
+    (void)env_.tabs.attach(std::move(tab), true);
+    env_.window.wake();
 }
 void Shell::restart_elevated()
 {
-    std::vector<std::string> folders{env_.tab().path()};
-    if (settings_.split && right_tab_) { folders.push_back(right_tab_->path()); }
-    if (core::shell::relaunch_elevated(folders)) { env_.window.request_close(); }
+    core::shell::RelaunchState state;
+    for (std::size_t i = 0; i < env_.tabs.size(); ++i) { state.tabs.push_back(env_.tabs.at(i).path()); }
+    state.active_tab = static_cast<int>(env_.tabs.active_index());
+    if (settings_.split && right_tab_) { state.right = right_tab_->path(); }
+    if (core::shell::relaunch_elevated(state)) { env_.window.request_close(); }
 }
 
 void Shell::restart_unelevated()
 {
-    std::vector<std::string> folders{env_.tab().path()};
-    if (settings_.split && right_tab_) { folders.push_back(right_tab_->path()); }
-    if (core::shell::relaunch_unelevated(folders)) { env_.window.request_close(); }
+    core::shell::RelaunchState state;
+    for (std::size_t i = 0; i < env_.tabs.size(); ++i) { state.tabs.push_back(env_.tabs.at(i).path()); }
+    state.active_tab = static_cast<int>(env_.tabs.active_index());
+    if (settings_.split && right_tab_) { state.right = right_tab_->path(); }
+    if (core::shell::relaunch_unelevated(state)) { env_.window.request_close(); }
     else { toast(tr("Could not start a normal window"), toast_kind::warning); }
 }
 
@@ -241,7 +241,14 @@ void Shell::set_sort(const std::string& folder, model::SortKey key, bool ascendi
 void Shell::focus_address() { toolbar_.begin_edit(); }
 void Shell::focus_filter() { toolbar_.focus_filter(); }
 void Shell::open_settings() { settings_dialog_.open(); }
-void Shell::open_properties(std::vector<std::string> paths) { properties_dialog_.open(std::move(paths)); }
+void Shell::open_properties(std::vector<std::string> paths)
+{
+    if (settings_.properties_window && open_properties_hook && !properties_only_) {
+        open_properties_hook(paths);
+        return;
+    }
+    properties_dialog_.open(std::move(paths));
+}
 void Shell::toast(std::string_view text, toast_kind kind) { pending_toasts_.push_back({std::string{text}, kind}); }
 
 // a modal (delete confirmation, Properties, Settings) owns the keyboard: panels and shortcuts behind it still see key
@@ -275,15 +282,21 @@ void Shell::start_delete(core::OpKind kind, std::vector<std::string> paths)
 
 void Shell::restore_from_bin(std::vector<std::string> items)
 {
-    int         done = 0;
-    std::string error;
-    for (const std::string& item : items) {
-        std::string why;
-        if (core::recycle::restore(item, why)) { ++done; } else if (error.empty()) { error = why; }
-    }
-    if (done > 0) { toast(trf_n("Restored {} item", "Restored {} items", done, done), toast_kind::success); }
-    if (!error.empty()) { toast(error, toast_kind::error); }
-    refresh_all();
+    if (items.empty() || bin_restore_) { return; }
+    auto job = std::make_shared<BinRestore>();
+    bin_restore_ = job;
+    std::thread{[job, wake = env_.window.waker(), items = std::move(items)] {
+        int         done = 0;
+        std::string error;
+        for (const std::string& item : items) {
+            std::string why;
+            if (core::recycle::restore(item, why)) { ++done; } else if (error.empty()) { error = why; }
+        }
+        job->restored = done;
+        job->error    = std::move(error);
+        job->done.store(true, std::memory_order_release);
+        wake();
+    }}.detach();
 }
 
 void Shell::empty_recycle_bin(std::string drive_root)
@@ -291,8 +304,8 @@ void Shell::empty_recycle_bin(std::string drive_root)
     if (bin_empty_->load() == 3) { return; }
     bin_empty_->store(3);
     // (the shell asks first and may take a while: a worker, which answers through the shared flag and wakes the ui)
-    std::thread{[state = bin_empty_, wake = env_.window.waker(), root = std::move(drive_root)] {
-        state->store(core::recycle::empty(root) ? 1 : 2);
+    std::thread{[state = bin_empty_, wake = env_.window.waker(), hwnd = env_.window.handle(), root = std::move(drive_root)] {
+        state->store(core::recycle::empty(root, hwnd) ? 1 : 2);
         wake();
     }}.detach();
 }
@@ -374,13 +387,32 @@ void Shell::drop_failed(std::size_t count)
     toast(trf_n("Could not receive {} file", "Could not receive {} files", static_cast<long long>(count), count), toast_kind::error);
 }
 
-void Shell::drop_files(std::vector<std::string> paths, const std::string& dest, bool move)
+void Shell::drop_files(std::vector<std::string> paths, const std::string& dest, platform::DropAction action)
 {
     if (Sidebar::is_pin_target(dest)) {
         sidebar_.pin_dropped(paths, dest);
         return;
     }
-    transfer(std::move(paths), dest, move);
+    if (action == platform::DropAction::link) {
+        int created = 0;
+        for (const std::string& src : paths) {
+            const std::string leaf = core::path::leaf(src);
+            if (leaf.empty()) { continue; }
+            std::string lnk = core::path::join(dest, leaf + " - Shortcut.lnk");
+            for (int i = 2; core::path::exists(lnk) && i < 1000; ++i) {
+                lnk = core::path::join(dest, std::format("{} - Shortcut ({}).lnk", leaf, i));
+            }
+            if (core::shell::create_shortcut(src, lnk)) { ++created; }
+        }
+        if (created > 0) {
+            toast(trf_n("Created {} shortcut", "Created {} shortcuts", created, created), toast_kind::success);
+            refresh_all();
+        } else {
+            toast(tr("Could not create shortcut"), toast_kind::error);
+        }
+        return;
+    }
+    transfer(std::move(paths), dest, action == platform::DropAction::move);
 }
 
 bool Shell::edit_sidebar(std::string_view label, const std::function<void(model::SidebarLayout&)>& edit)
@@ -445,6 +477,16 @@ void Shell::refresh_quiet()
     if (right_tab_) { right_tab_->refresh_quiet(); }
 }
 
+// the window's border: brighter while it is the active window, so several PrismFS windows side by side can be told apart
+void Shell::draw_window_outline(context& ui)
+{
+    if (!settings_.window_outline || env_.window.maximized()) { return; }
+    const Palette& pal = env_.theme.pal();
+    auto fg = ui.layer(layer::foreground);
+    const rect all = rect::from_size({0.0f, 0.0f}, ui.display_size());
+    ui.draw().rect_outline(all.expanded(-0.5f), env_.window.active() ? lerp(pal.border, pal.text, 0.4f) : pal.border, 0.0f, 1.0f);
+}
+
 void Shell::apply_deferred()
 {
     for (const Open& o : pending_open_) { env_.tabs.open(o.path, o.activate); }
@@ -460,6 +502,36 @@ void Shell::apply_deferred()
         }
     }
     pending_close_.clear();
+
+    for (const Transfer& tr : pending_transfer_) {
+        if (tr.index >= env_.tabs.size()) { continue; }
+        void* target = env_.window.prism_window_at(tr.screen_x, tr.screen_y);
+        if (target == nullptr && env_.tabs.size() < 2) { continue; } // (the only tab: nothing to tear off)
+        const std::string path = env_.tabs.at(tr.index).path();
+        const platform::Window::Placement at = env_.window.placement_at(tr.screen_x, tr.screen_y);
+        const auto [lw, lh] = env_.window.logical_size();
+        bool moved = false;
+        if (transfer_tab_hook) {
+            std::unique_ptr<model::Tab> tab = env_.tabs.detach(tr.index);
+            if (tab) {
+                moved = transfer_tab_hook(tab, target, at.x, at.y, lw, lh);
+                if (!moved && tab) { (void)env_.tabs.attach(std::move(tab), true); }
+            }
+        }
+        if (!moved) {
+            if (target != nullptr) {
+                if (env_.window.send_folder_to_window_at(tr.screen_x, tr.screen_y, path) && !env_.tabs.close(tr.index)) {
+                    env_.window.request_close();
+                }
+            } else {
+                spawn_window(path, std::pair{tr.screen_x, tr.screen_y});
+                if (!env_.tabs.close(tr.index)) { env_.window.request_close(); }
+            }
+        } else if (env_.tabs.size() == 0) {
+            env_.window.request_close();
+        }
+    }
+    pending_transfer_.clear();
 
     if (pending_session_) {
         const model::Session s = std::move(*pending_session_);
@@ -520,16 +592,18 @@ void Shell::sync_settings()
     show_hidden_ = settings_.show_hidden;
     restyle_ |= restyle;
 
-    // the second pane exists only while split
-    if (settings_.split && !right_tab_) {
-        right_tab_ = std::make_unique<model::Tab>(env_.window.waker());
-        right_tab_->navigate(pending_right_.empty() ? env_.tabs.active().path() : pending_right_);
-        pending_right_.clear();
-        env_.right = right_tab_.get();
-    } else if (!settings_.split && right_tab_) {
-        env_.right        = nullptr;
-        env_.right_active = false;
-        right_tab_.reset();
+    // the second pane exists only while split (never in a standalone Properties window)
+    if (!properties_only_) {
+        if (settings_.split && !right_tab_) {
+            right_tab_ = std::make_unique<model::Tab>(env_.window.waker());
+            right_tab_->navigate(pending_right_.empty() ? env_.tabs.active().path() : pending_right_);
+            pending_right_.clear();
+            env_.right = right_tab_.get();
+        } else if (!settings_.split && right_tab_) {
+            env_.right        = nullptr;
+            env_.right_active = false;
+            right_tab_.reset();
+        }
     }
 
     if (settings_dirty_) {
@@ -788,6 +862,13 @@ void Shell::do_redo()
 
 void Shell::save_session(int w, int h)
 {
+    if (properties_only_) { // (a helper window: only its size is remembered, not the tabs of a file view)
+        settings_.props_w = w;
+        settings_.props_h = h;
+        settings_.save();
+        return;
+    }
+    if (env_.tabs.size() == 0) { return; } // (closing after last tab was moved into another window: keep saved tabs)
     settings_.window_w = w;
     settings_.window_h = h;
     settings_.sidebar_width = sidebar_w_;
@@ -806,6 +887,12 @@ std::string Shell::resolve_drop(vec2 p) const
     if (const std::string c = toolbar_.drop_target_at(p); !c.empty()) { return c; }
     if (const std::string r = file_list_r_.drop_target_at(p); !r.empty() && right_tab_) { return r; }
     return file_list_.drop_target_at(p);
+}
+
+void Shell::set_dragging(std::vector<std::string> paths)
+{
+    ghost_paths_  = std::move(paths);
+    ghost_is_dir_ = !ghost_paths_.empty() && core::path::is_directory(ghost_paths_.front());
 }
 
 void Shell::set_drop_point(std::optional<vec2> p)
@@ -855,7 +942,7 @@ void Shell::draw_drag_ghost(Painter& p)
     p.dl().rect_filled(at, pal.raised, 10.0f);
     p.dl().rect_outline(at, action.empty() ? pal.border : pal.accent, 10.0f, action.empty() ? 1.0f : 1.5f);
     const rect icon = rect::from_size({at.min.x + 10.0f, at.center().y - 13.0f}, {26.0f, 26.0f});
-    if (core::path::is_directory(ghost_paths_.front())) { p.folder_icon(icon); } else { p.glyph_center(icon, glyph::document, pal.text_dim); }
+    if (ghost_is_dir_) { p.folder_icon(icon); } else { p.glyph_center(icon, glyph::document, pal.text_dim); }
     const float tx = icon.max.x + 10.0f;
     if (action.empty()) {
         p.text_left(rect{{tx, at.min.y}, {at.max.x - 8.0f, at.max.y}}, what, pal.text, f.body);
@@ -878,15 +965,20 @@ void Shell::shortcuts(context& ui)
         if (ui.key_pressed(static_cast<key>(static_cast<int>(key::d1) + i), true) && static_cast<std::size_t>(i) < tabs.size()) { tabs.activate(static_cast<std::size_t>(i)); }
     }
     model::Tab& tab = env_.tab();
-    if (!typing && ui.key_pressed(key::backspace)) { (void)tab.back(); }
+    const FileList& active_list = env_.right_active && right_tab_ ? file_list_r_ : file_list_;
+    const bool in_find = active_list.typing_find();
+    if (!typing && !in_find && ui.key_pressed(key::backspace)) { (void)tab.back(); }
     if (ui.key_pressed(key::mouse_x1)) { (void)tab.back(); }
     if (ui.key_pressed(key::mouse_x2)) { (void)tab.forward(); }
+    // standard Explorer address-bar shortcuts alongside Ctrl+L
+    if (ui.key_pressed(key::d, false, false, true) || (!typing && ui.key_pressed(key::f4))) { focus_address(); }
 
     // everything else is a named action with a rebindable chord. a chord without Ctrl or Alt would eat typing: while a
     // text field has the keyboard only the modified ones fire
     for (const keybinds::action& a : env_.binds.actions()) {
         if (a.chord.count == 0 || !env_.binds.pressed(ui, a.name)) { continue; }
         if (typing && !a.chord.steps[0].ctrl && !a.chord.steps[0].alt) { continue; }
+        if (in_find && a.name == "quick_look") { continue; } // Space inside type-to-find types a space into the prefix
         run_action(a.name, ui);
     }
     if (const std::string pick = goto_palette_.show(ui, goto_binds_); !pick.empty()) {
@@ -1019,7 +1111,6 @@ void Shell::run_action(const std::string& name, context& ui)
         for (int i = 0; i < 5; ++i) {
             if (name == names[i]) { settings_.group_by = i; settings_dirty_ = true; }
         }
-        if (settings_.grid_view && settings_.group_by != 0) { toast(tr("Groups show in the details view"), toast_kind::info); }
     }
     else if (name == "settings") { open_settings(); }
     else if (name == "palette") { palette_.open(); }
@@ -1092,14 +1183,85 @@ void Shell::splitter(Painter& p, const rect& area)
     }
 }
 
+void Shell::preview_splitter(Painter& p, const rect& area, float window_w)
+{
+    context& ui = p.ui();
+    PanelScope panel{ui, "##prev_split", area};
+    const item_result r = ui.custom_item("##prev_split_handle", {area.width(), area.height()});
+    const vec2 mp = ui.mouse_pos();
+    const float max_pw = std::max(240.0f, std::min(700.0f, window_w * 0.55f));
+    const float cur_pw = settings_.preview_width > 0.0f ? std::clamp(settings_.preview_width, 220.0f, max_pw) : std::clamp(window_w * 0.26f, 280.0f, 400.0f);
+    if (r.hovered && ui.mouse_clicked(mouse_button::left)) {
+        preview_drag_ = true;
+        preview_grab_ = cur_pw + mp.x;
+    }
+    if (preview_drag_) {
+        if (ui.mouse_down(mouse_button::left)) {
+            settings_.preview_width = std::clamp(preview_grab_ - mp.x, 220.0f, max_pw);
+        } else {
+            preview_drag_ = false;
+            settings_dirty_ = true;
+        }
+    }
+    if (r.hovered && ui.item_double_clicked()) {
+        settings_.preview_width = 0.0f;
+        settings_dirty_ = true;
+    }
+    const bool hot = r.hovered || preview_drag_;
+    if (hot) { cursor_ = cursor_kind::resize_ew; }
+    const float k = ui.animate("prev_split_hot", hot ? 1.0f : 0.0f, 18.0f);
+    if (k > 0.01f) {
+        const float x = area.center().x;
+        p.dl().rect_filled({{x - 1.0f, area.min.y + 8.0f}, {x + 1.0f, area.max.y - 8.0f}}, p.pal().accent.scaled_alpha(k * 0.8f), 1.0f);
+    }
+}
+
+double Shell::next_wake_seconds() const noexcept
+{
+    double w = 3600.0;
+    for (std::size_t i = 0; i < env_.tabs.size(); ++i) { w = std::min(w, env_.tabs.at(i).next_wake_seconds()); }
+    if (right_tab_) { w = std::min(w, right_tab_->next_wake_seconds()); }
+    return w;
+}
+
 void Shell::frame(context& ui, const FrameInput& in)
 {
     cursor_ = cursor_kind::arrow;
+    if (properties_only_) {
+        sync_settings();
+        Painter p{ui, env_.theme, env_.fonts};
+        {
+            auto bg = ui.layer(layer::background);
+            ui.draw().rect_filled({{0, 0}, ui.display_size()}, env_.theme.pal().sidebar); // (the dialog's own panel colour)
+        }
+        properties_dialog_.frame(p);
+        for (const Toast& t : pending_toasts_) { ui.toast(t.text, t.kind, 2.5f); }
+        pending_toasts_.clear();
+        draw_window_outline(ui);
+        if (!properties_dialog_.active()) { env_.window.request_close(); }
+        return;
+    }
+    if (env_.tabs.size() == 0) {
+        env_.window.request_close();
+        return;
+    }
     if (!index_started_) {
         index_started_ = true;
         if (settings_.index_drives) { rebuild_index(); }
     }
     for (const std::string& folder : env_.window.take_incoming()) { open_tab(folder, true); }
+    if (const int app_cmd = env_.window.take_app_command(); app_cmd != 0) {
+        model::Tab& cur = env_.tab();
+        if (app_cmd < 0) { (void)cur.back(); }
+        else if (app_cmd == 1) { (void)cur.forward(); }
+        else if (app_cmd == 2) { cur.refresh(); }
+    }
+    if (bin_restore_ && bin_restore_->done.load(std::memory_order_acquire)) {
+        if (bin_restore_->restored > 0) { toast(trf_n("Restored {} item", "Restored {} items", bin_restore_->restored, bin_restore_->restored), toast_kind::success); }
+        if (!bin_restore_->error.empty()) { toast(bin_restore_->error, toast_kind::error); }
+        bin_restore_.reset();
+        refresh_all();
+    }
     env_.tabs.poll();
     if (right_tab_) { (void)right_tab_->poll(); }
     service_ops();
@@ -1146,11 +1308,15 @@ void Shell::frame(context& ui, const FrameInput& in)
 
     // the file area: one or two cards, and the preview pane on the right
     const float area_l = sw + 2.0f;
-    float       area_r = w - 10.0f;
+    float       area_r = w - 13.0f;
     rect preview_rect{};
+    rect preview_split{};
     if (settings_.preview) {
-        const float pw = std::clamp(w * 0.26f, 280.0f, 400.0f);
+        const float max_pw = std::max(240.0f, std::min(700.0f, w * 0.55f));
+        const float pw = settings_.preview_width > 0.0f ? std::clamp(settings_.preview_width, 220.0f, max_pw)
+                                                        : std::clamp(w * 0.26f, 280.0f, 400.0f);
         preview_rect   = rect{{area_r - pw, body_top}, {area_r, body_bottom - 2.0f}};
+        preview_split  = rect{{area_r - pw - 8.0f, body_top}, {area_r - pw, body_bottom - 2.0f}};
         area_r        -= pw + 8.0f;
     }
     const float bottom = body_bottom - 2.0f;
@@ -1170,7 +1336,10 @@ void Shell::frame(context& ui, const FrameInput& in)
     } else {
         file_list_.frame(p, rect{{area_l, body_top}, {area_r, bottom}}, env_.tabs.active(), in, keys_free);
     }
-    if (settings_.preview) { preview_.frame(p, preview_rect); }
+    if (settings_.preview) {
+        preview_.frame(p, preview_rect);
+        preview_splitter(p, preview_split, w);
+    }
     quick_look_.frame(p, rect{{area_l, body_top}, {area_r, bottom}});
     splitter(p, split);
     status_bar_.frame(p, status);
@@ -1191,6 +1360,7 @@ void Shell::frame(context& ui, const FrameInput& in)
         settings_dirty_ = true;
     }
     draw_drag_ghost(p);
+    draw_window_outline(ui);
     if (env_.window.drop_hint()) { // another window is dragging a tab over this one
         auto fg = ui.layer(layer::foreground);
         const rect all = rect::from_size({0.0f, 0.0f}, ui.display_size());

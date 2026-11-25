@@ -84,6 +84,7 @@ private:
     std::uint64_t              serial_{};
     std::atomic<bool>          paused_{};   // (read by the copy callback without the lock)
     std::atomic<bool>          cancel_{};
+    int                        cancel_flag_{}; // Win32 BOOL passed to CopyFileExW so stalled I/O aborts immediately
     std::atomic<bool>          quit_{};
     bool                       running_{};
     std::thread                thread_;

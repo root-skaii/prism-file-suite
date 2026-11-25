@@ -13,6 +13,11 @@ namespace prism::platform {
 
 using Microsoft::WRL::ComPtr;
 
+struct Gpu::SharedDevice {
+    ComPtr<ID3D11Device>        device;
+    ComPtr<ID3D11DeviceContext> ctx;
+};
+
 struct Gpu::Impl {
     HWND                           hwnd{};
     ComPtr<ID3D11Device>           device;
@@ -24,17 +29,22 @@ struct Gpu::Impl {
     UINT                           chain_flags{};
     bool                           first_present_done{};
     bool                           immediate{};
+    bool                           shared{};
     strata::d3d11_renderer         renderer;
 
     void release() noexcept
     {
-        if (ctx != nullptr) { ctx->ClearState(); }
+        if (ctx != nullptr) {
+            if (shared) { ctx->OMSetRenderTargets(0, nullptr, nullptr); }
+            else { ctx->ClearState(); }
+        }
         rtv.Reset();
         renderer.destroy();
         if (latency_wait != nullptr) { ::CloseHandle(latency_wait); latency_wait = nullptr; }
         chain.Reset();
         ctx.Reset();
         device.Reset();
+        shared = false;
     }
 
     [[nodiscard]] bool make_target() noexcept
@@ -101,7 +111,7 @@ struct Gpu::Impl {
         if (ui.font().pixels().empty() && !ui.rebuild_font_atlas()) { return false; }
         if (!renderer.create(device.Get(), ctx.Get(), ui.font())) { return false; }
         renderer.set_state_restore(false); // (the device is ours: nothing to put back)
-        ui.release_font_pixels();
+        if (!ui.font().dynamic()) { ui.release_font_pixels(); } // dynamic atlases keep CPU pixels for on-demand baking
         ui.invalidate();
         first_present_done = false;
         return true;
@@ -124,6 +134,25 @@ bool Gpu::create(void* hwnd, strata::context& ui)
 }
 
 bool Gpu::create_device() { return impl_->build_device(); }
+
+bool Gpu::use_shared_device(const std::shared_ptr<SharedDevice>& shared)
+{
+    if (!shared || shared->device == nullptr || shared->ctx == nullptr) { return false; }
+    if (shared->device->GetDeviceRemovedReason() != S_OK) { return false; }
+    impl_->device = shared->device;
+    impl_->ctx    = shared->ctx;
+    impl_->shared = true;
+    return true;
+}
+
+std::shared_ptr<Gpu::SharedDevice> Gpu::shared_device() const
+{
+    if (impl_->device == nullptr || impl_->ctx == nullptr || impl_->device->GetDeviceRemovedReason() != S_OK) { return nullptr; }
+    auto s = std::make_shared<SharedDevice>();
+    s->device = impl_->device;
+    s->ctx    = impl_->ctx;
+    return s;
+}
 
 bool Gpu::create_swap_chain(void* hwnd)
 {
@@ -184,7 +213,7 @@ bool Gpu::recreate(strata::context& ui)
 void Gpu::update_atlas(strata::context& ui)
 {
     (void)impl_->renderer.update_atlas(ui.font());
-    ui.release_font_pixels();
+    if (!ui.font().dynamic()) { ui.release_font_pixels(); }
 }
 
 strata::d3d11_renderer& Gpu::renderer() noexcept { return impl_->renderer; }

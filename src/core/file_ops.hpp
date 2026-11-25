@@ -6,7 +6,9 @@
 #include "core/op_types.hpp"
 #include "core/transfer.hpp"
 
+#include <atomic>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -56,21 +58,31 @@ private:
         return hooks;
     }
 
-    void run(OpKind kind, std::vector<std::string> sources, std::string dest, bool silent);
+    struct Worker {
+        std::thread       thread;
+        std::atomic<bool> done{false};
+    };
 
-    std::function<void()>    wake_;
-    void*                    owner_{};
-    TransferQueue            transfers_;
-    bool                     builtin_{true};
-    mutable std::mutex       lock_;
-    std::vector<std::thread> threads_;
-    std::vector<OpResult>    results_;
-    int                      running_{};
+    void run(OpKind kind, std::vector<std::string> sources, std::string dest, bool silent, Worker* w);
+    void reap_finished();
+
+    std::function<void()>               wake_;
+    void*                               owner_{};
+    TransferQueue                       transfers_;
+    bool                                builtin_{true};
+    mutable std::mutex                  lock_;
+    std::vector<std::unique_ptr<Worker>> workers_;
+    std::vector<OpResult>               results_;
+    int                                 running_{};
 };
 
 // files on the system clipboard (CF_HDROP + "Preferred DropEffect"), so copy / paste works with explorer and other apps
 bool clipboard_set_files(const std::vector<std::string>& paths, bool cut);
 bool clipboard_get_files(std::vector<std::string>& paths, bool& cut);
 [[nodiscard]] bool clipboard_has_files();
+// monotonic OS clipboard counter (GetClipboardSequenceNumber): lets panes sync cut-item dimming with Explorer and other windows
+[[nodiscard]] unsigned long clipboard_sequence() noexcept;
+// clears the clipboard's cut files after a successful paste so Explorer / other windows un-dim them
+void clipboard_clear_cut();
 
 } // namespace prism::core

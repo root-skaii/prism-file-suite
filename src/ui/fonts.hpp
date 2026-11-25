@@ -20,8 +20,7 @@ struct FontSet {
     strata::font_id mono  = 7; // checksums, ids
 };
 
-// builds the context with the fonts above at `style`'s sizes
-// `extra`: characters beyond the defaults (latin, greek, cyrillic, symbols) the names on screen use; sorted, unique
-[[nodiscard]] std::expected<strata::context, strata::font_error> create_context(const strata::style& style, float scale, const std::vector<char32_t>& extra = {});
+// builds the context with the fonts above at `style`'s sizes, with on-demand dynamic glyph baking enabled
+[[nodiscard]] std::expected<strata::context, strata::font_error> create_context(const strata::style& style, float scale);
 
 } // namespace prism::ui

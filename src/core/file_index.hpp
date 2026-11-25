@@ -44,8 +44,13 @@ public:
     FileIndex(const FileIndex&)            = delete;
     FileIndex& operator=(const FileIndex&) = delete;
 
-    // (re)builds the index of these folders (drive roots, usually) in the background; the old one stays searchable meanwhile
-    void start(std::vector<std::string> roots);
+    // where the index snapshot is cached on disk between runs (empty = in-memory only)
+    void set_cache_path(std::string path);
+    // (re)builds the index of these folders (drive roots, usually) in the background; the old one stays searchable meanwhile.
+    // when `force` is false and a fresh (< 10 min) on-disk cache exists, it is loaded immediately without recrawling
+    void start(std::vector<std::string> roots, bool force = false);
+    [[nodiscard]] bool save_to(const std::string& path) const;
+    [[nodiscard]] bool load_from(const std::string& path);
     [[nodiscard]] bool          building() const noexcept { return building_.load(); }
     [[nodiscard]] std::uint64_t scanned() const noexcept { return scanned_.load(); }   // entries seen by the running crawl
     [[nodiscard]] std::uint64_t entries() const;                                       // entries in the searchable index
@@ -74,20 +79,31 @@ private:
         std::vector<Node> nodes;
         std::string       pool;     // the names, back to back
         std::chrono::steady_clock::time_point built;
+        std::int64_t      built_unix{}; // wall-clock seconds since epoch (for cache age across restarts)
     };
     static constexpr std::uint32_t npos = 0xffffffffu;
 
-    void crawl(std::vector<std::string> roots, std::uint64_t generation);
+    void crawler_loop();
+    void crawl(std::vector<std::string> roots, std::uint64_t generation, bool force);
     void worker();
     [[nodiscard]] std::shared_ptr<const Data> data() const;
     static void path_of(const Data& d, std::uint32_t id, std::string& out);
+    [[nodiscard]] static bool write_data(const Data& d, const std::string& path);
+    [[nodiscard]] static std::shared_ptr<Data> read_data(const std::string& path);
 
     std::function<void()>        wake_;
     mutable std::mutex           lock_;
     std::shared_ptr<const Data>  data_;
+    std::string                  cache_path_;
     std::atomic<bool>            building_{};
     std::atomic<std::uint64_t>   scanned_{};
     std::atomic<std::uint64_t>   crawl_gen_{};
+    std::condition_variable      crawl_cv_;
+    struct CrawlReq {
+        std::vector<std::string> roots;
+        bool                     force{};
+    };
+    std::optional<CrawlReq>      crawl_pending_;
     std::thread                  crawler_;
 
     std::condition_variable      cv_;

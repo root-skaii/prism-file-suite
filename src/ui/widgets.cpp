@@ -1,5 +1,4 @@
 #include "ui/widgets.hpp"
-#include "ui/tr.hpp"
 
 #include "core/shell_ops.hpp"
 #include "ui/tr.hpp"
@@ -413,7 +412,7 @@ float Kit::hint_extra(std::size_t lines) const
     return lines <= 1 ? 0.0f : static_cast<float>(lines - 1) * (p_.line_height(p_.fonts().small) + 1.0f);
 }
 
-void Kit::card_begin(std::string_view id, std::string_view title, float body_h)
+void Kit::card_begin(std::string_view id, std::string_view title, float body_h, char32_t icon)
 {
     cur_card_  = std::string{id};
     cur_extra_ = 0.0f;
@@ -421,17 +420,24 @@ void Kit::card_begin(std::string_view id, std::string_view title, float body_h)
     context&       ui  = p_.ui();
     const Palette& pal = p_.pal();
     const float w  = ui.content_width();
-    const float th = title.empty() ? 8.0f : (dense() ? 32.0f : 38.0f);
+    const float th = title.empty() ? 8.0f : (dense() ? 34.0f : 40.0f);
     const item_result r = ui.custom_item(id, {w, th});
     const rect full{r.bounds.min, {r.bounds.max.x, r.bounds.min.y + th + body_h + 8.0f}};
-    card_h_ = th + body_h + 22.0f;
+    card_h_ = th + body_h + 20.0f;
     shape_style st;
     st.radius       = radii(12.0f);
     st.fill_top     = st.fill_bottom = pal.content;
-    st.border       = pal.divider;
+    st.border       = pal.border.scaled_alpha(0.65f);
     st.border_width = 1.0f;
     p_.dl().shape(full, st);
-    if (!title.empty()) { p_.text_left(rect{{r.bounds.min.x + pad(), r.bounds.min.y + 4.0f}, {r.bounds.max.x - pad(), r.bounds.max.y}}, title, pal.text, p_.fonts().bold); }
+    if (!title.empty()) {
+        float tx = r.bounds.min.x + pad();
+        if (icon != 0) {
+            p_.glyph_center(rect{{tx - 2.0f, r.bounds.min.y + 4.0f}, {tx + 14.0f, r.bounds.max.y}}, icon, pal.accent, p_.fonts().tile);
+            tx += 20.0f;
+        }
+        p_.text_left(rect{{tx, r.bounds.min.y + 4.0f}, {r.bounds.max.x - pad(), r.bounds.max.y}}, title, pal.text, p_.fonts().bold);
+    }
 }
 
 void Kit::card_end(std::string_view id)
@@ -441,7 +447,7 @@ void Kit::card_end(std::string_view id)
         known = cur_extra_;
         p_.ui().invalidate();
     }
-    (void)p_.ui().custom_item(std::string{id} + "_end", {1.0f, 8.0f + 14.0f});
+    (void)p_.ui().custom_item(std::string{id} + "_end", {1.0f, 8.0f + 12.0f});
     cards_h_ += card_h_;
 }
 
@@ -457,14 +463,21 @@ void Kit::key_value(const KeyValue& kv)
     const std::string key{kv.id};
     const float hk = ui.animate(key + "h", hot ? 1.0f : 0.0f, 18.0f);
     const rect  b  = r.bounds;
-    if (hk > 0.01f) { p_.dl().rect_filled(rect{{b.min.x + 6.0f, b.min.y + 2.0f}, {b.max.x - 6.0f, b.max.y - 2.0f}}, pal.hover.scaled_alpha(hk), 6.0f); }
+    const rect  pill{{b.min.x + 6.0f, b.min.y + 2.0f}, {b.max.x - 6.0f, b.max.y - 2.0f}};
+    if (kv.highlight != Tone::neutral) {
+        const color tc = tone_color(kv.highlight);
+        p_.dl().rect_filled(pill, tc.scaled_alpha(0.14f), 6.0f);
+        p_.dl().rect_outline(pill, tc.scaled_alpha(0.45f), 6.0f, 1.0f);
+    }
+    if (hk > 0.01f) { p_.dl().rect_filled(pill, pal.hover.scaled_alpha(hk), 6.0f); }
 
     const float room = kv.copyable ? 24.0f : 0.0f;
     const float vx   = b.min.x + pad() + kv.key_w;
     const float avail = b.max.x - pad() - room - vx;
     const font_id vf = kv.mono ? f.mono : f.body;
+    const color val_col = kv.highlight != Tone::neutral ? tone_color(kv.highlight) : pal.text;
     p_.text_left(rect{{b.min.x + pad(), b.min.y}, {vx - 8.0f, b.max.y}}, kv.key, pal.text_dim, f.body);
-    p_.text_left(rect{{vx, b.min.y}, {vx + std::max(0.0f, avail), b.max.y}}, kv.value, pal.text, vf);
+    p_.text_left(rect{{vx, b.min.y}, {vx + std::max(0.0f, avail), b.max.y}}, kv.value, val_col, vf);
     if (kv.copyable) { p_.glyph_center(rect{{b.max.x - pad() - 16.0f, b.min.y}, {b.max.x - pad(), b.max.y}}, glyph_copy, pal.text_dim.scaled_alpha(hk), f.tile); }
     if (kv.separator) { p_.dl().rect_filled(rect{{b.min.x + pad(), b.max.y - 1.0f}, {b.max.x - pad(), b.max.y}}, pal.divider); }
 
@@ -519,7 +532,7 @@ bool Kit::switch_row(std::string_view id, std::string_view label, std::string_vi
 float Kit::stat_tiles_height() const noexcept
 {
     const FontSet f = p_.fonts();
-    return 8.0f + 10.0f + p_.line_height(f.small) + 2.0f + p_.line_height(f.title) + 2.0f + p_.line_height(f.small) + 10.0f;
+    return 8.0f + 12.0f + p_.line_height(f.small) + 3.0f + p_.line_height(f.title) + 3.0f + p_.line_height(f.small) + 12.0f;
 }
 
 void Kit::stat_tiles(std::string_view id, std::span<const Stat> stats)
@@ -537,21 +550,39 @@ void Kit::stat_tiles(std::string_view id, std::span<const Stat> stats)
     const float lh_title = p_.line_height(f.title);
     const float gap = 10.0f;
     const float tw  = (w - 2.0f * pad() - gap * static_cast<float>(n - 1)) / static_cast<float>(n);
+    const vec2  mp  = ui.mouse_pos();
     for (std::size_t i = 0; i < n; ++i) {
         const float x = r.bounds.min.x + pad() + static_cast<float>(i) * (tw + gap);
         const rect  t{{x, r.bounds.min.y + 4.0f}, {x + tw, r.bounds.max.y - 4.0f}};
+        const bool  copyable = stats[i].copyable && !stats[i].value.empty();
+        const bool  hot = copyable && r.hovered && t.contains(mp);
+        const float hk  = ui.animate(std::string{id} + "_" + std::to_string(i), hot ? 1.0f : 0.0f, 18.0f);
         shape_style st;
         st.radius       = radii(10.0f);
-        st.fill_top     = st.fill_bottom = pal.raised;
-        st.border       = pal.divider;
+        st.fill_top     = st.fill_bottom = stats[i].tone != Tone::neutral ? tone_color(stats[i].tone).scaled_alpha(0.08f) : pal.raised;
+        st.border       = stats[i].tone != Tone::neutral ? tone_color(stats[i].tone).scaled_alpha(0.35f) : lerp(pal.divider, pal.border, hk);
         st.border_width = 1.0f;
         p_.dl().shape(t, st);
-        float y = t.min.y + 10.0f;
-        p_.text_left(rect{{t.min.x, y}, {t.max.x, y + lh_small}}, stats[i].label, pal.text_dim, f.small, 12.0f);
-        y += lh_small + 2.0f;
-        p_.text_left(rect{{t.min.x, y}, {t.max.x, y + lh_title}}, stats[i].value, pal.text, f.title, 12.0f);
-        y += lh_title + 2.0f;
-        if (!stats[i].sub.empty()) { p_.text_left(rect{{t.min.x, y}, {t.max.x, y + lh_small}}, stats[i].sub, pal.text_dim, f.small, 12.0f); }
+        if (hk > 0.01f) { p_.dl().rect_filled(t, pal.hover.scaled_alpha(hk * 0.65f), 10.0f); }
+        const float block_h = lh_small + 3.0f + lh_title + (stats[i].sub.empty() ? 0.0f : 3.0f + lh_small);
+        float y = std::round(t.center().y - block_h * 0.5f);
+        const color val_col = stats[i].tone != Tone::neutral ? tone_color(stats[i].tone) : pal.text;
+        p_.text_left(rect{{t.min.x, y}, {t.max.x - 20.0f, y + lh_small}}, stats[i].label, pal.text_dim, f.small, 12.0f);
+        if (copyable && hk > 0.01f) {
+            p_.glyph_center(rect{{t.max.x - 24.0f, y - 1.0f}, {t.max.x - 8.0f, y + lh_small + 1.0f}}, glyph_copy, pal.text_dim.scaled_alpha(hk), f.tile);
+        }
+        y += lh_small + 3.0f;
+        p_.text_left(rect{{t.min.x, y}, {t.max.x - 10.0f, y + lh_title}}, stats[i].value, val_col, f.title, 12.0f);
+        y += lh_title + 3.0f;
+        if (!stats[i].sub.empty()) { p_.text_left(rect{{t.min.x, y}, {t.max.x - 10.0f, y + lh_small}}, stats[i].sub, pal.text_dim, f.small, 12.0f); }
+        if (hot) {
+            cmd_.set_cursor(cursor_kind::hand);
+            ui.tooltip(tr("Click to copy"));
+            if (ui.mouse_released(mouse_button::left)) {
+                (void)core::shell::set_clipboard_text(stats[i].value);
+                cmd_.toast(tr("Copied"), toast_kind::info);
+            }
+        }
     }
 }
 

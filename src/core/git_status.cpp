@@ -50,16 +50,15 @@ void note_dir(GitRepo& r, const std::string& file_key, char code)
 
 char GitRepo::code_for(std::string_view rel, bool is_dir) const
 {
-    const std::string k{rel};
-    if (const auto f = files.find(k); f != files.end()) { return f->second; }
+    if (const auto f = files.find(rel); f != files.end()) { return f->second; }
     if (!untracked_dirs.empty()) {
-        for (std::size_t cut = k.find('\\'); cut != std::string::npos; cut = k.find('\\', cut + 1)) {
-            if (untracked_dirs.contains(k.substr(0, cut))) { return '?'; }
+        for (std::size_t cut = rel.find('\\'); cut != std::string_view::npos; cut = rel.find('\\', cut + 1)) {
+            if (untracked_dirs.contains(rel.substr(0, cut))) { return '?'; }
         }
-        if (is_dir && untracked_dirs.contains(k)) { return '?'; }
+        if (is_dir && untracked_dirs.contains(rel)) { return '?'; }
     }
     if (is_dir) {
-        if (const auto d = dirs.find(k); d != dirs.end()) { return d->second; }
+        if (const auto d = dirs.find(rel); d != dirs.end()) { return d->second; }
     }
     return 0;
 }

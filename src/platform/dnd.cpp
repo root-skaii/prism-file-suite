@@ -1,6 +1,7 @@
 #include "platform/dnd.hpp"
 
 #include "core/file_kind.hpp"
+#include "core/i18n.hpp"
 #include "core/log.hpp"
 #include "core/path.hpp"
 #include "core/text.hpp"
@@ -51,14 +52,17 @@ public:
     // IDropTarget
     HRESULT STDMETHODCALLTYPE DragEnter(IDataObject* data, DWORD keys, POINTL pt, DWORD* effect) override
     {
-        data_    = data;
-        sources_ = read_paths(data);
-        virtual_ = sources_.empty() && core::offers_virtual_files(data);
+        data_       = data;
+        sources_    = read_paths(data);
+        virtual_    = sources_.empty() && core::offers_virtual_files(data);
+        right_drag_ = (keys & MK_RBUTTON) != 0;
+        cached_dest_.clear();
         *effect  = acceptable() ? decide(keys, pt, *effect) : DROPEFFECT_NONE;
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE DragOver(DWORD keys, POINTL pt, DWORD* effect) override
     {
+        if ((keys & MK_RBUTTON) != 0) { right_drag_ = true; }
         *effect = acceptable() ? decide(keys, pt, *effect) : DROPEFFECT_NONE;
         return S_OK;
     }
@@ -68,6 +72,7 @@ public:
         data_.Reset();
         sources_.clear();
         virtual_ = false;
+        right_drag_ = false;
         if (cb_.hover) { cb_.hover(std::nullopt); }
         if (cb_.redraw) { cb_.redraw(); }
         return S_OK;
@@ -81,7 +86,7 @@ public:
         // a program under the pointer was asked during the drag already: asking again here, with the button released, would look
         // like a right-button drop to its handler (it answers with its own "Open with / Cancel" menu)
         const bool on_program = program_ != nullptr && program_path_ == dest && core::is_program_name(dest);
-        const DWORD eff = on_program ? program_effect_ : (acceptable() ? decide(keys, pt, *effect) : DROPEFFECT_NONE);
+        DWORD eff = on_program ? program_effect_ : (acceptable() ? decide(keys, pt, *effect) : DROPEFFECT_NONE);
         if (cb_.hover) { cb_.hover(std::nullopt); }
         if (eff != DROPEFFECT_NONE && !dest.empty()) {
             if (program_ != nullptr && program_path_ == dest) {
@@ -95,17 +100,41 @@ public:
                 // first, then moved to the destination like any other drop
                 core::ReceivedFiles got = core::receive_virtual_files(data, staging_root());
                 if (got.failed > 0 && cb_.failed) { cb_.failed(got.failed); }
-                if (!got.items.empty() && cb_.dropped) { cb_.dropped(std::move(got.items), dest, true); }
+                if (!got.items.empty() && cb_.dropped) { cb_.dropped(std::move(got.items), dest, DropAction::move); }
             } else if (cb_.dropped) {
-                cb_.dropped(std::move(paths), dest, eff == DROPEFFECT_MOVE);
+                const bool is_pin = cb_.link && cb_.link(dest);
+                if (right_drag_ && !is_pin) {
+                    HMENU menu = ::CreatePopupMenu();
+                    if (menu != nullptr) {
+                        ::AppendMenuW(menu, MF_STRING, 1, core::text::widen(core::i18n::tr("Copy here")).c_str());
+                        ::AppendMenuW(menu, MF_STRING, 2, core::text::widen(core::i18n::tr("Move here")).c_str());
+                        ::AppendMenuW(menu, MF_STRING, 3, core::text::widen(core::i18n::tr("Create shortcut here")).c_str());
+                        ::AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+                        ::AppendMenuW(menu, MF_STRING, 0, core::text::widen(core::i18n::tr("Cancel")).c_str());
+                        ::SetMenuDefaultItem(menu, cached_same_vol_ ? 2 : 1, FALSE);
+                        ::SetForegroundWindow(hwnd_);
+                        const UINT pick = ::TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, hwnd_, nullptr);
+                        ::DestroyMenu(menu);
+                        if (pick == 1) { eff = DROPEFFECT_COPY; cb_.dropped(std::move(paths), dest, DropAction::copy); }
+                        else if (pick == 2) { eff = DROPEFFECT_MOVE; cb_.dropped(std::move(paths), dest, DropAction::move); }
+                        else if (pick == 3) { eff = DROPEFFECT_LINK; cb_.dropped(std::move(paths), dest, DropAction::link); }
+                        else { eff = DROPEFFECT_NONE; }
+                    }
+                } else {
+                    const DropAction act = eff == DROPEFFECT_LINK ? DropAction::link
+                                         : eff == DROPEFFECT_MOVE ? DropAction::move : DropAction::copy;
+                    cb_.dropped(std::move(paths), dest, act);
+                }
             }
         }
-        // the work is done here (shell dialogs included): the source must not move or delete anything itself
-        *effect = DROPEFFECT_NONE;
+        // report COPY / LINK back to external drag sources so they know the drop succeeded;
+        // keep MOVE as NONE because we already performed the move ourselves (avoids double-delete by external sources)
+        *effect = (eff == DROPEFFECT_COPY || eff == DROPEFFECT_LINK) ? eff : DROPEFFECT_NONE;
         leave_program();
         data_.Reset();
         sources_.clear();
         virtual_ = false;
+        right_drag_ = false;
         if (cb_.redraw) { cb_.redraw(); }
         return S_OK;
     }
@@ -220,18 +249,29 @@ private:
         if (cb_.link && cb_.link(dest)) { return (allowed & DROPEFFECT_LINK) != 0 ? DROPEFFECT_LINK : ((allowed & DROPEFFECT_COPY) != 0 ? DROPEFFECT_COPY : DROPEFFECT_NONE); }
 
         // dropping a folder into itself or a file into the folder it already is in does nothing
-        bool all_here = true;
-        bool same_drive = true;
-        for (const std::string& src : sources_) {
-            if (core::path::parent(src) != dest) { all_here = false; }
-            if (src == dest || (dest.size() > src.size() && dest.compare(0, src.size(), src) == 0 && dest[src.size()] == '\\')) { return DROPEFFECT_NONE; }
-            if (src.size() < 2 || dest.size() < 2 || (src[0] | 0x20) != (dest[0] | 0x20) || src[1] != ':') { same_drive = false; }
+        if (dest != cached_dest_) {
+            cached_dest_ = dest;
+            cached_valid_ = true;
+            cached_same_vol_ = true;
+            bool all_here = true;
+            const std::string dest_l = core::text::lower_ascii(core::path::normalize(dest));
+            for (const std::string& src : sources_) {
+                const std::string src_l = core::text::lower_ascii(core::path::normalize(src));
+                if (core::text::lower_ascii(core::path::normalize(core::path::parent(src))) != dest_l) { all_here = false; }
+                if (src_l == dest_l || (dest_l.size() > src_l.size() && dest_l.compare(0, src_l.size(), src_l) == 0 && (dest_l[src_l.size()] == '\\' || src_l.back() == '\\'))) {
+                    cached_valid_ = false;
+                    break;
+                }
+                if (cached_same_vol_ && !core::path::same_volume(src, dest)) { cached_same_vol_ = false; }
+            }
+            if (all_here) { cached_valid_ = false; }
         }
-        if (all_here) { return DROPEFFECT_NONE; }
+        if (!cached_valid_) { return DROPEFFECT_NONE; }
 
-        DWORD want = same_drive ? DROPEFFECT_MOVE : DROPEFFECT_COPY;
-        if ((keys & MK_CONTROL) != 0) { want = DROPEFFECT_COPY; }
-        if ((keys & MK_SHIFT) != 0) { want = DROPEFFECT_MOVE; }
+        DWORD want = cached_same_vol_ ? DROPEFFECT_MOVE : DROPEFFECT_COPY;
+        if ((keys & MK_ALT) != 0 || ((keys & MK_CONTROL) != 0 && (keys & MK_SHIFT) != 0)) { want = DROPEFFECT_LINK; }
+        else if ((keys & MK_CONTROL) != 0) { want = DROPEFFECT_COPY; }
+        else if ((keys & MK_SHIFT) != 0) { want = DROPEFFECT_MOVE; }
         if ((allowed & want) != 0) { return want; }
         return (allowed & DROPEFFECT_COPY) != 0 ? DROPEFFECT_COPY : DROPEFFECT_NONE;
     }
@@ -246,12 +286,17 @@ private:
     std::string              program_path_;
     DWORD                    program_effect_{};
     DWORD                    last_keys_{};   // the key state of the drag while a button was held
+    bool                     right_drag_{};
+    std::string              cached_dest_;
+    bool                     cached_valid_{};
+    bool                     cached_same_vol_{};
 };
 
 // --- the source ----------------------------------------------------------------------------------------------
 
 class DropSource final : public IDropSource {
 public:
+    explicit DropSource(DWORD button = MK_LBUTTON) : button_{button} {}
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id, void** out) override
     {
         if (id == IID_IUnknown || id == IID_IDropSource) {
@@ -272,13 +317,14 @@ public:
     HRESULT STDMETHODCALLTYPE QueryContinueDrag(BOOL escape, DWORD keys) override
     {
         if (escape != FALSE) { return DRAGDROP_S_CANCEL; }
-        if ((keys & MK_LBUTTON) == 0) { return DRAGDROP_S_DROP; }
+        if ((keys & button_) == 0) { return DRAGDROP_S_DROP; }
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE GiveFeedback(DWORD) override { return DRAGDROP_S_USEDEFAULTCURSORS; }
 
 private:
     std::atomic<ULONG> refs_{1};
+    DWORD              button_{MK_LBUTTON};
 };
 
 } // namespace
@@ -306,22 +352,36 @@ bool run_drag(const std::vector<std::string>& paths)
     }
     bool dropped = false;
     if (!ids.empty()) {
-        // child ids relative to the first item's parent; other applications (and Explorer) need a real parent folder to get CF_HDROP.
-        // Items living elsewhere (search results) are left out.
+        // check whether all items share one parent folder (fast path: SHCreateDataObject gives Explorer full CF_HDROP + shell metadata);
+        // otherwise bind an IShellItemArray across folders so drags from search results / unified Recycle Bin keep every item
         PIDLIST_ABSOLUTE parent = ::ILClone(ids.front());
         ::ILRemoveLastID(parent);
         std::vector<PCUITEMID_CHILD> items;
+        bool single_parent = true;
         for (PIDLIST_ABSOLUTE id : ids) {
             PIDLIST_ABSOLUTE p = ::ILClone(id);
             ::ILRemoveLastID(p);
             if (::ILIsEqual(p, parent) != FALSE) { items.push_back(::ILFindLastID(id)); }
+            else { single_parent = false; }
             ::ILFree(p);
         }
         ComPtr<IDataObject> data;
-        const HRESULT created = ::SHCreateDataObject(parent, static_cast<UINT>(items.size()), items.data(), nullptr, IID_PPV_ARGS(&data));
+        HRESULT created = E_FAIL;
+        if (single_parent) {
+            created = ::SHCreateDataObject(parent, static_cast<UINT>(items.size()), items.data(), nullptr, IID_PPV_ARGS(&data));
+        } else {
+            ComPtr<IShellItemArray> arr;
+            if (SUCCEEDED(::SHCreateShellItemArrayFromIDLists(static_cast<UINT>(ids.size()), const_cast<PCIDLIST_ABSOLUTE*>(ids.data()), &arr)) && arr != nullptr) {
+                created = arr->BindToHandler(nullptr, BHID_DataObject, IID_PPV_ARGS(&data));
+            }
+            if (FAILED(created)) {
+                created = ::SHCreateDataObject(parent, static_cast<UINT>(items.size()), items.data(), nullptr, IID_PPV_ARGS(&data));
+            }
+        }
         ::ILFree(parent);
         if (SUCCEEDED(created)) {
-            auto* source = new DropSource;
+            const DWORD btn = (::GetKeyState(VK_RBUTTON) & 0x8000) != 0 && (::GetKeyState(VK_LBUTTON) & 0x8000) == 0 ? MK_RBUTTON : MK_LBUTTON;
+            auto* source = new DropSource{btn};
             DWORD effect = DROPEFFECT_NONE;
             g_own_drag = paths;
             const HRESULT hr = ::DoDragDrop(data.Get(), source, DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, &effect);

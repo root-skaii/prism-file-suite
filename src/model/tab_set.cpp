@@ -15,6 +15,29 @@ Tab& TabSet::open(const std::string& path, bool activate)
     return t;
 }
 
+Tab& TabSet::attach(std::unique_ptr<Tab> tab, bool activate)
+{
+    tab->set_waker(wake_);
+    ++tab->generation;
+    const std::size_t at = tabs_.empty() ? 0 : active_ + 1;
+    tabs_.insert(tabs_.begin() + static_cast<std::ptrdiff_t>(at), std::move(tab));
+    if (activate || tabs_.size() == 1) { active_ = at; }
+    return *tabs_[at];
+}
+
+std::unique_ptr<Tab> TabSet::detach(std::size_t index)
+{
+    if (index >= tabs_.size()) { return nullptr; }
+    auto moved = std::move(tabs_[index]);
+    tabs_.erase(tabs_.begin() + static_cast<std::ptrdiff_t>(index));
+    if (tabs_.empty()) {
+        active_ = 0;
+    } else if (active_ > index || active_ >= tabs_.size()) {
+        active_ = active_ > 0 ? active_ - 1 : 0;
+    }
+    return moved;
+}
+
 Tab& TabSet::duplicate(std::size_t index)
 {
     return open(tabs_[index]->path());

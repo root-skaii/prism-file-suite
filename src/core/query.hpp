@@ -64,7 +64,8 @@ public:
     [[nodiscard]] bool uses_path() const noexcept { return uses_path_; }
 
     // `name` of a recursive result is a relative path; wildcards and words test the last component
-    [[nodiscard]] bool matches(const FileEntry& e) const noexcept;
+    [[nodiscard]] bool matches(const FileEntryView& e) const noexcept;
+    [[nodiscard]] bool matches(const FileEntry& e) const noexcept { return matches(e.view()); }
 
 private:
     std::string                          text_;

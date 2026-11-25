@@ -1,9 +1,12 @@
 #include "model/visit_log.hpp"
 
 #include "core/path.hpp"
+#include "core/text.hpp"
 #include "strata/config.hpp"
 
+#ifdef _WIN32
 #include <windows.h>
+#endif
 
 #include <algorithm>
 #include <format>
@@ -14,7 +17,11 @@ namespace {
 
 [[nodiscard]] bool same(std::string_view a, std::string_view b)
 {
+#ifdef _WIN32
     return a.size() == b.size() && ::CompareStringA(LOCALE_INVARIANT, NORM_IGNORECASE, a.data(), static_cast<int>(a.size()), b.data(), static_cast<int>(b.size())) == CSTR_EQUAL;
+#else
+    return a == b;
+#endif
 }
 
 } // namespace

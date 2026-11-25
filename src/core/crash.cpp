@@ -2,8 +2,12 @@
 
 #include "core/log.hpp"
 
+#ifdef _WIN32
 #include <windows.h>
 #include <dbghelp.h>
+#else
+#include <csignal>
+#endif
 
 #include <atomic>
 #include <csignal>
@@ -14,6 +18,7 @@
 
 namespace prism::core::crash {
 
+#ifdef _WIN32
 namespace {
 
 constexpr DWORD k_abort_code = 0xE0505246; // raised by abort() / purecall / invalid parameter so they reach the one handler
@@ -264,5 +269,11 @@ bool guarded(const char* what, void (*fn)(void*), void* context) noexcept
         return false;
     }
 }
+#else
+void install() {}
+void set_directory(const std::wstring&) {}
+bool guarded_window(const char*, void (*fn)(void*), void* context) noexcept { fn(context); return true; }
+bool guarded(const char*, void (*fn)(void*), void* context) noexcept { fn(context); return true; }
+#endif
 
 } // namespace prism::core::crash

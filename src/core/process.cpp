@@ -1,6 +1,14 @@
 #include "core/process.hpp"
 
+#include "core/text.hpp"
+
+#ifdef _WIN32
 #include <windows.h>
+#else
+#include <cstdio>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 #include <vector>
 
@@ -9,6 +17,7 @@ namespace prism::core {
 ProcessResult run_process(const std::wstring& command_line, const std::wstring& cwd, unsigned timeout_ms, const std::atomic<bool>* quit)
 {
     ProcessResult res;
+#ifdef _WIN32
     SECURITY_ATTRIBUTES sa{sizeof sa, nullptr, TRUE};
     HANDLE              read_end{}, write_end{};
     if (!::CreatePipe(&read_end, &write_end, &sa, 0)) { return res; }
@@ -61,6 +70,20 @@ ProcessResult run_process(const std::wstring& command_line, const std::wstring& 
     ::CloseHandle(pi.hThread);
     ::CloseHandle(pi.hProcess);
     ::CloseHandle(read_end);
+#else
+    (void)timeout_ms;
+    (void)quit;
+    std::string cmd = text::narrow(command_line);
+    if (!cwd.empty()) { cmd = "cd \"" + text::narrow(cwd) + "\" && " + cmd; }
+    cmd += " 2>&1";
+    FILE* pipe = ::popen(cmd.c_str(), "r");
+    if (pipe == nullptr) { return res; }
+    res.started = true;
+    char buf[4096];
+    while (const std::size_t n = std::fread(buf, 1, sizeof buf, pipe)) { res.output.append(buf, n); }
+    const int st = ::pclose(pipe);
+    res.exit_code = WIFEXITED(st) ? static_cast<unsigned>(WEXITSTATUS(st)) : 1u;
+#endif
     return res;
 }
 

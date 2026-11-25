@@ -3,24 +3,36 @@
 #include "core/recycle.hpp"
 #include "core/text.hpp"
 
+#ifdef _WIN32
 #include <windows.h>
+#endif
 
 #include <string>
 
 namespace prism::core {
 
+#ifdef _WIN32
+
 namespace {
 
-constexpr const wchar_t* k_classes[] = {L"Directory", L"Drive"};
+constexpr const wchar_t* k_classes[] = {L"Directory", L"Drive", L"Folder"};
 constexpr const wchar_t* k_bin_class = L"CLSID\\{645FF040-5081-101B-9F08-00AA002F954E}"; // the desktop Recycle Bin
 
 [[nodiscard]] std::wstring shell_key(const wchar_t* cls) { return std::wstring{L"Software\\Classes\\"} + cls + L"\\shell"; }
 
 [[nodiscard]] std::wstring exe_path()
 {
-    wchar_t buf[MAX_PATH]{};
-    const DWORD n = ::GetModuleFileNameW(nullptr, buf, MAX_PATH);
-    return n > 0 && n < MAX_PATH ? std::wstring{buf, n} : std::wstring{};
+    std::wstring buf(MAX_PATH, L'\0');
+    for (;;) {
+        const DWORD n = ::GetModuleFileNameW(nullptr, buf.data(), static_cast<DWORD>(buf.size()));
+        if (n == 0) { return {}; }
+        if (n < buf.size()) {
+            buf.resize(n);
+            return buf;
+        }
+        if (buf.size() >= 32768) { return {}; }
+        buf.resize(buf.size() * 2);
+    }
 }
 
 // the command line this exe would be registered with
@@ -119,18 +131,26 @@ bool set_recycle_bin_handler(bool on)
         unregister_class(k_bin_class);
         return true;
     }
-    const std::string bin = recycle::folder_path();
-    if (exe_path().empty() || bin.empty()) { return false; }
-    return register_class(k_bin_class, L"\"" + exe_path() + L"\" \"" + text::widen(bin) + L"\"");
+    const std::wstring exe = exe_path();
+    if (exe.empty()) { return false; }
+    // open PrismFS's unified Recycle Bin view so deleted items from every drive are shown
+    return register_class(k_bin_class, L"\"" + exe + L"\" \"" + text::widen(recycle::all) + L"\"");
 }
 
 void refresh_default_manager()
 {
     if (default_manager_active() && read_default(shell_key(k_classes[0]) + L"\\open\\command") != command_line()) { (void)set_default_manager(true); }
     if (recycle_bin_handler_active()) {
-        const std::string bin = recycle::folder_path();
-        if (!bin.empty() && read_default(shell_key(k_bin_class) + L"\\open\\command") != L"\"" + exe_path() + L"\" \"" + text::widen(bin) + L"\"") { (void)set_recycle_bin_handler(true); }
+        const std::wstring want = L"\"" + exe_path() + L"\" \"" + text::widen(recycle::all) + L"\"";
+        if (!exe_path().empty() && read_default(shell_key(k_bin_class) + L"\\open\\command") != want) { (void)set_recycle_bin_handler(true); }
     }
 }
+#else
+bool default_manager_active() { return false; }
+bool set_default_manager(bool) { return false; }
+bool recycle_bin_handler_active() { return false; }
+bool set_recycle_bin_handler(bool) { return false; }
+void refresh_default_manager() {}
+#endif
 
 } // namespace prism::core

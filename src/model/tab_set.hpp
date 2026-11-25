@@ -13,6 +13,8 @@ public:
     explicit TabSet(std::function<void()> wake) : wake_{std::move(wake)} {}
 
     Tab& open(const std::string& path, bool activate = true);
+    Tab& attach(std::unique_ptr<Tab> tab, bool activate = true); // adopts an existing tab (history, scroll, listing)
+    [[nodiscard]] std::unique_ptr<Tab> detach(std::size_t index); // removes and returns the tab (even if it was the last)
     Tab& duplicate(std::size_t index);
     // false when it was the last tab (the caller closes the window)
     bool close(std::size_t index);

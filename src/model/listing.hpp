@@ -45,6 +45,10 @@ public:
     void replace_entries(std::vector<core::FileEntry>&& fresh);
     // takes entries out at once (a delete just started); a later read of the folder corrects it if the delete failed
     void remove_names(const std::unordered_set<std::string>& names);
+    // patches a single added / modified entry in place (avoids re-enumerating and re-sorting 200k-file folders)
+    bool upsert_entry(core::FileEntry&& entry);
+    // removes one entry by name (case-insensitive) in O(N) without full rebuild
+    bool remove_name(std::string_view name);
     [[nodiscard]] bool finished() const noexcept { return finished_; }
 
     void set_sort(SortSpec s);
@@ -83,6 +87,7 @@ public:
     void toggle(std::size_t row);
     void select_range(std::size_t a, std::size_t b, bool keep_existing); // inclusive, either order
     void select_all();
+    void invert_selection();
     void clear_selection();
     void set_selected(std::size_t row, bool on);
 

@@ -73,7 +73,7 @@ void TitleBar::frame(Painter& p, const rect& area)
     ui.same_line();
 
     const vec2  origin = strip.bounds.min;
-    const float y0     = origin.y + h - m.tab_height - 4.0f;
+    const float y0     = origin.y + h - m.tab_height;
     const float y1     = y0 + m.tab_height;
     const vec2  mp     = ui.mouse_pos();
     const bool  in_band = strip.hovered && mp.y >= y0 && mp.y < y1;

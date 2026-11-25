@@ -40,6 +40,6 @@ struct Record {
 // drops the record of an item that was deleted from the bin by other means
 void forget(const std::string& item);
 // empties one drive's bin (`drive_root` "D:\") or, when empty, every drive's, through the shell (it asks first). blocks: worker threads only
-[[nodiscard]] bool empty(const std::string& drive_root = {});
+[[nodiscard]] bool empty(const std::string& drive_root = {}, void* owner_hwnd = nullptr);
 
 } // namespace prism::core::recycle

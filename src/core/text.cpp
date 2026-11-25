@@ -1,6 +1,10 @@
 #include "core/text.hpp"
 
+#ifdef _WIN32
 #include <windows.h>
+#else
+#include <cwctype>
+#endif
 
 #include "strata/font.hpp"
 
@@ -12,11 +16,17 @@ std::wstring widen(std::string_view s)
 {
     std::wstring w;
     if (s.empty()) { return w; }
+#ifdef _WIN32
     const int n = ::MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
     if (n > 0) {
         w.resize(static_cast<std::size_t>(n));
         ::MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), w.data(), n);
     }
+#else
+    std::string_view cur = s;
+    w.reserve(s.size());
+    while (!cur.empty()) { w.push_back(static_cast<wchar_t>(strata::decode_utf8(cur))); }
+#endif
     return w;
 }
 
@@ -24,11 +34,22 @@ std::string narrow(std::wstring_view w)
 {
     std::string s;
     if (w.empty()) { return s; }
+#ifdef _WIN32
     const int n = ::WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), nullptr, 0, nullptr, nullptr);
     if (n > 0) {
         s.resize(static_cast<std::size_t>(n));
         ::WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), s.data(), n, nullptr, nullptr);
     }
+#else
+    s.reserve(w.size());
+    for (const wchar_t wc : w) {
+        const auto cp = static_cast<std::uint32_t>(wc);
+        if (cp <= 0x7f) { s.push_back(static_cast<char>(cp)); }
+        else if (cp <= 0x7ff) { s.push_back(static_cast<char>(0xc0 | (cp >> 6))); s.push_back(static_cast<char>(0x80 | (cp & 0x3f))); }
+        else if (cp <= 0xffff) { s.push_back(static_cast<char>(0xe0 | (cp >> 12))); s.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3f))); s.push_back(static_cast<char>(0x80 | (cp & 0x3f))); }
+        else { s.push_back(static_cast<char>(0xf0 | (cp >> 18))); s.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3f))); s.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3f))); s.push_back(static_cast<char>(0x80 | (cp & 0x3f))); }
+    }
+#endif
     return s;
 }
 
@@ -39,7 +60,11 @@ namespace {
 [[nodiscard]] char32_t fold(char32_t c) noexcept
 {
     if (c < 0x80) { return (c >= 'A' && c <= 'Z') ? c + 32 : c; }
+#ifdef _WIN32
     if (c < 0x10000) { return static_cast<char32_t>(reinterpret_cast<std::uintptr_t>(::CharLowerW(reinterpret_cast<wchar_t*>(static_cast<std::uintptr_t>(c))))); }
+#else
+    return static_cast<char32_t>(std::towlower(static_cast<wint_t>(c)));
+#endif
     return c;
 }
 
@@ -128,6 +153,17 @@ std::string lower_ascii(std::string_view s)
         if (c >= 'A' && c <= 'Z') { c = static_cast<char>(c + 32); }
     }
     return out;
+}
+
+bool starts_with_icase(std::string_view text, std::string_view prefix) noexcept
+{
+    while (!prefix.empty()) {
+        if (text.empty()) { return false; }
+        const char32_t ct = fold(strata::decode_utf8(text));
+        const char32_t cp = fold(strata::decode_utf8(prefix));
+        if (ct != cp) { return false; }
+    }
+    return true;
 }
 
 } // namespace prism::core::text

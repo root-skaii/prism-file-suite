@@ -3,14 +3,23 @@
 #include "core/path.hpp"
 #include "core/text.hpp"
 
+#ifdef _WIN32
 #include <windows.h>
 #include <winioctl.h>
+#else
+#include <cstring>
+#include <errno.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 #include <cstring>
 #include <format>
 #include <vector>
 
 namespace prism::core {
+
+#ifdef _WIN32
 
 namespace {
 
@@ -107,5 +116,23 @@ bool remove_link(const std::string& link)
     }
     return ::DeleteFileW(w.c_str()) != FALSE;
 }
+#else
+std::string make_link(LinkKind kind, const std::string& target, bool target_is_dir, const std::string& link)
+{
+    if (path::exists(link)) { return "There is already something called " + path::leaf(link); }
+    if (kind == LinkKind::hard) {
+        if (target_is_dir) { return "A hard link needs a file"; }
+        return ::link(target.c_str(), link.c_str()) == 0 ? std::string{} : std::string{std::strerror(errno)};
+    }
+    return ::symlink(target.c_str(), link.c_str()) == 0 ? std::string{} : std::string{std::strerror(errno)};
+}
+
+bool remove_link(const std::string& link)
+{
+    struct stat st{};
+    if (::lstat(link.c_str(), &st) != 0 || !S_ISLNK(st.st_mode)) { return false; }
+    return ::unlink(link.c_str()) == 0;
+}
+#endif
 
 } // namespace prism::core

@@ -21,6 +21,14 @@ void apply_ui_strings(strata::context& ui)
     s.select_none      = tr("clear");
     s.press_a_key      = tr("press a key...");
     s.unbound          = tr("None");
+    s.find             = tr("Find");
+    s.replace_with     = tr("Replace with");
+    s.replace          = tr("Replace");
+    s.replace_all      = tr("All");
+    s.match_case       = tr("match case");
+    s.show_replace     = tr("replace");
+    s.type_to_search   = tr("type to search");
+    s.no_matches       = tr("no matches");
     s.action           = tr("Action");
     s.key              = tr("Key");
     s.reset            = tr("reset");

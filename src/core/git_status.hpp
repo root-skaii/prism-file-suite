@@ -23,12 +23,16 @@ namespace prism::core {
 
 // one repository's state. paths are relative to `root`, lower case, backslashes
 struct GitRepo {
+    struct SvHash {
+        using is_transparent = void;
+        std::size_t operator()(std::string_view s) const noexcept { return std::hash<std::string_view>{}(s); }
+    };
     std::string root;     // the working tree, normalized ("C:\\code\\prism")
     std::string branch;   // "main", "HEAD (detached)"
     int         ahead{}, behind{};
-    std::unordered_map<std::string, char> files;      // path -> code
-    std::unordered_map<std::string, char> dirs;       // a folder with changes below it -> the strongest code
-    std::unordered_set<std::string>       untracked_dirs;
+    std::unordered_map<std::string, char, SvHash, std::equal_to<>> files;      // path -> code
+    std::unordered_map<std::string, char, SvHash, std::equal_to<>> dirs;       // a folder with changes below it -> the strongest code
+    std::unordered_set<std::string, SvHash, std::equal_to<>>       untracked_dirs;
 
     // 'M' modified, 'A' added, 'D' deleted, 'R' renamed, '?' untracked, '!' conflict, 0 clean
     [[nodiscard]] char code_for(std::string_view rel, bool is_dir) const;

@@ -60,9 +60,9 @@ private:
     std::mutex              lock_;
     std::condition_variable cv_;
     std::deque<Request>     queue_;     // newest first: what just scrolled into view loads first
-    std::vector<Result>     results_;
+    std::deque<Result>      results_;
     bool                    quit_{};
-    std::thread             thread_;
+    std::vector<std::thread> workers_;
 };
 
 } // namespace prism::platform

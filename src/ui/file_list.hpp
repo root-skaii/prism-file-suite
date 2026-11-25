@@ -37,6 +37,8 @@ public:
     [[nodiscard]] bool accepts_drop(const core::FileEntry& e) const;
     void set_drop_point(std::optional<strata::vec2> p) { drop_point_ = p; }
     [[nodiscard]] bool contains(strata::vec2 p) const { return area_.contains(p); }
+    // true while the user is mid-prefix in type-to-find (so Space / Backspace stay in type-ahead instead of Quick Look / Back)
+    [[nodiscard]] bool typing_find() const noexcept { return !find_buffer_.empty() && find_age_ < 1.0; }
 
 private:
     enum Col : int { col_modified, col_type, col_size, col_count };
@@ -62,6 +64,7 @@ private:
 
     void open_row(model::Tab& tab, std::size_t row);
     void handle_keys(strata::context& ui, model::Tab& tab, const FrameInput& in, const Geo& g, float viewport_h);
+    void draw_recycle_bar(Painter& p, model::Tab& tab, float width, float height);
     void draw_header(Painter& p, model::Listing& listing, const std::string& folder, float width, float height, float body_w);
     void draw_details(Painter& p, model::Tab& tab, const Geo& g, strata::vec2 origin, float viewport_top, float viewport_bottom, int hover, float enter);
     void draw_grid(Painter& p, model::Tab& tab, const Geo& g, strata::vec2 origin, float viewport_top, float viewport_bottom, int hover, float enter);
@@ -79,6 +82,7 @@ private:
     void to_other_pane(model::Tab& tab, bool move);
     void begin_rename(strata::context& ui, model::Tab& tab, std::size_t row);
     void draw_rename(Painter& p, model::Tab& tab, const Geo& g, strata::vec2 origin);
+    void sync_cut_clipboard();
     [[nodiscard]] bool is_cut(const model::Tab& tab, std::string_view name) const;
 
     Env&  env_;
@@ -105,9 +109,11 @@ private:
     // type-to-find
     std::string   find_buffer_;
     double        find_age_{};
-    // cut items stay listed but dimmed until pasted
-    std::vector<std::string> cut_names_;
-    std::string              cut_dir_;
+    // cut items stay listed but dimmed, synced with the OS clipboard across panes, windows and Explorer
+    unsigned long            clip_seq_{~0ul};
+    std::string              cut_dir_lower_;   // cached common parent folder (empty if mixed)
+    std::vector<std::string> cut_names_lower_; // leaf names when all cut items share `cut_dir_lower_`
+    std::vector<std::string> cut_paths_;       // full paths fallback when cut items span multiple folders
     // rename field
     bool         rename_active_{};
     std::string  rename_path_;
@@ -120,7 +126,8 @@ private:
     // drag
     bool                        drag_armed_{};
     strata::vec2                drag_origin_{};
-    int                         collapse_row_{-1}; // a press on part of a multi-selection collapses it on release
+    std::string                 collapse_name_; // a press on part of a multi-selection collapses it on release
+    std::string                 band_click_name_; // unselected row clicked in Details blank column: selects on release if no marquee drag
     // selection rectangle (content space, so it stays put while the list scrolls)
     bool                     band_armed_{};
     bool                     band_active_{};
@@ -128,7 +135,12 @@ private:
     strata::vec2             band_anchor_{};
     std::vector<std::size_t> band_base_;   // what was selected when it began (kept with Ctrl)
     std::optional<strata::vec2> drop_point_;
+    std::string                 spring_target_; // spring-loaded folder hover during drag
+    double                      spring_age_{};
     std::string                 click_name_, prev_click_; // the items the last two left clicks landed on
+    unsigned long long          click_ms_{};              // timestamp of previous click for slow double-click rename
+    bool                        slow_rename_armed_{};
+    std::string                 slow_rename_name_;
 };
 
 } // namespace prism::ui

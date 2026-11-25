@@ -8,6 +8,8 @@
 #include "core/duplicates.hpp"
 #include "core/empty_folders.hpp"
 #include "core/file_index.hpp"
+#include "core/file_info.hpp"
+#include "core/rclone.hpp"
 #include "core/i18n.hpp"
 #include "core/treemap.hpp"
 #include "core/folder_sizes.hpp"
@@ -24,6 +26,8 @@
 #include "core/default_manager.hpp"
 #include "core/drive_watcher.hpp"
 #include "core/shell_menu.hpp"
+#include "core/shell_ops.hpp"
+#include "core/syntax.hpp"
 #include "core/terminal.hpp"
 #include "core/text.hpp"
 #include "core/virtual_files.hpp"
@@ -35,13 +39,20 @@
 #include "model/visit_log.hpp"
 #include "strata/config.hpp"
 #include "model/tab.hpp"
+#include "model/tab_set.hpp"
 #include "model/undo_stack.hpp"
 
+#ifdef _WIN32
 #include <windows.h>
 #include <objbase.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #include <shlwapi.h>
+#else
+#include <cstdlib>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 #include <atomic>
 #include <chrono>
@@ -54,6 +65,8 @@ using namespace prism;
 
 static int g_fail = 0;
 #define CHECK(cond) do { if (!(cond)) { std::printf("FAIL %s:%d  %s\n", __FILE__, __LINE__, #cond); ++g_fail; } } while (0)
+
+#ifdef _WIN32
 
 static void write_file(const std::string& p, const char* data)
 {
@@ -1443,6 +1456,433 @@ static void test_terminal()
     CHECK(!core::terminal::from_program(L"code"));
 }
 
+static void test_relaunch_and_regressions()
+{
+    // 1. admin/non-admin relaunch preserves every tab (including drive roots and spaces), active tab and right pane
+    {
+        core::shell::RelaunchState st;
+        st.tabs       = {"C:\\", "D:\\My Folder\\Sub", "E:\\"};
+        st.active_tab = 1;
+        st.right      = "F:\\Split Folder";
+        const std::wstring cmd = L"\"C:\\Program Files\\PrismFS\\prismfs.exe\" " + core::shell::relaunch_arguments(st);
+        int argc = 0;
+        LPWSTR* argv = ::CommandLineToArgvW(cmd.c_str(), &argc);
+        CHECK(argv != nullptr);
+        std::vector<std::string> tabs;
+        int active = -1;
+        std::string right;
+        for (int i = 1; i < argc; ++i) {
+            const std::wstring_view a = argv[i];
+            if (a == L"--tab" && i + 1 < argc) { tabs.push_back(core::text::narrow(argv[++i])); }
+            else if (a == L"--active-tab" && i + 1 < argc) { active = _wtoi(argv[++i]); }
+            else if (a == L"--right" && i + 1 < argc) { right = core::text::narrow(argv[++i]); }
+        }
+        ::LocalFree(argv);
+        CHECK(tabs.size() == 3);
+        if (tabs.size() == 3) {
+            CHECK(tabs[0] == "C:\\");
+            CHECK(tabs[1] == "D:\\My Folder\\Sub");
+            CHECK(tabs[2] == "E:\\");
+        }
+        CHECK(active == 1);
+        CHECK(right == "F:\\Split Folder");
+    }
+
+    // 2. UNC path handling (root, parent, leaf, segments) and long_wide extended prefix
+    {
+        CHECK(core::path::is_root("\\\\server\\share"));
+        CHECK(core::path::is_root("\\\\server\\share\\"));
+        CHECK(!core::path::is_root("\\\\server\\share\\dir"));
+        CHECK(core::path::parent("\\\\server\\share").empty());
+        CHECK(core::path::parent("\\\\server\\share\\dir") == "\\\\server\\share");
+        CHECK(core::path::leaf("\\\\server\\share") == "\\\\server\\share");
+        CHECK(core::path::leaf("\\\\server\\share\\dir") == "dir");
+        const auto segs = core::path::segments("\\\\server\\share\\a\\b");
+        CHECK(segs.size() == 3);
+        if (segs.size() == 3) {
+            CHECK(segs[0].name == "\\\\server\\share" && segs[0].path == "\\\\server\\share");
+            CHECK(segs[1].name == "a" && segs[1].path == "\\\\server\\share\\a");
+            CHECK(segs[2].name == "b" && segs[2].path == "\\\\server\\share\\a\\b");
+        }
+        const std::string long_local = "C:\\" + std::string(260, 'a');
+        CHECK(core::path::long_wide(long_local).starts_with(L"\\\\?\\C:\\"));
+        const std::string long_unc = "\\\\srv\\shr\\" + std::string(260, 'b');
+        CHECK(core::path::long_wide(long_unc).starts_with(L"\\\\?\\UNC\\srv\\shr\\"));
+    }
+
+    // 3. Listing incremental O(1) selection and O(N) invert_selection (exact counts & bytes)
+    {
+        model::Listing L;
+        std::vector<core::FileEntry> entries;
+        entries.reserve(20000);
+        for (int i = 0; i < 20000; ++i) {
+            core::FileEntry e;
+            e.name       = "file_" + std::to_string(i) + ".bin";
+            e.size       = static_cast<std::uint64_t>(i + 1);
+            e.ext_offset = static_cast<std::uint16_t>(e.name.size() - 3);
+            entries.push_back(std::move(e));
+        }
+        L.append(std::move(entries));
+        L.finish();
+
+        L.select_only(0);
+        CHECK(L.selected_count() == 1 && L.selected_bytes() == L.at(0).size);
+        L.toggle(1);
+        CHECK(L.selected_count() == 2 && L.selected_bytes() == L.at(0).size + L.at(1).size);
+        L.set_selected(1, true); // idempotent
+        CHECK(L.selected_count() == 2);
+        L.set_selected(0, false);
+        CHECK(L.selected_count() == 1 && L.selected_bytes() == L.at(1).size);
+        L.select_range(0, 99, false);
+        CHECK(L.selected_count() == 100);
+        L.invert_selection();
+        CHECK(L.selected_count() == 19900);
+        L.invert_selection();
+        CHECK(L.selected_count() == 100);
+    }
+
+    // 4. Compact FileEntry size & RecycleInfo out-of-line storage
+    {
+        CHECK(sizeof(core::FileEntry) <= 80);
+        core::FileEntry e;
+        e.name = "$R12345.txt";
+        CHECK(!e.has_display_override());
+        CHECK(e.display() == "$R12345.txt");
+        e.set_recycle("notes.txt", "C:\\Docs\\notes.txt");
+        CHECK(e.has_display_override());
+        CHECK(e.display() == "notes.txt");
+        CHECK(e.original_path() == "C:\\Docs\\notes.txt");
+        core::FileEntry copy = e;
+        CHECK(copy.display() == "notes.txt" && copy.original_path() == "C:\\Docs\\notes.txt");
+    }
+
+    // 5. FolderWatcher does not block or spin if watched folder is deleted
+    {
+        wchar_t tmp[MAX_PATH]{};
+        ::GetTempPathW(MAX_PATH, tmp);
+        const std::string dir = core::text::narrow(tmp) + "pfs_watch_test_" + std::to_string(::GetCurrentProcessId());
+        ::CreateDirectoryW(core::text::widen(dir).c_str(), nullptr);
+        std::atomic<int> wakes{0};
+        {
+            core::FolderWatcher w{[&] { wakes.fetch_add(1, std::memory_order_relaxed); }};
+            w.watch(dir);
+            std::this_thread::sleep_for(std::chrono::milliseconds{30});
+            write_file(dir + "\\a.txt", "hi");
+            std::this_thread::sleep_for(std::chrono::milliseconds{40});
+            ::DeleteFileW(core::text::widen(dir + "\\a.txt").c_str());
+            ::RemoveDirectoryW(core::text::widen(dir).c_str());
+            const int before = wakes.load();
+            std::this_thread::sleep_for(std::chrono::milliseconds{60});
+            CHECK(wakes.load() - before < 20); // must not spin infinitely
+        }
+        ::RemoveDirectoryW(core::text::widen(dir).c_str());
+    }
+}
+
+static void test_phase4()
+{
+    wchar_t tmp[MAX_PATH]{};
+    ::GetTempPathW(MAX_PATH, tmp);
+    const std::string base = core::text::narrow(tmp) + "pfs_phase4_" + std::to_string(::GetCurrentProcessId());
+    ::CreateDirectoryW(core::text::widen(base).c_str(), nullptr);
+
+    // 1. Persistent FileIndex cache save/load + corruption rejection
+    {
+        write_file(base + "\\alpha.cpp", "int main(){}");
+        write_file(base + "\\beta.txt", "hello world");
+        const std::string cache = base + "\\index.bin";
+        {
+            core::FileIndex idx{[] {}};
+            idx.start({base}, true);
+            for (int i = 0; i < 200 && idx.building(); ++i) { std::this_thread::sleep_for(std::chrono::milliseconds{10}); }
+            CHECK(idx.entries() >= 3);
+            CHECK(idx.save_to(cache));
+        }
+        {
+            core::FileIndex idx2{[] {}};
+            CHECK(idx2.load_from(cache));
+            CHECK(idx2.entries() >= 3);
+            CHECK(idx2.age_seconds() < 60.0);
+            idx2.search(core::Query::parse("alpha"));
+            for (int i = 0; i < 200 && idx2.searching(); ++i) { std::this_thread::sleep_for(std::chrono::milliseconds{5}); }
+            const auto r = idx2.result();
+            CHECK(r != nullptr && r->total == 1);
+        }
+        // corrupted file must fail cleanly
+        write_file(base + "\\bad_index.bin", "NOT_A_VALID_INDEX_FILE");
+        core::FileIndex idx3{[] {}};
+        CHECK(!idx3.load_from(base + "\\bad_index.bin"));
+    }
+
+    // 2. Cross-window TabSet::detach / attach preserves history, scroll, and listing
+    {
+        model::TabSet a{[] {}}, b{[] {}};
+        model::Tab& t1 = a.open(base);
+        t1.scroll_y    = 142.5f;
+        (void)a.open("C:\\", false);
+        CHECK(a.size() == 2);
+        auto moved = a.detach(0);
+        CHECK(moved != nullptr && a.size() == 1);
+        model::Tab& adopted = b.attach(std::move(moved), true);
+        CHECK(b.size() == 1);
+        CHECK(adopted.path() == base);
+        CHECK(adopted.scroll_y == 142.5f);
+    }
+
+    // 3. Syntax highlighter & hex dump formatter
+    {
+        CHECK(core::syntax_for_extension("cpp") == core::SyntaxLang::c_like);
+        CHECK(core::syntax_for_extension("py") == core::SyntaxLang::hash);
+        CHECK(core::syntax_for_extension("json") == core::SyntaxLang::json);
+        CHECK(core::syntax_for_extension("xml") == core::SyntaxLang::markup);
+
+        const auto hl = core::highlight_lines({"#include <vector>", "/* block", "comment */ int x = 42; // end", "const char* s = \"hi\";"}, core::SyntaxLang::c_like);
+        CHECK(hl.size() == 4);
+        CHECK(!hl[0].spans.empty() && hl[0].spans[0].kind == core::TokenKind::preproc);
+        CHECK(!hl[1].spans.empty() && hl[1].spans[0].kind == core::TokenKind::comment);
+        CHECK(!hl[2].spans.empty() && hl[2].spans[0].kind == core::TokenKind::comment);
+        bool has_num = false, has_str = false;
+        for (const auto& sp : hl[2].spans) { if (sp.kind == core::TokenKind::number) { has_num = true; } }
+        for (const auto& sp : hl[3].spans) { if (sp.kind == core::TokenKind::string) { has_str = true; } }
+        CHECK(has_num && has_str);
+
+        const unsigned char bytes[] = {'M', 'Z', 0x90, 0x00, 0x03, 0x00};
+        const auto hex = core::format_hex_dump(bytes, 4);
+        CHECK(hex.size() == 1);
+        CHECK(hex[0].starts_with("00000000  4D 5A 90 00"));
+        CHECK(hex[0].find("|MZ....|") != std::string::npos);
+    }
+
+    // 4. Incremental Listing::upsert_entry / remove_name & live ReadDirectoryChangesW deltas
+    {
+        model::Listing L;
+        auto mk = [](std::string n, std::uint64_t sz) {
+            core::FileEntry e;
+            e.name       = std::move(n);
+            e.size       = sz;
+            e.ext_offset = static_cast<std::uint16_t>(e.name.size());
+            return e;
+        };
+        L.append({mk("a.txt", 10), mk("c.txt", 30)});
+        L.finish();
+        L.select_only(1); // "c.txt"
+        CHECK(L.selected_bytes() == 30);
+        // insert in sorted middle
+        CHECK(L.upsert_entry(mk("b.txt", 20)));
+        CHECK(L.rows() == 3 && L.at(0).name == "a.txt" && L.at(1).name == "b.txt" && L.at(2).name == "c.txt");
+        CHECK(L.selected(2) && L.selected_bytes() == 30);
+        // update c.txt size in place (keeps selection, updates selected_bytes)
+        CHECK(L.upsert_entry(mk("c.txt", 99)));
+        CHECK(L.rows() == 3 && L.selected(2) && L.selected_bytes() == 99);
+        // remove b.txt
+        CHECK(L.remove_name("b.txt"));
+        CHECK(L.rows() == 2 && L.at(0).name == "a.txt" && L.at(1).name == "c.txt");
+        CHECK(L.selected(1) && L.selected_bytes() == 99);
+
+        // live watcher delta delivery
+        const std::string wdir = base + "\\watch";
+        ::CreateDirectoryW(core::text::widen(wdir).c_str(), nullptr);
+        std::atomic<int> wakes{0};
+        core::FolderWatcher fw{[&] { wakes.fetch_add(1, std::memory_order_relaxed); }};
+        fw.watch(wdir);
+        std::this_thread::sleep_for(std::chrono::milliseconds{40});
+        write_file(wdir + "\\live.txt", "12345");
+        bool saw_upsert = false;
+        for (int i = 0; i < 60 && !saw_upsert; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds{15});
+            const core::FolderChanges fc = fw.take_changes();
+            for (const auto& d : fc.deltas) {
+                if (d.kind == core::FolderDelta::Kind::upsert && d.name == "live.txt" && d.entry.size == 5) { saw_upsert = true; }
+            }
+        }
+        CHECK(saw_upsert);
+        ::DeleteFileW(core::text::widen(wdir + "\\live.txt").c_str());
+        bool saw_remove = false;
+        for (int i = 0; i < 60 && !saw_remove; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds{15});
+            const core::FolderChanges fc = fw.take_changes();
+            for (const auto& d : fc.deltas) {
+                if (d.kind == core::FolderDelta::Kind::remove && d.name == "live.txt") { saw_remove = true; }
+            }
+        }
+        CHECK(saw_remove);
+        ::RemoveDirectoryW(core::text::widen(wdir).c_str());
+    }
+
+    ::DeleteFileW(core::text::widen(base + "\\alpha.cpp").c_str());
+    ::DeleteFileW(core::text::widen(base + "\\beta.txt").c_str());
+    ::DeleteFileW(core::text::widen(base + "\\index.bin").c_str());
+    ::DeleteFileW(core::text::widen(base + "\\bad_index.bin").c_str());
+    ::RemoveDirectoryW(core::text::widen(base).c_str());
+}
+
+static void test_explorer_upgrades()
+{
+    // 1. cloud reparse tags vs filesystem links
+    CHECK(core::path::is_link_reparse_tag(IO_REPARSE_TAG_SYMLINK));
+    CHECK(core::path::is_link_reparse_tag(IO_REPARSE_TAG_MOUNT_POINT));
+    CHECK(!core::path::is_link_reparse_tag(0x9000001Au)); // IO_REPARSE_TAG_CLOUD
+    CHECK(!core::path::is_link_reparse_tag(0x9000101Au)); // IO_REPARSE_TAG_CLOUD_1
+
+    // 2. path leaf trailing slash + resolve_input (%ENV%, quotes, relative)
+    CHECK(core::path::leaf("C:\\foo\\") == "foo");
+    CHECK(core::path::leaf("C:\\") == "C:\\");
+    const std::string resolved_tmp = core::path::resolve_input("\"%TEMP%\"");
+    CHECK(!resolved_tmp.empty() && resolved_tmp.find('%') == std::string::npos && core::path::is_directory(resolved_tmp));
+    const std::string resolved_dot = core::path::resolve_input(".");
+    CHECK(resolved_dot.size() >= 3 && resolved_dot[1] == ':');
+
+    // 3. Unicode case-insensitive prefix matching
+    CHECK(core::text::starts_with_icase("Привет мир", "прив"));
+    CHECK(core::text::starts_with_icase("Überraschung", "üb"));
+    CHECK(!core::text::starts_with_icase("Привет", "пока"));
+
+    // 4. Recycle Bin Original location sorting (SortKey::type sorts by parent of original_path)
+    {
+        model::Listing L;
+        std::vector<core::FileEntry> items;
+        core::FileEntry a, b;
+        a.name = "$R1.png"; a.kind = core::FileKind::image; a.set_recycle("photo.png", "Z:\\zeta\\photo.png");
+        b.name = "$R2.txt"; b.kind = core::FileKind::text;  b.set_recycle("notes.txt", "A:\\alpha\\notes.txt");
+        items.push_back(std::move(a));
+        items.push_back(std::move(b));
+        L.append(std::move(items));
+        L.finish();
+        L.set_sort({model::SortKey::type, true});
+        CHECK(L.rows() == 2 && L.at(0).name == "$R2.txt" && L.at(1).name == "$R1.png");
+    }
+
+    // 5. Rich FileInfo: image resolution via WIC, drive capacity, MOTW detection + unblock, async FileInfoJob
+    const std::string dir = make_temp_dir();
+    ::CreateDirectoryW(core::text::widen(dir).c_str(), nullptr);
+    // write a minimal valid 2x3 24-bit BMP (54-byte header + 3 rows of 8 padded bytes = 78 bytes)
+    const std::string bmp_path = core::path::join(dir, "sample.bmp");
+    {
+        unsigned char bmp[78]{};
+        bmp[0] = 'B'; bmp[1] = 'M';
+        bmp[2] = 78;  bmp[10] = 54;
+        bmp[14] = 40; // BITMAPINFOHEADER
+        bmp[18] = 2;  // width = 2
+        bmp[22] = 3;  // height = 3
+        bmp[26] = 1;  // planes
+        bmp[28] = 24; // 24 bpp
+        std::ofstream out(core::text::widen(bmp_path), std::ios::binary);
+        out.write(reinterpret_cast<const char*>(bmp), sizeof bmp);
+    }
+    const core::FileInfo img_info = core::query_file_info(bmp_path);
+    CHECK(img_info.exists && img_info.img_width == 2 && img_info.img_height == 3 && img_info.img_bpp == 24);
+    CHECK(!img_info.meta_groups.empty() && img_info.meta_groups.front().title == "Image");
+    CHECK(img_info.media_summary.find("2 \xc3\x97 3") != std::string::npos);
+
+    // drive root info
+    const core::FileInfo drv = core::query_file_info("C:\\");
+    CHECK(drv.exists && drv.is_drive && drv.drive_total > 0);
+
+    // MOTW Zone.Identifier detection & unblock
+    const std::string dl_path = core::path::join(dir, "downloaded.txt");
+    { std::ofstream(core::text::widen(dl_path), std::ios::binary) << "hello"; }
+    {
+        const std::wstring ads = core::text::widen(dl_path) + L":Zone.Identifier";
+        HANDLE h = ::CreateFileW(ads.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (h != INVALID_HANDLE_VALUE) {
+            const char data[] = "[ZoneTransfer]\r\nZoneId=3\r\nHostUrl=https://example.com/file.zip\r\n";
+            DWORD written = 0;
+            ::WriteFile(h, data, sizeof(data) - 1, &written, nullptr);
+            ::CloseHandle(h);
+            const core::FileInfo blocked = core::query_file_info(dl_path);
+            CHECK(blocked.motw_blocked && blocked.motw_zone == 3 && blocked.motw_host == "https://example.com/file.zip");
+            CHECK(core::unblock_file(dl_path));
+            const core::FileInfo unblocked = core::query_file_info(dl_path);
+            CHECK(!unblocked.motw_blocked);
+        }
+    }
+
+    // async FileInfoJob
+    {
+        core::FileInfoJob job;
+        std::atomic<bool> woken{false};
+        job.start({bmp_path, dl_path}, [&] { woken.store(true); });
+        for (int i = 0; i < 200 && !job.ready(); ++i) { std::this_thread::sleep_for(std::chrono::milliseconds{10}); }
+        CHECK(job.ready() && woken.load());
+        const auto res = job.take();
+        CHECK(res.size() == 2 && res[0].img_width == 2 && res[1].exists);
+    }
+
+    ::DeleteFileW(core::text::widen(bmp_path).c_str());
+    ::DeleteFileW(core::text::widen(dl_path).c_str());
+
+    // UNC server root detection
+    CHECK(core::path::is_unc_server("\\\\server"));
+    CHECK(core::path::is_unc_server("\\\\wsl.localhost"));
+    CHECK(!core::path::is_unc_server("\\\\server\\share"));
+    CHECK(!core::path::is_unc_server("C:\\"));
+    CHECK(core::path::is_root("\\\\server"));
+    CHECK(core::path::kind("\\\\server") == core::path::Kind::folder);
+    {
+        const auto segs = core::path::segments("\\\\server");
+        CHECK(segs.size() == 1 && segs[0].name == "\\\\server" && segs[0].path == "\\\\server");
+    }
+
+    // Tab history dropdowns & jump_history
+    {
+        model::Tab tab{[] {}};
+        tab.navigate("C:\\");
+        tab.navigate("C:\\Windows");
+        tab.navigate("C:\\Windows\\System32");
+        const auto back = tab.back_history();
+        CHECK(back.size() == 2 && back[0].second == "C:\\Windows" && back[1].second == "C:\\");
+        CHECK(tab.forward_history().empty());
+        CHECK(tab.jump_history(back[1].first) && tab.path() == "C:\\");
+        const auto fwd = tab.forward_history();
+        CHECK(fwd.size() == 2 && fwd[0].second == "C:\\Windows" && fwd[1].second == "C:\\Windows\\System32");
+        CHECK(tab.jump_history(fwd[1].first) && tab.path() == "C:\\Windows\\System32");
+    }
+
+    // WSL & Google Drive discovery (must never crash or hang)
+    {
+        const auto wsl = core::wsl_distros();
+        const auto gd  = core::google_drive_places();
+        for (const auto& p : wsl) { CHECK(p.wsl && p.path.starts_with("\\\\wsl.localhost\\")); }
+        for (const auto& p : gd)  { CHECK(p.cloud && !p.path.empty()); }
+    }
+
+    // .lnk shortcut creation
+    {
+        const std::string lnk = core::path::join(dir, "test_shortcut.lnk");
+        CHECK(core::shell::create_shortcut("C:\\Windows\\notepad.exe", lnk));
+        CHECK(core::path::exists(lnk));
+        ::DeleteFileW(core::text::widen(lnk).c_str());
+    }
+
+    // rclone virtual path helpers & safe discovery
+    {
+        CHECK(core::rclone::is_path("rclone:gdrive:"));
+        CHECK(core::rclone::is_path("rclone:gdrive:\\Photos\\2026"));
+        CHECK(!core::rclone::is_path("C:\\Users"));
+        CHECK(core::rclone::normalize_path("rclone:gdrive:/Photos/2026/") == "rclone:gdrive:\\Photos\\2026");
+        CHECK(core::rclone::normalize_path("rclone:gdrive:/") == "rclone:gdrive:");
+        const auto sp = core::rclone::split("rclone:gdrive:\\Photos\\2026");
+        CHECK(sp.remote == "gdrive" && sp.rel_unix == "Photos/2026");
+        CHECK(core::path::is_root("rclone:gdrive:"));
+        CHECK(!core::path::is_root("rclone:gdrive:\\Photos"));
+        CHECK(core::path::parent("rclone:gdrive:\\Photos\\2026") == "rclone:gdrive:\\Photos");
+        CHECK(core::path::parent("rclone:gdrive:\\Photos") == "rclone:gdrive:");
+        CHECK(core::path::parent("rclone:gdrive:").empty());
+        CHECK(core::path::leaf("rclone:gdrive:\\Photos\\cat.png") == "cat.png");
+        CHECK(core::path::leaf("rclone:gdrive:") == "gdrive");
+        CHECK(core::path::join("rclone:gdrive:", "Photos") == "rclone:gdrive:\\Photos");
+        CHECK(core::path::same_volume("rclone:gdrive:\\a", "rclone:gdrive:\\b"));
+        CHECK(!core::path::same_volume("rclone:gdrive:\\a", "C:\\temp"));
+        const auto segs = core::path::segments("rclone:gdrive:\\Photos\\2026");
+        CHECK(segs.size() == 3 && segs[0].name == "gdrive" && segs[0].path == "rclone:gdrive:" && segs[2].path == "rclone:gdrive:\\Photos\\2026");
+        (void)core::rclone::available();
+        (void)core::rclone::list_remotes();
+        core::rclone::shutdown();
+    }
+
+    ::RemoveDirectoryW(core::text::widen(dir).c_str());
+}
+
 int main()
 {
     ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
@@ -1478,6 +1918,79 @@ int main()
     test_saved_search();
     test_git_status();
     test_templates_and_archives();
+    test_relaunch_and_regressions();
+    test_phase4();
+    test_explorer_upgrades();
     std::printf(g_fail == 0 ? "all passed\n" : "%d failed\n", g_fail);
     return g_fail == 0 ? 0 : 1;
 }
+#else
+static void test_linux_core()
+{
+    // text & natural sort
+    CHECK(core::text::compare_natural("file2.txt", "file10.txt") < 0);
+    CHECK(core::text::starts_with_icase("PrismFS", "prism"));
+
+    // POSIX path helpers
+    CHECK(core::path::is_root("/"));
+    CHECK(!core::path::is_root("/home/user"));
+    CHECK(core::path::normalize("/home/user/docs/") == "/home/user/docs");
+    CHECK(core::path::parent("/home/user/docs") == "/home/user");
+    CHECK(core::path::parent("/home") == "/");
+    CHECK(core::path::parent("/").empty());
+    CHECK(core::path::leaf("/home/user/docs") == "docs");
+    CHECK(core::path::join("/home/user", "docs") == "/home/user/docs");
+    const auto segs = core::path::segments("/home/user/docs");
+    CHECK(segs.size() == 4 && segs[0].path == "/" && segs[3].name == "docs");
+
+    // rclone virtual paths
+    CHECK(core::rclone::is_path("rclone:gdrive:\\Photos\\2026"));
+    CHECK(core::path::is_root("rclone:gdrive:"));
+    CHECK(core::path::parent("rclone:gdrive:\\Photos\\2026") == "rclone:gdrive:\\Photos");
+    CHECK(core::path::leaf("rclone:gdrive:\\Photos\\cat.png") == "cat.png");
+
+    // real temp folder: FileOps, DirectoryLoader, FileInfo, Links
+    const std::string dir = "/tmp/prismfs_selftest_" + std::to_string(::getpid());
+    ::mkdir(dir.c_str(), 0755);
+    const std::string made_dir = core::FileOps::create_folder(dir);
+    CHECK(!made_dir.empty() && core::path::is_directory(core::path::join(dir, made_dir)));
+    const std::string made_file = core::FileOps::create_file(dir, "hello", ".txt");
+    CHECK(!made_file.empty());
+    const std::string fp = core::path::join(dir, made_file);
+    const core::FileInfo fi = core::query_file_info(fp);
+    CHECK(fi.exists && !fi.is_dir && fi.name == made_file);
+    CHECK(core::FileOps::rename(fp, "renamed.txt"));
+    const std::string rfp = core::path::join(dir, "renamed.txt");
+    CHECK(core::path::exists(rfp));
+
+    // DirectoryLoader
+    {
+        core::DirectoryLoader loader{[] {}};
+        loader.start(dir);
+        std::vector<core::FileEntry> entries;
+        for (int i = 0; i < 200; ++i) {
+            const auto prog = loader.poll(entries);
+            if (prog.done) { break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds{10});
+        }
+        CHECK(entries.size() >= 2);
+    }
+
+    // places & process
+    CHECK(!core::drives().empty() || !core::home_folder().empty());
+    const core::ProcessResult pr = core::run_process(L"echo prism", L"", 5000);
+    CHECK(pr.started && pr.exit_code == 0 && pr.output.find("prism") != std::string::npos);
+
+    // cleanup
+    (void)core::FileOps::remove_empty_file(rfp);
+    (void)core::FileOps::remove_empty_folder(core::path::join(dir, made_dir));
+    ::rmdir(dir.c_str());
+}
+
+int main()
+{
+    test_linux_core();
+    std::printf(g_fail == 0 ? "all passed\n" : "%d failed\n", g_fail);
+    return g_fail == 0 ? 0 : 1;
+}
+#endif

@@ -149,7 +149,7 @@ bool SettingsDialog::frame(Painter& p)
                 kit.card_end("##card_lang");
             }
 
-            kit.card_begin("##card_look", tr("Appearance"), rh * 5.0f + sw_h);
+            kit.card_begin("##card_look", tr("Appearance"), rh * 5.0f + sw_h * 2.0f);
             int theme = s.dark ? 0 : 1;
             const std::array<std::string_view, 2> themes{tr("Dark"), tr("Light")};
             if (setting_row(kit, "##r_theme", tr("Theme"), {}, 180.0f, true, [&](float h) { return kit.pill_tabs("##t_theme", themes, theme, 180.0f, h); })) {
@@ -197,12 +197,14 @@ bool SettingsDialog::frame(Painter& p)
                 s.ui_scale = k_scales[static_cast<std::size_t>(scale)];
                 changed = true;
             }
-            if (kit.switch_row("##sw_compact", tr("Compact density"), tr("Smaller rows in the file list"), s.compact, false)) { changed = true; }
+            if (kit.switch_row("##sw_compact", tr("Compact density"), tr("Smaller rows in the file list"), s.compact, true)) { changed = true; }
+            if (kit.switch_row("##sw_outline", tr("Window outline"), tr("A thin border around the window, brighter on the active one"), s.window_outline, false)) { changed = true; }
             kit.card_end("##card_look");
 
-            kit.card_begin("##card_beh", tr("Behavior"), kit.row_h() * 10.0f + 16.0f * 8.0f);
+            kit.card_begin("##card_beh", tr("Behavior"), kit.row_h() * 12.0f + 16.0f * 10.0f);
             if (kit.switch_row("##sw_hidden", tr("Show hidden files"), {}, s.show_hidden, true)) { changed = true; }
             if (kit.switch_row("##sw_confirm", tr("Ask before deleting"), tr("Before a file goes to the Recycle Bin"), s.confirm_delete, true)) { changed = true; }
+            if (kit.switch_row("##sw_rnstem", tr("Select file name only when renaming"), tr("Leaves the extension unselected; turn off to select the full name"), s.rename_select_stem, true)) { changed = true; }
             if (kit.switch_row("##sw_tabs", tr("Open my tabs again next time"), {}, s.restore_tabs, true)) { changed = true; }
             if (kit.switch_row("##sw_background", tr("Run in the background"), tr("Stay in the tray after the last window is closed"), s.background, true)) { changed = true; }
             if (kit.switch_row("##sw_index", tr("Index drives for instant search"), trf("Lets Search everywhere ({}) find files instantly", key_hint(env_.binds, "search_everywhere")), s.index_drives, true)) { changed = true; }
@@ -210,6 +212,7 @@ bool SettingsDialog::frame(Painter& p)
             if (kit.switch_row("##sw_archives",tr("Archive support"), tr("Enter on a zip, 7z or tar shows what is inside; adds Extract and Compress. When off, archives open with Windows' default app"), s.browse_archives, true)) { changed = true; }
             if (kit.switch_row("##sw_shellmenu", tr("Windows context menu entries"), tr("Open with Code, 7-Zip and the other entries Explorer shows"), s.shell_menu, false)) { changed = true; }
             if (kit.switch_row("##sw_dropprog", tr("Drop files on a program to open them with it"), tr("Like Explorer: drag files onto an .exe, script or shortcut in the list"), s.drop_on_programs, false)) { changed = true; }
+            if (kit.switch_row("##sw_propwin", tr("Properties in its own window (experimental)"), tr("Properties opens as a separate window, like Explorer's, instead of a dialog over the list"), s.properties_window, false)) { changed = true; }
             if (kit.switch_row("##sw_detached", tr("Menus may leave the window (experimental)"), tr("Context menus can reach past the window edge, over the desktop"), s.detached_menus, false)) { changed = true; }
             kit.card_end("##card_beh");
 

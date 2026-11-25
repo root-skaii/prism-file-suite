@@ -5,7 +5,9 @@
 #include "core/text.hpp"
 #include "strata/config.hpp"
 
+#ifdef _WIN32
 #include <windows.h>
+#endif
 
 #include <algorithm>
 #include <format>
@@ -20,9 +22,13 @@ constexpr int k_max_items    = 512;
 
 [[nodiscard]] bool same_path(std::string_view a, std::string_view b)
 {
+#ifdef _WIN32
     const std::wstring wa = core::text::widen(core::path::normalize(a));
     const std::wstring wb = core::text::widen(core::path::normalize(b));
     return ::CompareStringOrdinal(wa.c_str(), static_cast<int>(wa.size()), wb.c_str(), static_cast<int>(wb.size()), TRUE) == CSTR_EQUAL;
+#else
+    return core::path::normalize(a) == core::path::normalize(b);
+#endif
 }
 
 // an insertion slot into a list of `size` elements

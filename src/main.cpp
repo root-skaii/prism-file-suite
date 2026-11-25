@@ -1,6 +1,7 @@
 #include "app/host.hpp"
 
 #include "core/crash.hpp"
+#include "core/rclone.hpp"
 #include "core/text.hpp"
 #include "platform/instance.hpp"
 #include "ui/settings.hpp"
@@ -58,7 +59,9 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
     }
 
     prism::app::Host host;
-    if (host.run(opts, serve) != 0) {
+    const int rc = host.run(opts, serve);
+    prism::core::rclone::shutdown();
+    if (rc != 0) {
         ::MessageBoxW(nullptr, L"PrismFS could not start (window, Direct3D 11 or fonts failed).", L"PrismFS", MB_ICONERROR);
         return 1;
     }

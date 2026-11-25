@@ -48,11 +48,13 @@ struct Palette {
 
 // logical pixels
 struct Metrics {
-    float title_bar     = 44.0f;
+    // the chrome is spaced by `gap`: tabs sit one gap below the window's border (1 px), the toolbar's fields one gap below the
+    // tabs, the file card one gap below the toolbar (title_bar = 1 + gap + tab_height, toolbar = field height + 2 gaps)
+    float title_bar     = 43.0f;
     float tab_height    = 34.0f;
     float tab_min_width = 120.0f;
     float tab_max_width = 220.0f;
-    float toolbar       = 48.0f;
+    float toolbar       = 52.0f;
     float status_bar    = 28.0f;
     float sidebar_min   = 180.0f;
     float sidebar_width = 248.0f;
@@ -72,7 +74,7 @@ enum class Density : std::uint8_t { comfortable, compact };
 {
     Metrics m{};
     if (d == Density::compact) {
-        m.title_bar     = 38.0f;
+        m.title_bar     = 37.0f;
         m.tab_height    = 30.0f;
         m.tab_min_width = 104.0f;
         m.tab_max_width = 200.0f;

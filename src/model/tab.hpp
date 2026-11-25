@@ -6,6 +6,7 @@
 #include "core/folder_watcher.hpp"
 #include "model/listing.hpp"
 
+#include <chrono>
 #include <functional>
 #include <string>
 #include <vector>
@@ -15,6 +16,8 @@ namespace prism::model {
 class Tab {
 public:
     explicit Tab(std::function<void()> wake);
+    // rebinds loaders and watcher when a tab moves into another PrismFS window
+    void set_waker(std::function<void()> wake);
 
     // history ---------------------------------------------------------------
     void navigate(const std::string& path);
@@ -35,6 +38,10 @@ public:
     [[nodiscard]] bool can_back() const noexcept { return index_ > 0; }
     [[nodiscard]] bool can_forward() const noexcept { return index_ + 1 < history_.size(); }
     [[nodiscard]] bool can_up() const;
+    // back / forward history entries as (history_index, path), nearest step first
+    [[nodiscard]] std::vector<std::pair<std::size_t, std::string>> back_history() const;
+    [[nodiscard]] std::vector<std::pair<std::size_t, std::string>> forward_history() const;
+    bool jump_history(std::size_t history_index);
 
     [[nodiscard]] const std::string& path() const noexcept; // empty until the first navigate()
     [[nodiscard]] std::string        title() const;
@@ -48,6 +55,8 @@ public:
 
     // pulls what the loader produced; true when the listing changed (the ui must redraw)
     bool poll();
+    // seconds until a debounced watcher refresh is due (3600 = none pending)
+    [[nodiscard]] double next_wake_seconds() const noexcept;
 
     // view state the file view keeps per tab, restored when going back
     float scroll_y{};
@@ -75,6 +84,9 @@ private:
     core::FolderWatcher      watcher_;
     std::vector<core::FileEntry> quiet_;
     bool                     quiet_dirty_{};
+    bool                     watch_pending_{};
+    std::chrono::steady_clock::time_point watch_due_{};
+    std::chrono::steady_clock::time_point watch_first_{};
     std::uint32_t            error_{};
     core::Query              search_;
     bool                     searching_{};

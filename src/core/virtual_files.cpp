@@ -2,16 +2,20 @@
 
 #include "core/text.hpp"
 
+#ifdef _WIN32
 #include <windows.h>
 #include <objbase.h>
 #include <oleidl.h>
 #include <shlobj.h>
 #include <wrl/client.h>
+#endif
 
 #include <algorithm>
 #include <atomic>
 
 namespace prism::core {
+
+#ifdef _WIN32
 
 using Microsoft::WRL::ComPtr;
 
@@ -195,5 +199,15 @@ ReceivedFiles receive_virtual_files(IDataObject* data, std::string_view staging_
     if (result.items.empty()) { ::RemoveDirectoryW(long_path(folder).c_str()); }
     return result;
 }
+#else
+bool offers_virtual_files(IDataObject*) { return false; }
+ReceivedFiles receive_virtual_files(IDataObject*, std::string_view) { return {}; }
+std::optional<std::string> safe_relative_path(std::wstring_view name)
+{
+    const std::string s = text::narrow(name);
+    if (s.empty() || s.front() == '/' || s.front() == '\\' || s.find("..") != std::string::npos) { return std::nullopt; }
+    return s;
+}
+#endif
 
 } // namespace prism::core

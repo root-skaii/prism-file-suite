@@ -25,5 +25,7 @@ void note_codepoints(std::string_view utf8);
 
 // lower-cases ascii only: extensions and quick-find prefixes
 [[nodiscard]] std::string lower_ascii(std::string_view s);
+// unicode case-insensitive prefix test (for type-ahead across all scripts)
+[[nodiscard]] bool starts_with_icase(std::string_view text, std::string_view prefix) noexcept;
 
 } // namespace prism::core::text

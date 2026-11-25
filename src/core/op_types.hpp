@@ -14,6 +14,7 @@ struct OpResult {
     OpKind      kind{};
     bool        ok{};
     bool        aborted{}; // the user cancelled
+    bool        access_denied{}; // built-in transfer hit ERROR_ACCESS_DENIED (caller may retry via elevated shell)
     bool        silent{};  // started by undo / redo: no toast, not recorded again
     std::size_t count{};
     std::string dest;      // destination folder (copy / move), the source folder otherwise: what to refresh

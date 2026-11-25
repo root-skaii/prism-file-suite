@@ -12,8 +12,10 @@
 #include "ui/painter.hpp"
 #include "ui/shell_page.hpp"
 
-#include <optional>
+#include <atomic>
 #include <functional>
+#include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -124,6 +126,12 @@ private:
     Target                     icon_target_;   // the item whose icon the picker is editing
     bool                       icon_want_{};   // open the picker (asked from the menu, opened after it closed)
     strata::vec2               icon_pos_{};
+    struct DriveOp {
+        std::atomic<bool> done{false};
+        bool              ok{};
+        std::string       msg;
+    };
+    std::shared_ptr<DriveOp>   drive_op_;
 };
 
 } // namespace prism::ui

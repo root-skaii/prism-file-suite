@@ -23,14 +23,16 @@ if(PROJECT_IS_TOP_LEVEL)
         set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO ON)
     endif()
 
-    # cmake's default /EHsc and /Ob1|/Ob2 would trigger D9025 next to our overrides
-    string(REGEX REPLACE "/EH[a-z-]+" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
-    foreach(_cfg RELEASE RELWITHDEBINFO)
-        string(REGEX REPLACE "/Ob[0-3]" "/Ob3" CMAKE_CXX_FLAGS_${_cfg} "${CMAKE_CXX_FLAGS_${_cfg}}")
-    endforeach()
+    if(MSVC)
+        # cmake's default /EHsc and /Ob1|/Ob2 would trigger D9025 next to our overrides
+        string(REGEX REPLACE "/EH[a-z-]+" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+        foreach(_cfg RELEASE RELWITHDEBINFO)
+            string(REGEX REPLACE "/Ob[0-3]" "/Ob3" CMAKE_CXX_FLAGS_${_cfg} "${CMAKE_CXX_FLAGS_${_cfg}}")
+        endforeach()
 
-    if(PRISM_STATIC_CRT)
-        set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+        if(PRISM_STATIC_CRT)
+            set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+        endif()
     endif()
 endif()
 
@@ -38,16 +40,22 @@ add_library(prism_options INTERFACE)
 
 # cmake 4.3 maps cxx_std_23 to /std:c++latest for msvc; clang-cl's feature detection would pin c++23 instead, so there
 # the explicit /std:c++latest below does the work
-if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+if(NOT (MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang"))
     target_compile_features(prism_options INTERFACE cxx_std_23)
 endif()
 set_target_properties(prism_options PROPERTIES CXX_EXTENSIONS OFF)
 
 # exception free like strata: errors are std::expected / bool, the stl does not pull in unwind tables
-target_compile_definitions(prism_options INTERFACE
-    WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE _CRT_SECURE_NO_WARNINGS _HAS_EXCEPTIONS=0
-    $<$<CONFIG:Debug>:PRISM_DEBUG=1>
-)
+if(WIN32)
+    target_compile_definitions(prism_options INTERFACE
+        WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE _CRT_SECURE_NO_WARNINGS _HAS_EXCEPTIONS=0
+        $<$<CONFIG:Debug>:PRISM_DEBUG=1>
+    )
+else()
+    target_compile_definitions(prism_options INTERFACE
+        $<$<CONFIG:Debug>:PRISM_DEBUG=1>
+    )
+endif()
 
 if(PRISM_PCH)
     target_precompile_headers(prism_options INTERFACE
@@ -73,5 +81,23 @@ if(MSVC)
     endif()
     if(PRISM_WERROR)
         target_compile_options(prism_options INTERFACE /WX)
+    endif()
+else()
+    target_compile_options(prism_options INTERFACE
+        -Wall -Wextra -fno-exceptions -fno-rtti
+        $<$<NOT:$<CONFIG:Debug>>:-ffunction-sections -fdata-sections>
+    )
+    target_link_options(prism_options INTERFACE $<$<NOT:$<CONFIG:Debug>>:-Wl,--gc-sections>)
+    if(PRISM_LTO)
+        if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+            target_compile_options(prism_options INTERFACE $<$<NOT:$<CONFIG:Debug>>:-flto=thin>)
+            target_link_options(prism_options INTERFACE $<$<NOT:$<CONFIG:Debug>>:-flto=thin>)
+        else()
+            target_compile_options(prism_options INTERFACE $<$<NOT:$<CONFIG:Debug>>:-flto>)
+            target_link_options(prism_options INTERFACE $<$<NOT:$<CONFIG:Debug>>:-flto>)
+        endif()
+    endif()
+    if(PRISM_WERROR)
+        target_compile_options(prism_options INTERFACE -Werror)
     endif()
 endif()

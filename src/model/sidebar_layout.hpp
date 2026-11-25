@@ -20,7 +20,7 @@ struct SidebarItem {
     std::string   known;     // "downloads": the path is looked up again on every start, so it follows a moved folder
     char32_t      glyph{};   // icon font code point, 0: automatic
     std::uint32_t color{};   // 0xAARRGGBB, 0: automatic
-    std::string   query;     // a saved search: the query text, run below `path` (empty: a plain pinned folder)
+    std::string   query{};   // a saved search: the query text, run below `path` (empty: a plain pinned folder)
 
     [[nodiscard]] std::string label() const;
 };

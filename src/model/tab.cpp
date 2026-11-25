@@ -1,12 +1,20 @@
 #include "model/tab.hpp"
 
 #include "core/path.hpp"
+#include "core/rclone.hpp"
 #include "core/recycle.hpp"
 #include "core/text.hpp"
 
 namespace prism::model {
 
 Tab::Tab(std::function<void()> wake) : loader_{wake}, quiet_loader_{wake}, watcher_{wake} {}
+
+void Tab::set_waker(std::function<void()> wake)
+{
+    loader_.set_waker(wake);
+    quiet_loader_.set_waker(wake);
+    watcher_.set_waker(std::move(wake));
+}
 
 const std::string& Tab::path() const noexcept
 {
@@ -54,6 +62,30 @@ bool Tab::forward()
     if (!can_forward()) { return false; }
     remember_view();
     ++index_;
+    reveal_name.clear();
+    load(true);
+    return true;
+}
+
+std::vector<std::pair<std::size_t, std::string>> Tab::back_history() const
+{
+    std::vector<std::pair<std::size_t, std::string>> out;
+    for (std::size_t i = index_; i-- > 0;) { out.emplace_back(i, history_[i].path); }
+    return out;
+}
+
+std::vector<std::pair<std::size_t, std::string>> Tab::forward_history() const
+{
+    std::vector<std::pair<std::size_t, std::string>> out;
+    for (std::size_t i = index_ + 1; i < history_.size(); ++i) { out.emplace_back(i, history_[i].path); }
+    return out;
+}
+
+bool Tab::jump_history(std::size_t history_index)
+{
+    if (history_index >= history_.size() || history_index == index_) { return false; }
+    remember_view();
+    index_ = history_index;
     reveal_name.clear();
     load(true);
     return true;
@@ -133,9 +165,17 @@ void Tab::load(bool keep_scroll)
     listing_.clear();
     if (reveal_name.empty() && keep_scroll) { reveal_name = history_[index_].focus_name; }
     quiet_loader_.cancel();
-    quiet_dirty_ = false;
-    watcher_.watch(path());
+    quiet_dirty_   = false;
+    watch_pending_ = false;
+    watcher_.watch(core::rclone::is_path(path()) ? std::string{} : path());
     loader_.start(path());
+}
+
+double Tab::next_wake_seconds() const noexcept
+{
+    if (!watch_pending_) { return 3600.0; }
+    const double s = std::chrono::duration<double>(watch_due_ - std::chrono::steady_clock::now()).count();
+    return s > 0.0 ? s : 0.0;
 }
 
 bool Tab::poll()
@@ -153,7 +193,30 @@ bool Tab::poll()
     }
 
     if (searching_) { return changed; }
-    if (watcher_.take_changed()) { quiet_dirty_ = true; }
+    // incremental patching for small bursts of external changes (avoids full re-enumeration on huge folders);
+    // overflows and Recycle Bin fall back to debounced quiet_loader_
+    const auto now = std::chrono::steady_clock::now();
+    if (core::FolderChanges fc = watcher_.take_changes(); fc.any) {
+        if (!fc.overflow && !fc.deltas.empty() && listing_.finished() && !loader_.running() && !core::recycle::inside(path())) {
+            for (core::FolderDelta& d : fc.deltas) {
+                if (d.kind == core::FolderDelta::Kind::remove) {
+                    changed |= listing_.remove_name(d.name);
+                } else {
+                    changed |= listing_.upsert_entry(std::move(d.entry));
+                }
+            }
+        } else {
+            if (!watch_pending_) {
+                watch_pending_ = true;
+                watch_first_   = now;
+            }
+            watch_due_ = std::min(now + std::chrono::milliseconds{150}, watch_first_ + std::chrono::milliseconds{500});
+        }
+    }
+    if (watch_pending_ && now >= watch_due_) {
+        watch_pending_ = false;
+        quiet_dirty_   = true;
+    }
     if (!loader_.running()) {
         if (quiet_dirty_ && !quiet_loader_.running()) {
             quiet_dirty_ = false;

@@ -7,6 +7,7 @@
 #include <windows.h>
 #include <windowsx.h>
 #include <dwmapi.h>
+#include <shellapi.h>
 #include <shellscalingapi.h>
 
 #include <algorithm>
@@ -198,7 +199,8 @@ bool Window::create(const Config& cfg)
     wc.hCursor       = ::LoadCursorW(nullptr, IDC_ARROW);
     // the icon embedded by prismfs.rc (id 1): taskbar, alt-tab and the system menu
     wc.hIcon         = ::LoadIconW(inst, MAKEINTRESOURCEW(1));
-    wc.hIconSm       = wc.hIcon;
+    wc.hIconSm       = static_cast<HICON>(::LoadImageW(inst, MAKEINTRESOURCEW(1), IMAGE_ICON, ::GetSystemMetrics(SM_CXSMICON), ::GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR));
+    if (wc.hIconSm == nullptr) { wc.hIconSm = wc.hIcon; }
     wc.lpszClassName = window_class;
     ::RegisterClassExW(&wc);
 
@@ -301,7 +303,12 @@ void Window::abandon() noexcept
 
 void Window::wake() const noexcept
 {
-    if (hwnd_ != nullptr) { ::PostMessageW(as_hwnd(hwnd_), wake_message, 0, 0); }
+    wake_handle(hwnd_);
+}
+
+void Window::wake_handle(void* hwnd) noexcept
+{
+    if (hwnd != nullptr) { ::PostMessageW(as_hwnd(hwnd), wake_message, 0, 0); }
 }
 
 std::function<void()> Window::waker() const
@@ -347,11 +354,18 @@ std::pair<int, int> Window::logical_size() const
     return {static_cast<int>(std::lround(static_cast<float>(r.right - r.left) / s)), static_cast<int>(std::lround(static_cast<float>(r.bottom - r.top) / s))};
 }
 
-bool Window::send_folder_to_window_at(int screen_x, int screen_y, std::string_view folder) const
+void* Window::prism_window_at(int screen_x, int screen_y) const
 {
     const HWND top = ::GetAncestor(::WindowFromPoint({screen_x, screen_y}), GA_ROOT);
     wchar_t    cls[64]{};
-    if (top == nullptr || top == as_hwnd(hwnd_) || ::GetClassNameW(top, cls, 64) == 0 || std::wstring_view{cls} != window_class) { return false; }
+    if (top == nullptr || top == as_hwnd(hwnd_) || ::GetClassNameW(top, cls, 64) == 0 || std::wstring_view{cls} != window_class) { return nullptr; }
+    return top;
+}
+
+bool Window::send_folder_to_window_at(int screen_x, int screen_y, std::string_view folder) const
+{
+    const auto top = static_cast<HWND>(prism_window_at(screen_x, screen_y));
+    if (top == nullptr) { return false; }
     COPYDATASTRUCT cd{tab_message, static_cast<DWORD>(folder.size()), const_cast<char*>(folder.data())};
     return ::SendMessageW(top, WM_COPYDATA, reinterpret_cast<WPARAM>(hwnd_), reinterpret_cast<LPARAM>(&cd)) != 0;
 }
@@ -375,7 +389,11 @@ void Window::show_drag_ghost(std::string_view title, std::string_view action, in
     const bool changed = t != g_ghost_title || a != g_ghost_action || accent != g_ghost_hot || col != g_ghost_accent;
     g_ghost_title = t; g_ghost_action = a; g_ghost_hot = accent; g_ghost_accent = col;
 
-    const UINT dpi = ::GetDpiForWindow(as_hwnd(hwnd_));
+    UINT dpi_x = 96, dpi_y = 96;
+    if (HMONITOR mon = ::MonitorFromPoint({screen_x, screen_y}, MONITOR_DEFAULTTONEAREST)) {
+        (void)::GetDpiForMonitor(mon, MDT_EFFECTIVE_DPI, &dpi_x, &dpi_y);
+    }
+    const UINT dpi = dpi_x > 0 ? dpi_x : ::GetDpiForWindow(as_hwnd(hwnd_));
     HDC        dc  = ::GetDC(g_ghost);
     HFONT      f   = ::CreateFontW(-::MulDiv(13, static_cast<int>(dpi), 96), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, ghost_text_face());
     HGDIOBJ    old = ::SelectObject(dc, f);
@@ -532,23 +550,48 @@ std::intptr_t Window::handle_message(void* hwnd, std::uint32_t msg, std::uintptr
                 p->rgrc[0].right -= fx;
                 p->rgrc[0].top += fy;
                 p->rgrc[0].bottom -= fy;
+                // leave a 1 px hover edge when an auto-hide taskbar sits on this monitor so the user can summon it
+                APPBARDATA abd{};
+                abd.cbSize = sizeof abd;
+                if ((::SHAppBarMessage(ABM_GETSTATE, &abd) & ABS_AUTOHIDE) != 0 && ::SHAppBarMessage(ABM_GETTASKBARPOS, &abd)) {
+                    const HMONITOR mon = ::MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST);
+                    const HMONITOR tb  = ::MonitorFromRect(&abd.rc, MONITOR_DEFAULTTONEAREST);
+                    if (mon == tb) {
+                        switch (abd.uEdge) {
+                        case ABE_BOTTOM: p->rgrc[0].bottom -= 1; break;
+                        case ABE_TOP:    p->rgrc[0].top    += 1; break;
+                        case ABE_LEFT:   p->rgrc[0].left   += 1; break;
+                        case ABE_RIGHT:  p->rgrc[0].right  -= 1; break;
+                        default: break;
+                        }
+                    }
+                }
             }
             return 0;
         }
         break;
+    case WM_APPCOMMAND: {
+        const UINT cmd = GET_APPCOMMAND_LPARAM(lparam);
+        if (cmd == APPCOMMAND_BROWSER_BACKWARD) { app_command_ = -1; return TRUE; }
+        if (cmd == APPCOMMAND_BROWSER_FORWARD)  { app_command_ = 1;  return TRUE; }
+        if (cmd == APPCOMMAND_BROWSER_REFRESH)  { app_command_ = 2;  return TRUE; }
+        break;
+    }
     case WM_NCHITTEST: {
         const std::intptr_t r = nc_hit_test(lparam);
         if (r != HTCLIENT) { return r; }
         return HTCLIENT;
     }
     case WM_NCACTIVATE:
+        active_ = wparam != 0;
         // (-1: do not repaint the frame we do not have)
         return ::DefWindowProcW(h, msg, wparam, -1);
     case WM_GETMINMAXINFO: {
         auto*       mm    = reinterpret_cast<MINMAXINFO*>(lparam);
-        const float scale = platform_.dpi_scale();
-        mm->ptMinTrackSize.x = static_cast<LONG>(min_width * scale);
-        mm->ptMinTrackSize.y = static_cast<LONG>(min_height * scale);
+        const UINT  dpi   = ::GetDpiForWindow(h);
+        const float scale = dpi > 0 ? static_cast<float>(dpi) / 96.0f : platform_.dpi_scale();
+        mm->ptMinTrackSize.x = static_cast<LONG>((min_w_ > 0 ? min_w_ : min_width) * scale);
+        mm->ptMinTrackSize.y = static_cast<LONG>((min_h_ > 0 ? min_h_ : min_height) * scale);
         return 0;
     }
     case WM_NCMOUSEMOVE:

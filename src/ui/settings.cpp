@@ -116,9 +116,12 @@ void Settings::load()
     ui_scale       = std::clamp(c.get_int("appearance", "ui_scale", ui_scale), 75, 200);
     show_hidden    = c.get_bool("behavior", "show_hidden", show_hidden);
     confirm_delete = c.get_bool("behavior", "confirm_delete", confirm_delete);
+    rename_select_stem = c.get_bool("behavior", "rename_select_stem", rename_select_stem);
     restore_tabs   = c.get_bool("behavior", "restore_tabs", restore_tabs);
     background     = c.get_bool("behavior", "background", c.get_bool("behavior", "tray", background)); // ("tray" was the older name: keep what was chosen)
     shell_menu     = c.get_bool("behavior", "shell_menu", shell_menu);
+    properties_window = c.get_bool("behavior", "properties_window", properties_window);
+    window_outline = c.get_bool("appearance", "window_outline", window_outline);
     detached_menus = c.get_bool("behavior", "detached_menus", detached_menus);
     drop_on_programs = c.get_bool("behavior", "drop_on_programs", drop_on_programs);
     track_history  = c.get_bool("behavior", "track_history", track_history);
@@ -142,8 +145,15 @@ void Settings::load()
     sort_per_folder  = c.get_bool("sorting", "per_folder", sort_per_folder);
     group_by         = std::clamp(c.get_int("sorting", "group_by", group_by), 0, 4);
     sidebar_width  = c.get_float("layout", "sidebar_width", sidebar_width);
+    preview_width  = std::clamp(c.get_float("layout", "preview_width", preview_width), 0.0f, 700.0f);
+    grid_size      = std::clamp(c.get_float("layout", "grid_size", grid_size), 88.0f, 220.0f);
+    col_mod_w      = std::clamp(c.get_float("layout", "col_mod_w", col_mod_w), 60.0f, 420.0f);
+    col_type_w     = std::clamp(c.get_float("layout", "col_type_w", col_type_w), 60.0f, 420.0f);
+    col_size_w     = std::clamp(c.get_float("layout", "col_size_w", col_size_w), 60.0f, 420.0f);
     window_w       = c.get_int("layout", "window_w", window_w);
     window_h       = c.get_int("layout", "window_h", window_h);
+    props_w        = c.get_int("layout", "props_w", props_w);
+    props_h        = c.get_int("layout", "props_h", props_h);
     active_tab     = c.get_int("tabs", "active", 0);
     const int n    = std::clamp(c.get_int("tabs", "count", 0), 0, 32);
     for (int i = 0; i < n; ++i) {
@@ -164,9 +174,12 @@ void Settings::save() const
     c.set_int("appearance", "ui_scale", ui_scale);
     c.set_bool("behavior", "show_hidden", show_hidden);
     c.set_bool("behavior", "confirm_delete", confirm_delete);
+    c.set_bool("behavior", "rename_select_stem", rename_select_stem);
     c.set_bool("behavior", "restore_tabs", restore_tabs);
     c.set_bool("behavior", "background", background);
     c.set_bool("behavior", "shell_menu", shell_menu);
+    c.set_bool("behavior", "properties_window", properties_window);
+    c.set_bool("appearance", "window_outline", window_outline);
     c.set_bool("behavior", "detached_menus", detached_menus);
     c.set_bool("behavior", "drop_on_programs", drop_on_programs);
     c.set_bool("behavior", "track_history", track_history);
@@ -190,8 +203,15 @@ void Settings::save() const
     c.set_bool("sorting", "per_folder", sort_per_folder);
     c.set_int("sorting", "group_by", group_by);
     c.set_float("layout", "sidebar_width", sidebar_width);
+    c.set_float("layout", "preview_width", preview_width);
+    c.set_float("layout", "grid_size", grid_size);
+    c.set_float("layout", "col_mod_w", col_mod_w);
+    c.set_float("layout", "col_type_w", col_type_w);
+    c.set_float("layout", "col_size_w", col_size_w);
     c.set_int("layout", "window_w", window_w);
     c.set_int("layout", "window_h", window_h);
+    c.set_int("layout", "props_w", props_w);
+    c.set_int("layout", "props_h", props_h);
     c.set_int("tabs", "active", active_tab);
     c.set_int("tabs", "count", static_cast<int>(tabs.size()));
     for (std::size_t i = 0; i < tabs.size(); ++i) { c.set("tabs", std::format("tab{}", i), tabs[i]); }

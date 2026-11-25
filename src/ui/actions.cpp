@@ -1,5 +1,4 @@
 #include "ui/actions.hpp"
-#include "ui/tr.hpp"
 
 #include "core/file_entry.hpp"
 #include "ui/tr.hpp"
