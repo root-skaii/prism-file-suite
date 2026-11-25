@@ -15,11 +15,11 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build cmake clang-18 libgl-dev libglfw3-dev fonts-dejavu-core
+          sudo apt-get install -y ninja-build cmake libgl-dev libglfw3-dev fonts-dejavu-core
 
       - name: Configure & Build prismfs_selftest
         run: |
-          cmake --preset linux-dev -DCMAKE_CXX_COMPILER=clang++-18 -DCMAKE_C_COMPILER=clang-18
+          cmake --preset linux-dev
           cmake --build --preset linux-dev --target prismfs_selftest
 
       - name: Run prismfs_selftest
